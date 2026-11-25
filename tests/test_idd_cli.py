@@ -335,6 +335,7 @@ class GitHubHarness:
         env["FAKE_GH_STATE"] = str(self.state_file)
         env["FAKE_GH_ORIGIN"] = str(self.origin)
         env["IDD_NO_AUTO_UPDATE"] = "1"
+        env["IDD_CONFIG_DIR"] = str(self.root / "idd-config")
         env.pop("IDD_WORKTREE_ROOT", None)
         return subprocess.run(
             [sys.executable, str(IDD_BIN), *args],
@@ -347,13 +348,12 @@ class GitHubHarness:
 
 
 class TestIddCli(unittest.TestCase):
-    def _write_task(self, wt: Path, goal: str, num: int, title: str, status: str, issue: str = "#42") -> Path:
-        task_dir = wt / "TASK" / goal
+    def _write_task(self, wt: Path, issue_dir: str, num: int, title: str, status: str, issue: str = "#42") -> Path:
+        task_dir = wt / "TASK" / issue_dir
         task_dir.mkdir(parents=True, exist_ok=True)
         path = task_dir / f"TASK-{num:02d}-step.md"
         path.write_text(
             f"# TASK-{num:02d}：{title}\n\n"
-            f"- Goal: {goal}\n"
             f"- Issue: {issue}\n"
             f"- Status: {status}\n"
             f"- Depends on: none\n"
@@ -464,7 +464,7 @@ class TestIddCli(unittest.TestCase):
 
             # Dry-run PR
             dry_pr = h.run_idd("pr", "42", "--dry-run").stdout
-            self.assertIn("Goal: 42-export-csv", dry_pr)
+            self.assertNotIn("Goal:", dry_pr)
             self.assertIn("Closes #42", dry_pr)
             self.assertIn("TASK-01 增加 CSV 后端导出接口", dry_pr)
             self.assertIn("Test: pytest tests/test_export.py — 5 passed", dry_pr)
@@ -575,7 +575,7 @@ class TestIddCli(unittest.TestCase):
 
     def test_version_flag_and_missing_subcommand(self) -> None:
         res = subprocess.run([sys.executable, str(IDD_BIN), "--version"], capture_output=True, text=True, check=True)
-        self.assertIn("idd 0.3.0", res.stdout)
+        self.assertIn("idd 0.4.0", res.stdout)
         no_args = subprocess.run([sys.executable, str(IDD_BIN)], capture_output=True, text=True, check=False)
         self.assertEqual(no_args.returncode, 2)
 

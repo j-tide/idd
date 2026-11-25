@@ -12,24 +12,37 @@ import subprocess
 
 
 STATUSES = ("planned", "in_progress", "blocked", "deferred", "cancelled", "done", "unknown")
-FIELD = re.compile(r"^- (Goal|Issue|Status|Depends on|Test):[ \t]*(.*)$")
+FIELD = re.compile(r"^- (Issue|Goal|Status|Depends on|Test):[ \t]*(.*)$")
 
 
-def parse_issue_number(raw_issue: str, goal_name: str = "") -> int | None:
-    """Extract an integer GitHub issue number from an Issue header or goal directory prefix."""
+def parse_issue_number(raw_issue: str, dir_name: str = "") -> int | None:
+    """Extract an integer Issue number from an Issue header or directory prefix."""
     cleaned = raw_issue.strip()
     if cleaned and cleaned.lower() != "none":
-        match = re.fullmatch(r"#?(\d+)", cleaned)
+        match = re.fullmatch(r"[#! ]*(\d+)", cleaned)
         if match:
             return int(match.group(1))
-        url_match = re.search(r"/issues/(\d+)(?:[/?#].*)?$", cleaned)
-        if url_match:
-            return int(url_match.group(1))
-    if goal_name:
-        prefix_match = re.match(r"^(\d+)-", goal_name)
+        prefix_match = re.match(r"^(\d+)-", cleaned)
         if prefix_match:
             return int(prefix_match.group(1))
+        url_match = re.search(r"/(?:issues|merge_requests|pull)/(\d+)(?:[/?#].*)?$", cleaned)
+        if url_match:
+            return int(url_match.group(1))
+    if dir_name:
+        dir_match = re.match(r"^(\d+)(?:-|$)", dir_name)
+        if dir_match:
+            return int(dir_match.group(1))
     return None
+
+
+def _matches_issue_filter(dir_name: str, issue_filter: str | None) -> bool:
+    if issue_filter is None:
+        return True
+    if dir_name == issue_filter:
+        return True
+    filter_num = parse_issue_number(issue_filter)
+    dir_num = parse_issue_number("", dir_name)
+    return filter_num is not None and dir_num == filter_num
 
 
 def read_task(path: Path, task_root: Path) -> dict:
@@ -56,19 +69,37 @@ def read_task(path: Path, task_root: Path) -> dict:
                 duplicates.add(key)
             else:
                 fields[key] = value.strip()
-    for key in ("Goal", "Status", "Depends on", "Test"):
+
+    has_issue_or_legacy = bool(fields.get("Issue") or fields.get("Goal"))
+    if not has_issue_or_legacy:
+        issues.append("缺少头部字段：Issue")
+    for key in ("Status", "Depends on", "Test"):
         if not fields.get(key):
             issues.append(f"缺少头部字段：{key}")
     issues.extend(f"重复头部字段：{key}" for key in sorted(duplicates))
-    goal = relative.parts[0]
-    if fields.get("Goal") and fields["Goal"] != goal:
-        issues.append(f"Goal 与目录不一致：{fields['Goal']}")
+
+    issue_dir = relative.parts[0]
+    dir_num = parse_issue_number("", issue_dir)
+
+    raw_issue_field = fields.get("Issue", "")
+    legacy_field = fields.get("Goal", "")
+    if raw_issue_field:
+        parsed_header_num = parse_issue_number(raw_issue_field)
+        valid_match = (
+            raw_issue_field == issue_dir
+            or (parsed_header_num is not None and dir_num is not None and parsed_header_num == dir_num)
+            or (raw_issue_field.lower() == "none" and dir_num is None)
+        )
+        if not valid_match:
+            issues.append(f"Issue 与目录不一致：{raw_issue_field}")
+    elif legacy_field and legacy_field != issue_dir:
+        issues.append(f"Issue 目录不一致：{legacy_field}")
+
     raw_status = fields.get("Status", "")
     status = raw_status if raw_status in STATUSES[:-1] and "Status" not in duplicates else "unknown"
     if status == "unknown" and raw_status:
         issues.append(f"状态无法确定：{raw_status}")
-    raw_issue = fields.get("Issue", "")
-    issue_number = parse_issue_number(raw_issue, goal)
+    issue_number = parse_issue_number(raw_issue_field, issue_dir)
     return {
         "id": "-".join(path.stem.split("-")[:2]),
         "title": title,
@@ -76,7 +107,7 @@ def read_task(path: Path, task_root: Path) -> dict:
         "status": status,
         "raw_status": raw_status,
         "depends_on": fields.get("Depends on", ""),
-        "issue": raw_issue,
+        "issue": raw_issue_field or legacy_field,
         "issue_number": issue_number,
         "test": fields.get("Test", ""),
         "issues": issues,
@@ -85,20 +116,20 @@ def read_task(path: Path, task_root: Path) -> dict:
 
 def _collect_from_task_root(
     task_root: Path,
-    goal: str | None,
+    issue_filter: str | None,
     open_only: bool,
     *,
     worktree: Path | None = None,
     branch: str | None = None,
 ) -> tuple[list[dict], list[str], bool]:
-    """Collect goal summaries from one TASK/ root. Returns (goals, warnings, matched_goal)."""
+    """Collect Issue directory summaries from one TASK/ root."""
     grouped: dict[str, list[dict]] = {}
     for path in sorted(task_root.glob("*/TASK-*.md")):
         if path.is_file() and re.match(r"^TASK-\d+(?:-|\.md)", path.name):
-            if goal is None or path.parent.name == goal:
+            if _matches_issue_filter(path.parent.name, issue_filter):
                 grouped.setdefault(path.parent.name, []).append(read_task(path, task_root))
-    matched_goal = goal is None or goal in grouped
-    goals: list[dict] = []
+    matched = issue_filter is None or bool(grouped)
+    entries: list[dict] = []
     warnings: list[str] = []
     for name, tasks in grouped.items():
         counts = Counter(task["status"] for task in tasks)
@@ -111,7 +142,7 @@ def _collect_from_task_root(
         if issue_number is None:
             issue_number = parse_issue_number("", name)
         entry: dict = {
-            "goal": name,
+            "issue": name,
             "issue_number": issue_number,
             "total": len(tasks),
             "done": counts["done"],
@@ -121,16 +152,16 @@ def _collect_from_task_root(
         if worktree is not None:
             entry["worktree"] = str(worktree)
             entry["branch"] = branch or ""
-        goals.append(entry)
-    return goals, warnings, matched_goal
+        entries.append(entry)
+    return entries, warnings, matched
 
 
-def collect(task_root: Path, goal: str | None, open_only: bool) -> dict:
+def collect(task_root: Path, issue_filter: str | None, open_only: bool) -> dict:
     """Collect task status under a single TASK/ directory."""
-    goals, warnings, matched_goal = _collect_from_task_root(task_root, goal, open_only)
-    if goal is not None and not matched_goal:
-        raise ValueError(f"没有匹配的任务目标：{goal}")
-    return {"goals": goals, "warnings": warnings}
+    entries, warnings, matched = _collect_from_task_root(task_root, issue_filter, open_only)
+    if issue_filter is not None and not matched:
+        raise ValueError(f"没有匹配的 Issue 目录：{issue_filter}")
+    return {"issues": entries, "warnings": warnings}
 
 
 def list_git_worktrees(repo_root: Path) -> list[dict[str, str]]:
@@ -164,41 +195,41 @@ def list_git_worktrees(repo_root: Path) -> list[dict[str, str]]:
     return worktrees
 
 
-def collect_all_worktrees(repo_root: Path, goal: str | None, open_only: bool) -> dict:
+def collect_all_worktrees(repo_root: Path, issue_filter: str | None, open_only: bool) -> dict:
     """Collect task status across all git worktrees belonging to the repository."""
     worktrees = list_git_worktrees(repo_root)
-    all_goals: list[dict] = []
+    all_entries: list[dict] = []
     all_warnings: list[str] = []
     seen_keys: set[tuple[str, str]] = set()
-    matched_any = goal is None
+    matched_any = issue_filter is None
 
     for wt in worktrees:
         wt_path = Path(wt["path"]).resolve()
         task_root = wt_path / "TASK"
         if not task_root.is_dir():
             continue
-        goals, warnings, matched_goal = _collect_from_task_root(
+        entries, warnings, matched = _collect_from_task_root(
             task_root,
-            goal,
+            issue_filter,
             open_only,
             worktree=wt_path,
             branch=wt.get("branch", ""),
         )
-        if matched_goal:
+        if matched:
             matched_any = True
-        for entry in goals:
-            dedup_key = (entry["goal"], str(wt_path))
+        for entry in entries:
+            dedup_key = (entry["issue"], str(wt_path))
             if dedup_key in seen_keys:
                 continue
             seen_keys.add(dedup_key)
-            all_goals.append(entry)
+            all_entries.append(entry)
         all_warnings.extend(warnings)
 
-    if goal is not None and not matched_any:
-        raise ValueError(f"没有匹配的任务目标：{goal}")
+    if issue_filter is not None and not matched_any:
+        raise ValueError(f"没有匹配的 Issue 目录：{issue_filter}")
 
-    all_goals.sort(key=lambda g: (g.get("issue_number") or 10**9, g["goal"], g.get("worktree", "")))
-    return {"goals": all_goals, "warnings": all_warnings}
+    all_entries.sort(key=lambda item: (item.get("issue_number") or 10**9, item["issue"], item.get("worktree", "")))
+    return {"issues": all_entries, "warnings": all_warnings}
 
 
 def cell(value: str) -> str:
@@ -207,51 +238,52 @@ def cell(value: str) -> str:
 
 
 def render(data: dict) -> str:
-    """Render collected goal/task data as a concise Markdown overview."""
-    lines = ["按任务头部 Status 统计；任务全为 done 不代表目标级验收已完成。", ""]
-    if not data["goals"]:
-        return "\n".join(lines + ["没有匹配的目标。"])
+    """Render collected Issue/task data as a concise Markdown overview."""
+    lines = ["按任务头部 Status 统计；任务全为 done 不代表 Issue 级验收已完成。", ""]
+    entries = data.get("issues", [])
+    if not entries:
+        return "\n".join(lines + ["没有匹配的 Issue。"])
 
-    has_worktree_info = any("worktree" in g for g in data["goals"])
+    has_worktree_info = any("worktree" in item for item in entries)
     if has_worktree_info:
         lines.extend([
-            "| Issue | 目标 | done / 总数 | planned | in_progress | blocked | deferred | cancelled | unknown | 工作树 / 分支 |",
+            "| Issue | 目录 | done / 总数 | planned | in_progress | blocked | deferred | cancelled | unknown | 工作树 / 分支 |",
             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ])
     else:
         lines.extend([
-            "| 目标 | done / 总数 | planned | in_progress | blocked | deferred | cancelled | unknown |",
+            "| Issue 目录 | done / 总数 | planned | in_progress | blocked | deferred | cancelled | unknown |",
             "| --- | --- | --- | --- | --- | --- | --- | --- |",
         ])
 
-    for goal in data["goals"]:
-        counts = goal["counts"]
+    for item in entries:
+        counts = item["counts"]
         if has_worktree_info:
-            issue_str = f"#{goal['issue_number']}" if goal.get("issue_number") is not None else "—"
-            wt_name = Path(goal["worktree"]).name if goal.get("worktree") else "—"
-            branch = goal.get("branch") or "—"
+            issue_str = f"#{item['issue_number']}" if item.get("issue_number") is not None else "—"
+            wt_name = Path(item["worktree"]).name if item.get("worktree") else "—"
+            branch = item.get("branch") or "—"
             wt_col = cell(f"`{wt_name}` ({branch})")
-            values = [issue_str, cell(goal["goal"]), f"{goal['done']} / {goal['total']}"]
+            values = [issue_str, cell(item["issue"]), f"{item['done']} / {item['total']}"]
             values.extend(str(counts[status]) for status in STATUSES if status != "done")
             values.append(wt_col)
         else:
-            values = [cell(goal["goal"]), f"{goal['done']} / {goal['total']}"]
+            values = [cell(item["issue"]), f"{item['done']} / {item['total']}"]
             values.extend(str(counts[status]) for status in STATUSES if status != "done")
         lines.append("| " + " | ".join(values) + " |")
 
-    remaining = [(goal, task) for goal in data["goals"] for task in goal["tasks"] if task["status"] != "done"]
+    remaining = [(item, task) for item in entries for task in item["tasks"] if task["status"] != "done"]
     if remaining:
         lines.extend(["", "非 done 任务（含暂缓与取消；依赖是否可执行需读取原任务确认）：", ""])
-        for goal, task in remaining:
+        for item, task in remaining:
             status = task["status"]
             if status == "unknown":
                 status += f"（原值：{task['raw_status'] or '缺失'}）"
-            issue_prefix = f"#{goal['issue_number']} " if goal.get("issue_number") is not None and has_worktree_info else ""
+            issue_prefix = f"#{item['issue_number']} " if item.get("issue_number") is not None and has_worktree_info else ""
             lines.append(
-                f"- {issue_prefix}{goal['goal']}/{task['id']} [{status}] {task['title']}；"
+                f"- {issue_prefix}{item['issue']}/{task['id']} [{status}] {task['title']}；"
                 f"依赖：{task['depends_on'] or '未记录'}"
             )
-    if data["warnings"]:
+    if data.get("warnings"):
         lines.extend(["", "记录问题：", ""])
         lines.extend(f"- {warning}" for warning in data["warnings"])
     return "\n".join(lines)
@@ -260,20 +292,21 @@ def render(data: dict) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="包含 TASK/ 或属于 Git 仓库的根目录，默认当前目录")
-    parser.add_argument("--goal", help="只显示指定目标，名称须与 TASK 下的目录一致")
-    parser.add_argument("--open-only", action="store_true", help="只显示含非 done 任务的目标及其非 done 任务")
+    parser.add_argument("--issue", dest="issue", help="只显示指定 Issue 目录（名称与 TASK/ 下子目录一致，也可传 #编号）")
+    parser.add_argument("--goal", dest="issue", help=argparse.SUPPRESS)
+    parser.add_argument("--open-only", action="store_true", help="只显示含非 done 任务的 Issue 及其非 done 任务")
     parser.add_argument("--all-worktrees", action="store_true", help="扫描当前 Git 仓库的所有工作树中的 TASK/ 目录")
     parser.add_argument("--json", action="store_true", help="输出 JSON 而非 Markdown")
     args = parser.parse_args()
 
     try:
         if args.all_worktrees:
-            data = collect_all_worktrees(args.root, args.goal, args.open_only)
+            data = collect_all_worktrees(args.root, args.issue, args.open_only)
         else:
             task_root = args.root / "TASK"
             if not task_root.is_dir():
                 parser.error(f"任务目录不存在：{task_root}")
-            data = collect(task_root, args.goal, args.open_only)
+            data = collect(task_root, args.issue, args.open_only)
     except ValueError as exc:
         parser.error(str(exc))
 

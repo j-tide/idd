@@ -1,15 +1,15 @@
 ---
 name: idd
-description: 面向 Issue 的跨工具开发工作流（Issue-Driven Development）。让 Claude Code、Codex 与 Antigravity 共用同一套「聊想法建 Issue → 独立 Worktree 并行 → TASK 拆解与真测试 → PR/CI 自愈 → Squash 直线合入 main 并清理 TASK 目录」流水线。支持多工具无缝接手、长期阻塞恢复与历史补录；只读咨询或评估不创建任务。
+description: 面向 Issue 的跨工具开发工作流（Issue-Driven Development）。让 Claude Code、Codex 与 Antigravity 共用同一套「聊想法建 Issue → 独立 Worktree 并行 → TASK 拆解与真测试 → PR/MR CI 自愈 → Squash 直线合入 main 并清理 TASK 目录」流水线，同时支持 GitHub 与自建 GitLab。支持多工具无缝接手、长期阻塞恢复与历史补录；只读咨询或评估不创建任务。
 metadata:
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 # IDD（Issue-Driven Development）
 
-**先用 Issue 锚定需求，再为每个 Issue 开出独立 Worktree 与分支，逐项实现、验证并提交 `TASK`，在 PR 上完成 CI 自愈与验收，最后将整个需求压缩成一条直线提交 Squash 合入 `main`（合入前清理临时 `TASK/` 目录）。**
+**先用 Issue 锚定需求，再为每个 Issue 开出独立 Worktree 与分支，逐项实现、验证并提交 `TASK`，在 PR / MR 上完成 CI 自愈与验收，最后将整个需求压缩成一条直线提交 Squash 合入 `main`（合入前清理临时 `TASK/` 目录）。**
 
-本工作流通过统一的目录约定与共用 CLI 工具 **`idd`**，让 **Claude Code、Codex、Antigravity** 之间随时无缝接手同一个需求，多个 Issue 并行开发互不冲突。
+本工作流通过统一的目录约定与共用 CLI 工具 **`idd`**，同时支持 **GitHub** 与 **自建 GitLab**，让 **Claude Code、Codex、Antigravity** 之间随时无缝接手同一个 Issue，多个 Issue 并行开发互不冲突。
 
 保持流程轻量。不要生成重量级的 Spec、Plan、Design 文档，只保留执行和验证任务所必需的文件。
 
@@ -17,36 +17,37 @@ metadata:
 
 ## 一、共用工具 `idd` 速查
 
-所有跨工具的 Git / Worktree / GitHub 确定性操作优先使用 `idd` 命令（若部分无交互子进程 `PATH` 未包含 `~/.local/bin`，可直接执行 `python3 "$HOME/.agents/skills/idd/scripts/idd"`）：
+所有跨工具的 Git / Worktree / 平台确定性操作优先使用 `idd` 命令（若部分无交互子进程 `PATH` 未包含 `~/.local/bin`，可直接执行 `python3 "$HOME/.agents/skills/idd/scripts/idd"`）：
 
 | 命令 | 用途 |
 | :--- | :--- |
-| `idd status [--open-only] [--local-only] [--json]` | 聚合并展示 GitHub Open Issues、所有 Worktree 的 `TASK` 进度与 PR/CI 状态 |
-| `idd issue create --title "..." [--body "..."] [--label ...]` | 聊天确认需求后创建 GitHub Issue |
+| `idd status [--open-only] [--local-only] [--json]` | 聚合并展示 Issue、所有 Worktree 的 `TASK` 进度与 PR/MR CI 状态 |
+| `idd issue create --title "..." [--body "..."] [--label ...]` | 聊天确认需求后创建 GitHub / GitLab Issue |
 | `idd start <issue# \| slug> [--slug ...] [--prefix ...]` | 认领 Issue 创建（或**幂等复用**已有）独立 Worktree，自动同步 `.worktreeinclude` |
-| `idd sync [issue#] [--dry-run]` | 将当前 Worktree 的 `TASK` 勾选进度同步回 GitHub Issue 正文（渲染原生进度条） |
-| `idd pr [issue# \| slug] [--draft] [--dry-run]` | 基于 `TASK` 记录与提交日志生成结构化描述（含 `Closes #<id>`）并创建/更新 PR |
-| `idd ci [issue# \| pr#] [--watch] [--logs] [--json]` | 查看 PR 的 CI 检查汇总与 Merge 状态，自动拉取失败 Job 日志 |
-| `idd land [issue# \| slug] [--keep-tasks] [--rm-worktree] [--auto] [--dry-run]` | 自动 Rebase、汇总正文、清理 `TASK/<goal>/` 并 Squash 直线合入（默认保留分支与工作树） |
+| `idd sync [issue#] [--dry-run]` | 将当前 Worktree 的 `TASK` 勾选进度同步回 Issue 正文（渲染原生进度条） |
+| `idd pr [issue# \| slug]` / `idd mr ...` | 基于 `TASK` 与提交记录生成结构化描述（含 `Closes #<id>`）并创建/更新 PR 或 MR |
+| `idd ci [issue# \| pr# \| !mr#] [--watch] [--logs] [--json]` | 查看 PR / MR 的 CI 状态并拉取失败 Job/Run 日志 |
+| `idd land [issue# \| slug] [--keep-tasks] [--rm-worktree] [--auto] [--dry-run]` | 自动 Rebase、汇总正文、清理 `TASK/<issue>/` 并 Squash 直线合入（默认保留分支与工作树） |
 | `idd cleanup [--dry-run]` | 按需移除已合入且 HEAD 一致的干净工作树目录（保留所有分支） |
-| `idd repo-init [--apply]` | 检查或配置仓库为仅允许 Squash Merge（并保留远端分支） |
+| `idd repo-init [--apply]` | 检查或配置 GitHub / GitLab 为线性 Squash 合入策略（保留分支） |
+| `idd auth login <host> --token <PAT>` / `status` / `logout` | 保存与检查自建 GitLab / GitHub 企业版主机凭据 |
 | `idd upgrade [--check]` | 检查或立即拉取远端更新并快进同步本地 `idd`（另支持后台 6 小时安全自动同步） |
 
 ---
 
 ## 二、核心映射与目录约定
 
-一个可独立验收的需求优先绑定一个 GitHub Issue，全链路使用稳定一致的命名映射：
+一个可独立验收的需求优先绑定一个远端 Issue，全链路使用稳定一致的命名映射：
 
-- **Issue ↔ 目标 ↔ Worktree ↔ 分支**：
-  - `Issue #42` ↔ 目标目录 `42-<slug>` ↔ 独立工作树 `../<主仓库名>-worktrees/42-<slug>` ↔ 分支 `<type>/42-<slug>`（例如 `feat/42-export-csv`、`fix/43-dark-flicker`）。
-  - 纯本地/无远端场景使用 `<目标名称>` 与 `<type>/<目标名称>`。
+- **Issue ↔ 目录 ↔ Worktree ↔ 分支**：
+  - `Issue #42` ↔ 任务目录 `42-<slug>` ↔ 独立工作树 `../<主仓库名>-worktrees/42-<slug>` ↔ 分支 `<type>/42-<slug>`（例如 `feat/42-export-csv`、`fix/43-dark-flicker`）。
+  - 纯本地/无远端场景使用 `<issue-slug>` 与 `<type>/<issue-slug>`。
   - **分支与提交共用 8 类合法 `<type>`**：`feat | fix | refactor | perf | docs | test | ci | chore`。
   - **严禁使用不规范分支前缀**：禁止 `codex/*`、`claude/*`、`agy/*`、`antigravity/*`、`cursor/*`、`ai/*` 等工具前缀，也禁止 `feature/*`、`bugfix/*`、`tmp/*`、`wip/*` 等混写或临时前缀。`idd` 命令会在入口和出口直接拦截并给出 `git branch -m` 重命名提示。
-- **任务记录**：`TASK/<目标名称>/TASK-XX-<任务名称>.md`。
+- **任务记录**：`TASK/<issue>/TASK-XX-<任务名称>.md`。
 - **测试规范**：沿用项目现有的目录、命名、工具与入口；新测试按行为或模块命名，任务与测试的映射以任务文件的 `Test` 字段为准。不要额外创建平行的 `TEST/` 目录。
 - **禁止冗余文档**：不要创建重复的 SPEC、PLAN、DESIGN、README、人工进度看板或索引文件。进度派生靠 `idd status` / `task_status.py`（以及 `idd sync` 回写 Issue 正文）。
-- **证据附件**：必要的小型脱敏证据可放在 `TASK/<目标名称>/evidence/TASK-XX/`；留存要求见[任务记录约定](references/task-records.md#证据留存)。
+- **证据附件**：必要的小型脱敏证据可放在 `TASK/<issue>/evidence/TASK-XX/`；留存要求见[任务记录约定](references/task-records.md#证据留存)。
 - **文档与配置任务**：可以使用明确的命令或检查清单验证，不必创建没有实际意义的空测试文件；代码任务必须注明对应的真实测试文件或已有测试目标。
 
 ---
@@ -59,7 +60,7 @@ metadata:
 当用户是在聊想法、提新需求、让你先建单而不急着改代码时：
 1. 做必要的只读仓库核对（只问会实质影响设计的问题，不问查仓库就能确定的内容）。
 2. 明确背景（Why）、范围与明确边界（Scope / Non-goals）、风险以及可勾选的验收标准（`- [ ]`）。
-3. 调用 `idd issue create` 创建 GitHub Issue，向用户返回 Issue 编号与链接，**不修改当前工作树代码**。
+3. 调用 `idd issue create` 创建 Issue（自动适配当前仓库所属 GitHub 或自建 GitLab），向用户返回 Issue 编号与链接，**不修改当前工作树代码**。
 
 ### 模式 B｜认领 Issue 或跨工具接手（Start / Handoff）
 当用户指定要做某个 Issue（如“做 `#42`”、“用 Codex/Claude 接手 `#42`”）：
@@ -67,10 +68,10 @@ metadata:
    - 若该 Issue **尚无工作树**：`idd start` 会拉取最新 `origin/<default_branch>`，在同级 `../<repo>-worktrees/<id>-<slug>` 创建工作树和分支，并同步 `.worktreeinclude` 里的 `.env` 等本地文件。
    - 若该 Issue **已有工作树（跨工具接手）**：`idd start` 幂等返回现有工作树路径、分支、`git status`、最近提交与 `TASK/` 进度。**严禁各工具自行在 `.claude/worktrees/` 或其他私有目录另起炉灶。**
 2. 后续所有代码阅读、TASK 创建、测试和提交均在该独立工作树目录中进行。
-3. **并行边界**：**不同 Issue 之间可通过各自独立 Worktree 完全并行开发；同一个目标内的多个 TASK 默认按依赖串行执行。**
+3. **并行边界**：**不同 Issue 之间可通过各自独立 Worktree 完全并行开发；同一个 Issue 内的多个 TASK 默认按依赖串行执行。**
 
 ### 模式 C｜拆解与创建任务文件
-在对应工作树的 `TASK/<目标名称>/` 下创建任务文件（纯只读咨询不创建）：
+在对应工作树的 `TASK/<issue>/` 下创建任务文件（纯只读咨询不创建）：
 
 ```text
 TASK/
@@ -80,13 +81,13 @@ TASK/
     └── ...
 ```
 
-普通功能可参考 3～10 个有实际意义的任务（小目标可以只有 1 个，大目标可超过 10 个，按独立验收与依赖划分，不凑数）。创建或实质修改前先读取[任务记录约定](references/task-records.md)。
+普通功能可参考 3～10 个有实际意义的任务（小 Issue 可以只有 1 个，大 Issue 可超过 10 个，按独立验收与依赖划分，不凑数）。创建或实质修改前先读取[任务记录约定](references/task-records.md)。
 
 任务拆分规则：
-- 编号递增且稳定；执行顺序由 `Depends on` 决定（无环有向图），不为排序重编号。跨目标依赖使用 `<目标名称>/TASK-XX`。
+- 编号递增且稳定；执行顺序由 `Depends on` 决定（无环有向图），不为排序重编号。跨目录依赖使用 `<issue>/TASK-XX`。
 - 每个代码任务必须关联验证真实产品行为的自动化测试（可多任务共用同一测试文件）；确实不适合自动化测试的须说明原因并定义具体替代检查。
 - 测试命令从项目配置、CI 或文档确认。
-- 若由已明确验收标准的 GitHub Issue 启动且范围清晰低风险，或用户已明确授权覆盖本轮范围，创建完 `TASK` 文件（建议顺手跑一次 `idd sync` 更新 Issue 进度条）后直接进入执行；若需求本身模糊或存在重大设计取舍，先向用户展示任务列表、依赖关系与测试映射并等待确认。
+- 若由已明确验收标准的 Issue 启动且范围清晰低风险，或用户已明确授权覆盖本轮范围，创建完 `TASK` 文件（建议顺手跑一次 `idd sync` 更新 Issue 进度条）后直接进入执行；若需求本身模糊或存在重大设计取舍，先向用户展示任务列表、依赖关系与测试映射并等待确认。
 
 ### 模式 D｜只读全局进度
 当用户询问“有哪些 Issue 在跑”、“做到哪一步了”或跨工具查看总览时，优先运行：
@@ -105,9 +106,9 @@ python3 "$HOME/.agents/skills/idd/scripts/task_status.py" --root . --open-only
 
 ## 四、逐项执行任务
 
-按以下顺序推进单个目标内的 `TASK`：
+按以下顺序推进单个 Issue 内的 `TASK`：
 
-1. 阅读该目标下的所有任务文件与适用的项目指令。
+1. 阅读该 Issue 目录下的所有任务文件与适用的项目指令。
 2. 按依赖选择可执行的 `planned` 任务（若是从另一工具接手，先检查 `in_progress` 任务与最近提交继续，不重复执行 `done` 任务）。`deferred`、`cancelled` 或未知状态依赖不可视作完成。
 3. 将当前任务头部 `Status` 更新为 `in_progress`。
 4. 检查相关实现代码和现有测试，只实现当前任务范围内的内容。
@@ -118,8 +119,8 @@ python3 "$HOME/.agents/skills/idd/scripts/task_status.py" --root . --open-only
    - 两轮后仍失败则标记 `blocked`，按[阻塞与恢复](references/task-records.md#长期阻塞与恢复)写明原因、影响、解除条件和下一步并停止依赖链工作。
    - **没有实际运行并通过的测试，绝不能声称通过。**
 7. 约定范围、必要验证及证据留存都满足后，将 `Status` 设为 `done`、分别记录 `Outcome` 与验证记录表（纯文档检查也必须实际执行）。
-8. 在工作树分支上为该 `TASK` 创建一次开发提交（只含本任务改动、测试及任务记录），关键节点可顺手运行 `idd sync` 同步 GitHub 进度条。
-9. 发现新增范围时先按[范围增长](references/task-records.md#范围增长与任务依赖)评估：同一验收目标内追加编号任务，独立交付拆为新 Issue。不得把新工作塞进已完成任务。
+8. 在工作树分支上为该 `TASK` 创建一次开发提交（只含本任务改动、测试及任务记录），关键节点可顺手运行 `idd sync` 同步 Issue 进度条。
+9. 发现新增范围时先按[范围增长](references/task-records.md#范围增长与任务依赖)评估：同一 Issue 验收范围内追加编号任务，独立交付拆为新 Issue。不得把新工作塞进已完成任务。
 
 ### 提交标题与正文
 
@@ -132,15 +133,14 @@ python3 "$HOME/.agents/skills/idd/scripts/task_status.py" --root . --open-only
 
 <可选的原因或其余变化>
 
-Task: <目标名称>/TASK-XX
+Task: <issue>/TASK-XX
 Refs: #<Issue编号>
 Test: <实际执行的验证命令> — <结果，例如 12 passed>
 ```
 
-主线需求提交 / PR 汇总正文模板（`idd pr` 与 `idd land` 自动按此结构汇总）：
+主线需求提交 / PR / MR 汇总正文模板（`idd pr` / `idd mr` 与 `idd land` 自动按此结构汇总）：
 
 ```text
-Goal: <目标名称>
 Closes #<Issue编号>
 
 TASK-01 <本任务的具体变化>
@@ -152,17 +152,17 @@ Test: <本任务实际执行的验证及结果>
 
 ---
 
-## 五、目标级最终 Review、PR 与 CI 自愈
+## 五、Issue 级最终 Review、PR/MR 与 CI 自愈
 
-所有必要 `TASK` 完成后、提 PR 或合入前，详细规范见[Issue 与 Git 协作流](references/git-issue-workflow.md)：
+所有必要 `TASK` 完成后、提 PR / MR 或合入前，详细规范见[Issue 与 Git 协作流](references/git-issue-workflow.md)：
 
 1. **本地最终验收**：运行项目级相关测试套件、适用的构建 / 类型检查 / Lint，逐项核对 Issue 验收标准，Review 完整 Git Diff（检查回归、安全、错误处理与无关改动）。
-2. **创建 / 更新 PR**：确认工作树干净后运行 `idd pr`（自动汇总 `TASK` 列表与 `Test:` 并关联 `Closes #<id>`）。
+2. **创建 / 更新 PR 或 MR**：确认工作树干净后运行 `idd pr`（GitLab 也可用别名 `idd mr`，自动汇总 `TASK` 列表与 `Test:` 并关联 `Closes #<id>`）。
 3. **CI 校验与自愈**：
-   - 运行 `idd ci --watch` 等待结果；若 CI 失败，运行 `idd ci --logs` 拉取失败日志并在原工作树定位修复、本地复测后推送。
+   - 运行 `idd ci --watch` 等待远端 Checks / Pipeline 结束；失败时执行 `idd ci --logs` 拉取失败 Job/Run 日志并在原工作树定位修复、本地复测后推送。
    - **同一 CI 失败问题同样严格遵守最多两轮有针对性修复的上限**；两轮后仍未变绿则将对应任务记为 `blocked` 并向用户报告，禁止死循环重试。
-   - 若因其他 PR 先合入导致落后或冲突，执行 `git fetch origin main && git rebase origin/main`（解冲突并复测）后 `git push --force-with-lease`。
-4. **验收状态**：PR 创建且本地检查/CI 状态明晰后，按用户习惯向用户报告「PR 待验收」或按明确授权直接合入。
+   - 若因其他 PR/MR 先合入导致落后或冲突，执行 `git fetch origin main && git rebase origin/main`（解冲突并复测）后 `git push --force-with-lease`。
+4. **验收状态**：PR / MR 创建且本地检查/CI 状态明晰后，按用户习惯向用户报告「PR/MR 待验收」或按明确授权直接合入。
 
 ---
 
@@ -170,18 +170,18 @@ Test: <本任务实际执行的验证及结果>
 
 为了保证 `main` 分支永远是一条干净的直线，且主干不堆积已完成的 `TASK/` 档案，合入阶段统一遵循：
 
-1. **GitHub 线性合入（推荐默认）**：用户验收确认（或已具备明确自动合入授权且 CI 全绿）后，执行：
+1. **GitHub / 自建 GitLab 线性合入（推荐默认）**：用户验收确认（或已具备明确自动合入授权且 CI 全绿）后，执行：
    ```bash
    idd land <issue#>
    ```
    `idd land` 会自动完成：
    - 核对工作树干净与分支命名合规 → `git fetch` 并自动 rebase 到最新 `origin/main`；
-   - 在删除 `TASK/<goal>/` 前，先将完整 `Goal`、`Closes #<id>` 与所有 `TASK-XX` / `Test:` 写入 PR 描述与 Squash Commit 正文；
-   - 执行 `git rm -rf TASK/<goal>` 并提交清理（若 `evidence/` 含附件且未传 `--force-clean-evidence` 会安全暂停提示）；
-   - 通过 `gh pr merge --squash` 以**单条 Squash 提交**直线合入 `main`（自动关闭 Issue，**默认保留远端与本地需求分支**）；
+   - 在删除 `TASK/<issue>/` 前，先将完整 `Closes #<id>` 与所有 `TASK-XX` / `Test:` 写入 PR/MR 描述与 Squash Commit 正文；
+   - 执行 `git rm -rf TASK/<issue>` 并提交清理（若 `evidence/` 含附件且未传 `--force-clean-evidence` 会安全暂停提示）；
+   - 以**单条 Squash 提交**直线合入 `main`（GitHub 走 Squash Merge；GitLab 走 Squash + Fast-Forward，自动关闭 Issue 并**默认保留远端与本地需求分支**）；
    - **默认保留本地 Worktree**（只有显式传入 `--rm-worktree` 时才顺带移除工作树目录，分支依然保留），并尝试将干净的主工作树 `main` 快进至最新。
-2. **释放本地工作树空间（按需手动）**：平时保留工作树便于回顾上下文；需要清理磁盘时手动运行 `idd cleanup`——它只删除工作树目录（**绝不删除分支**），且仅当工作区干净**且**本地 `HEAD` 与已合入 PR 的 `headRefOid` 完全一致时才清理，避免误删合入后的本地新增提交。
-3. **无远端 / 纯本地仓库回退**：按照[Issue 与 Git 协作流 · 纯本地回退](references/git-issue-workflow.md#纯本地无远端回退流程)在临时集成分支完成压缩、删除 `TASK/<goal>/`、变基并与主线 `git merge --ff-only`。
+2. **释放本地工作树空间（按需手动）**：平时保留工作树便于回顾上下文；需要清理磁盘时手动运行 `idd cleanup`——它只删除工作树目录（**绝不删除分支**），且仅当工作区干净**且**本地 `HEAD` 与已合入 PR/MR 的 `headRefOid` 完全一致时才清理，避免误删合入后的本地新增提交。
+3. **无远端 / 纯本地仓库回退**：按照[Issue 与 Git 协作流 · 纯本地回退](references/git-issue-workflow.md#纯本地无远端回退流程)在临时集成分支完成压缩、删除 `TASK/<issue>/`、变基并与主线 `git merge --ff-only`。
 4. 补录历史任务仍先读[补录流程](references/task-records.md#事后补录)，不得伪造事前记录。
 
 ---
@@ -189,7 +189,7 @@ Test: <本任务实际执行的验证及结果>
 ## 七、执行记录、最终回复与约束
 
 - **执行记录与证据**：任务头部为唯一当前状态源，`Status` 与 `Outcome` 独立记录；`run/` 等忽略目录不能作为唯一长期依据。详情见[任务记录约定](references/task-records.md)。
-- **最终回复**：结束本轮开发或恢复执行时，读取[最终回复模板](references/final-reply.md)，按固定结构精简汇报结论、完成内容、验证结果与交付状态（含 Issue、PR、CI 与直线合入情况）。纯咨询或仅建单不套用开发交付报告。
+- **最终回复**：结束本轮开发或恢复执行时，读取[最终回复模板](references/final-reply.md)，按固定结构精简汇报结论、完成内容、验证结果与交付状态（含 Issue、PR/MR、CI 与直线合入情况）。纯咨询或仅建单不套用开发交付报告。
 - **执行红线**：
   - 不创建重复规划文档或人工维护的平行索引；
   - 不得为了让测试通过而削弱或删除测试；

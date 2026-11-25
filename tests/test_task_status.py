@@ -15,23 +15,26 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts/task_status.py"
 
 def write_task(
     root: Path,
-    goal: str,
+    issue_dir: str,
     number: int = 1,
     status: str | None = "planned",
     *,
     issue: str | None = None,
+    legacy_goal: str | None = None,
     extra: str = "",
     body: str = "",
-    declared_goal: str | None = None,
 ) -> Path:
-    directory = root / "TASK" / goal
+    directory = root / "TASK" / issue_dir
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"TASK-{number:02d}-example.md"
-    issue_line = f"- Issue: {issue}\n" if issue is not None else ""
+    if legacy_goal is not None:
+        header_ref = f"- Goal: {legacy_goal}\n"
+    else:
+        header_ref = f"- Issue: {issue if issue is not None else issue_dir}\n"
     status_line = "" if status is None else f"- Status: {status}\n"
     path.write_text(
         f"# TASK-{number:02d}：验收示例\n\n"
-        f"- Goal: {declared_goal or goal}\n{issue_line}{status_line}"
+        f"{header_ref}{status_line}"
         f"- Depends on: none\n- Test: pytest existing_test.py\n{extra}"
         f"\n## 执行结果\n{body}",
         encoding="utf-8",
@@ -60,16 +63,16 @@ class TestTaskStatus(unittest.TestCase):
                 tmp_path = Path(tmp)
                 write_task(tmp_path, "states", status=status)
                 data = query(tmp_path)
-                goal = data["goals"][0]
+                item = data["issues"][0]
                 known = status if status not in ("in_review", None) else "unknown"
-                self.assertEqual(goal["counts"][known], 1)
-                self.assertEqual(goal["done"], 1 if status == "done" else 0)
-                self.assertEqual(sum(goal["counts"].values()), goal["total"])
-                self.assertEqual(goal["total"], 1)
-                self.assertEqual(goal["tasks"][0]["raw_status"], status or "")
+                self.assertEqual(item["counts"][known], 1)
+                self.assertEqual(item["done"], 1 if status == "done" else 0)
+                self.assertEqual(sum(item["counts"].values()), item["total"])
+                self.assertEqual(item["total"], 1)
+                self.assertEqual(item["tasks"][0]["raw_status"], status or "")
                 self.assertEqual(bool(data["warnings"]), known == "unknown")
 
-    def test_goal_totals_and_open_filter_keep_deferred_and_cancelled_work_visible(self) -> None:
+    def test_issue_totals_and_open_filter_keep_deferred_and_cancelled_work_visible(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             write_task(tmp_path, "closed", status="done")
@@ -79,23 +82,26 @@ class TestTaskStatus(unittest.TestCase):
             evidence.parent.mkdir()
             evidence.write_text("This is an attachment, not a task.")
             data = query(tmp_path, "--open-only")
-            self.assertEqual([goal["goal"] for goal in data["goals"]], ["mixed"])
-            mixed = data["goals"][0]
+            self.assertEqual([item["issue"] for item in data["issues"]], ["mixed"])
+            mixed = data["issues"][0]
             self.assertEqual((mixed["done"], mixed["total"]), (1, 5))
             self.assertEqual(
                 {task["status"] for task in mixed["tasks"]},
                 {"blocked", "deferred", "cancelled", "unknown"},
             )
-            self.assertEqual([goal["goal"] for goal in query(tmp_path)["goals"]], ["closed", "mixed"])
+            self.assertEqual([item["issue"] for item in query(tmp_path)["issues"]], ["closed", "mixed"])
 
-    def test_goal_filter_and_missing_goal_have_explicit_results(self) -> None:
+    def test_issue_filter_and_missing_issue_have_explicit_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            write_task(tmp_path, "one", status="done")
-            write_task(tmp_path, "two", status="blocked")
-            self.assertEqual([goal["goal"] for goal in query(tmp_path, "--goal", "two")["goals"]], ["two"])
-            self.assertEqual(query(tmp_path, "--goal", "one", "--open-only")["goals"], [])
-            result = run_cli(tmp_path, "--goal", "missing", check=False)
+            write_task(tmp_path, "11-one", status="done", issue="#11")
+            write_task(tmp_path, "22-two", status="blocked", issue="#22")
+            self.assertEqual([item["issue"] for item in query(tmp_path, "--issue", "22-two")["issues"]], ["22-two"])
+            self.assertEqual([item["issue"] for item in query(tmp_path, "--issue", "#22")["issues"]], ["22-two"])
+            # Backward-compatible --goal alias still resolves
+            self.assertEqual([item["issue"] for item in query(tmp_path, "--goal", "22-two")["issues"]], ["22-two"])
+            self.assertEqual(query(tmp_path, "--issue", "11-one", "--open-only")["issues"], [])
+            result = run_cli(tmp_path, "--issue", "missing", check=False)
             self.assertEqual(result.returncode, 2)
             self.assertIn("missing", result.stderr)
 
@@ -108,7 +114,7 @@ class TestTaskStatus(unittest.TestCase):
                 status="blocked",
                 body="- Outcome: done\n- Status: done\n\n### 旧记录\n```markdown\n- Status: passed\n```\n",
             )
-            task = query(tmp_path)["goals"][0]["tasks"][0]
+            task = query(tmp_path)["issues"][0]["tasks"][0]
             self.assertEqual(task["status"], "blocked")
             self.assertEqual(task["issues"], [])
 
@@ -117,17 +123,27 @@ class TestTaskStatus(unittest.TestCase):
             tmp_path = Path(tmp)
             write_task(tmp_path, "ambiguous", status="done", extra="- Status: blocked\n")
             data = query(tmp_path)
-            self.assertEqual(data["goals"][0]["done"], 0)
-            self.assertEqual(data["goals"][0]["tasks"][0]["status"], "unknown")
+            self.assertEqual(data["issues"][0]["done"], 0)
+            self.assertEqual(data["issues"][0]["tasks"][0]["status"], "unknown")
             self.assertTrue(data["warnings"])
 
-    def test_goal_directory_remains_authoritative_and_mismatch_is_reported(self) -> None:
+    def test_issue_directory_remains_authoritative_and_mismatch_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            write_task(tmp_path, "actual", declared_goal="wrong")
+            write_task(tmp_path, "actual", issue="wrong")
             data = query(tmp_path)
-            self.assertEqual(data["goals"][0]["goal"], "actual")
+            self.assertEqual(data["issues"][0]["issue"], "actual")
             self.assertTrue(any("wrong" in warning for warning in data["warnings"]))
+
+    def test_legacy_goal_header_remains_backward_compatible(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            write_task(tmp_path, "legacy-item", status="done", legacy_goal="legacy-item")
+            write_task(tmp_path, "legacy-bad", status="done", legacy_goal="mismatch")
+            data = query(tmp_path)
+            by_dir = {item["issue"]: item for item in data["issues"]}
+            self.assertEqual(by_dir["legacy-item"]["tasks"][0]["issues"], [])
+            self.assertTrue(any("mismatch" in w for w in data["warnings"]))
 
     def test_unreadable_encoding_is_visible_instead_of_silently_dropping_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -135,9 +151,9 @@ class TestTaskStatus(unittest.TestCase):
             path = write_task(tmp_path, "encoding", status="done")
             path.write_bytes(b"\xff\xfeinvalid")
             data = query(tmp_path)
-            self.assertEqual(data["goals"][0]["total"], 1)
-            self.assertEqual(data["goals"][0]["done"], 0)
-            self.assertEqual(data["goals"][0]["tasks"][0]["status"], "unknown")
+            self.assertEqual(data["issues"][0]["total"], 1)
+            self.assertEqual(data["issues"][0]["done"], 0)
+            self.assertEqual(data["issues"][0]["tasks"][0]["status"], "unknown")
             self.assertTrue(any("UnicodeDecodeError" in warning for warning in data["warnings"]))
 
     def test_queries_preserve_files_bytes_timestamps_and_directory_inventory(self) -> None:
@@ -157,7 +173,7 @@ class TestTaskStatus(unittest.TestCase):
 
             before = snapshot()
             query(root)
-            query(root, "--open-only", "--goal", "preserve")
+            query(root, "--open-only", "--issue", "preserve")
             run_cli(root)
             self.assertEqual(snapshot(), before)
 
@@ -167,7 +183,7 @@ class TestTaskStatus(unittest.TestCase):
             result = run_cli(tmp_path, check=False)
             self.assertEqual(result.returncode, 2)
             (tmp_path / "TASK").mkdir()
-            self.assertEqual(query(tmp_path), {"goals": [], "warnings": []})
+            self.assertEqual(query(tmp_path), {"issues": [], "warnings": []})
             self.assertEqual(run_cli(tmp_path).returncode, 0)
 
     def test_markdown_output_keeps_table_cells_and_raw_unknown_status_readable(self) -> None:
@@ -180,18 +196,18 @@ class TestTaskStatus(unittest.TestCase):
             self.assertIn("legacy", result.stdout)
             self.assertIn("0 / 1", result.stdout)
 
-    def test_optional_issue_header_and_goal_prefix_fallback(self) -> None:
+    def test_issue_number_header_and_dir_prefix_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            write_task(tmp_path, "explicit-dir", status="done", issue="#42")
-            write_task(tmp_path, "77-prefix-dir", status="in_progress")
-            write_task(tmp_path, "plain-local", status="planned")
+            write_task(tmp_path, "42-export-csv", status="done", issue="#42")
+            write_task(tmp_path, "77-prefix-dir", status="in_progress", issue="77-prefix-dir")
+            write_task(tmp_path, "plain-local", status="planned", issue="none")
             data = query(tmp_path)
             self.assertEqual(data["warnings"], [])
-            by_goal = {g["goal"]: g for g in data["goals"]}
-            self.assertEqual(by_goal["explicit-dir"]["issue_number"], 42)
-            self.assertEqual(by_goal["77-prefix-dir"]["issue_number"], 77)
-            self.assertIsNone(by_goal["plain-local"]["issue_number"])
+            by_dir = {item["issue"]: item for item in data["issues"]}
+            self.assertEqual(by_dir["42-export-csv"]["issue_number"], 42)
+            self.assertEqual(by_dir["77-prefix-dir"]["issue_number"], 77)
+            self.assertIsNone(by_dir["plain-local"]["issue_number"])
 
     def test_all_worktrees_aggregates_multiple_git_worktrees(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -216,11 +232,11 @@ class TestTaskStatus(unittest.TestCase):
             write_task(wt2, "43-auth", 1, status="blocked")
 
             data = query(repo, "--all-worktrees")
-            self.assertEqual([g["goal"] for g in data["goals"]], ["42-csv", "43-auth"])
-            self.assertEqual(data["goals"][0]["branch"], "feat/42-csv")
-            self.assertEqual(data["goals"][0]["done"], 1)
-            self.assertEqual(data["goals"][0]["total"], 2)
-            self.assertEqual(data["goals"][1]["issue_number"], 43)
+            self.assertEqual([item["issue"] for item in data["issues"]], ["42-csv", "43-auth"])
+            self.assertEqual(data["issues"][0]["branch"], "feat/42-csv")
+            self.assertEqual(data["issues"][0]["done"], 1)
+            self.assertEqual(data["issues"][0]["total"], 2)
+            self.assertEqual(data["issues"][1]["issue_number"], 43)
 
             md = run_cli(repo, "--all-worktrees").stdout
             self.assertIn("#42", md)
