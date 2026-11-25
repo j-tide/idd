@@ -4,7 +4,7 @@
 
 **让 Claude Code、Codex 与 Antigravity 共用同一套 Issue 驱动开发流水线**
 
-[![Version](https://img.shields.io/badge/version-v0.4.0-10b981?style=flat-square)](https://github.com/j-tide/idd)
+[![Version](https://img.shields.io/badge/version-v0.5.0-10b981?style=flat-square)](https://github.com/j-tide/idd)
 [![Forges](https://img.shields.io/badge/forges-GitHub%20%C2%B7%20Self--Hosted%20GitLab-fc6d26?style=flat-square)](#)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(stdlib)-8b5cf6?style=flat-square)](#)
 [![Agents](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Antigravity-38bdf8?style=flat-square)](#)
@@ -24,6 +24,7 @@
 - **聊想法自动建单**：在任意 AI 窗口对齐需求范围与验收标准后，一键生成 GitHub / GitLab Issue，不污染当前代码工作区。
 - **多工具零失忆接力**：Claude Code、Codex、Antigravity 共用同一份目录规范与 `idd start`，任意工具都能直接进同一个 Worktree 读取 `TASK/<issue>/` 进度无缝接手。
 - **独立 Worktree 真并行**：每个 Issue 拥有独立的平行工作树与规范分支，多个需求同时开跑互不干扰；自动同步 `.worktreeinclude`（如 `.env`）。
+- **全局实时监控看板（Web + 终端）**：自动记录本机活跃仓库并无锁探测 Worktree 实时脉搏（当前任务、改动量、活跃心跳与疑似卡住提醒）。随时执行 `idd board` 打开本地网页看板或 `idd watch` 终端盯盘，**不打断正在进行的对话，也不额外消耗 Token**。
 - **`main` 永远是一条直线**：PR / MR 的 CI 修复闭环后，`idd land` 自动 rebase、把 `TASK` 汇总写进描述与提交正文、合入前清理 `TASK/<issue>/`、以 **Squash 直线合入 `main`**（GitHub Squash Merge / GitLab Squash + Fast-Forward）——同时**默认保留本地与远端需求分支及工作树**，释放空间再按需运行安全校验后的 `idd cleanup`。
 
 ---
@@ -76,7 +77,10 @@ idd auth login gitlab.company.com --token <Personal-Access-Token>
 
 | 命令 | 说明 |
 | :--- | :--- |
-| `idd status [--open-only] [--json]` | 一张表聚合 GitHub / GitLab Open Issues、所有 Worktree 的 `TASK` 进度与 PR/MR CI 状态 |
+| `idd board` / `idd ui` | 启动本地 Web 实时监控看板（零依赖离线网页，每 2 秒自动刷新所有活跃仓库与 Worktree 脉搏） |
+| `idd watch [--current-only]` | 在终端按 2 秒频率实时刷新全局（或当前仓库）Worktree 脉搏、当前 TASK 与 CI 状态 |
+| `idd status [-g\|--global]` | 一张表聚合 Open Issues、Worktree `TASK` 进度、实时脉搏与 PR/MR CI（在非 Git 目录自动切全局） |
+| `idd repos [list\|add\|remove\|prune]` | 查看或管理全局自动监控的仓库索引（`~/.config/idd/repos.json`） |
 | `idd issue create --title "..."` | 创建 GitHub / GitLab Issue |
 | `idd start <issue# \| slug>` | 创建或幂等复用独立 Worktree，同步 `.worktreeinclude` 并校验分支名 |
 | `idd sync [issue#]` | 将本地 `TASK` 勾选状态同步到 Issue 正文 |

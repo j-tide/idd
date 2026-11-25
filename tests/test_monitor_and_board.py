@@ -1,0 +1,325 @@
+"""End-to-end tests for global repo registry, live worktree pulse, `idd watch`, and `idd board`."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+import urllib.request
+
+from test_idd_cli import FAKE_GH_SCRIPT, IDD_BIN
+
+
+def _create_repo_harness(
+    base_dir: Path,
+    repo_name: str,
+    config_dir: Path,
+    issues: dict[str, dict] | None = None,
+) -> tuple[Path, Path, Path, dict[str, str]]:
+    """Create a real bare origin + cloned repo + isolated fake `gh` env sharing `config_dir`."""
+    base_dir.mkdir(parents=True, exist_ok=True)
+    origin = base_dir / f"{repo_name}.git"
+    repo = base_dir / repo_name
+    bin_dir = base_dir / "bin"
+    state_file = base_dir / "gh_state.json"
+
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    gh_bin = bin_dir / "gh"
+    gh_bin.write_text(FAKE_GH_SCRIPT, encoding="utf-8")
+    gh_bin.chmod(0o755)
+
+    default_issues = issues or {
+        "42": {
+            "number": 42,
+            "title": f"{repo_name} export csv",
+            "body": "Export CSV support",
+            "labels": [{"name": "feat"}],
+            "state": "OPEN",
+            "url": f"https://github.com/acme/{repo_name}/issues/42",
+        },
+        "43": {
+            "number": 43,
+            "title": f"{repo_name} dark flicker",
+            "body": "Fix flicker",
+            "labels": [{"name": "bug"}],
+            "state": "OPEN",
+            "url": f"https://github.com/acme/{repo_name}/issues/43",
+        },
+    }
+    state = {
+        "next_issue": 50,
+        "next_pr": 10,
+        "issues": default_issues,
+        "prs": {},
+        "run_logs": {},
+        "default_checks": [{"name": "ci / test", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        "repo_settings": {
+            "default_branch": "main",
+            "allow_merge_commit": False,
+            "allow_squash_merge": True,
+            "allow_rebase_merge": False,
+            "delete_branch_on_merge": False,
+        },
+        "calls": [],
+    }
+    state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(origin)], check=True, capture_output=True)
+    subprocess.run(["git", "clone", str(origin), str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-b", "main"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tester"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+
+    (repo / "README.md").write_text(f"# {repo_name}\n", encoding="utf-8")
+    (repo / "app.py").write_text("line1 = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "README.md", "app.py"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "chore: initial commit"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "push", "-u", "origin", "main"], check=True, capture_output=True)
+    subprocess.run(["git", "--git-dir", str(origin), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "set-head", "origin", "main"], check=True)
+
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["FAKE_GH_STATE"] = str(state_file)
+    env["FAKE_GH_ORIGIN"] = str(origin)
+    env["IDD_NO_AUTO_UPDATE"] = "1"
+    env["IDD_NO_BROWSER"] = "1"
+    env["IDD_CONFIG_DIR"] = str(config_dir)
+    env.pop("IDD_WORKTREE_ROOT", None)
+    return repo, origin, state_file, env
+
+
+class TestMonitorAndBoard(unittest.TestCase):
+    def _run(self, env: dict[str, str], cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(IDD_BIN), *args],
+            cwd=str(cwd),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    def test_global_repo_registry_auto_registers_lists_prunes_and_removes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            repo_a, _, _, env_a = _create_repo_harness(root / "h_a", "alpha-app", cfg)
+            repo_b, _, _, env_b = _create_repo_harness(root / "h_b", "beta-api", cfg)
+
+            self._run(env_a, repo_a, "start", "42", "--slug", "export-csv", "--json")
+            self._run(env_b, repo_b, "start", "43", "--json")
+
+            repos_file = cfg / "repos.json"
+            self.assertTrue(repos_file.is_file())
+            listed = json.loads(self._run(env_a, root, "repos", "--json").stdout)
+            names = {r["name"] for r in listed["repos"]}
+            self.assertEqual(names, {"alpha-app", "beta-api"})
+
+            # Delete repo_b directory & prune stale entries
+            shutil.rmtree(repo_b)
+            pruned = json.loads(self._run(env_a, root, "repos", "prune", "--json").stdout)
+            self.assertEqual(pruned["removed_count"], 1)
+            self.assertEqual(pruned["remaining"], 1)
+
+            # Explicit unregister of repo_a
+            self._run(env_a, root, "repos", "remove", str(repo_a))
+            after = json.loads(self._run(env_a, root, "repos", "list", "--json").stdout)
+            self.assertEqual(after["repos"], [])
+
+    def test_auto_global_status_from_non_git_dir_and_worktree_live_pulse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            empty_dir = root / "unbound-workspace"
+            empty_dir.mkdir()
+
+            repo_a, _, _, env_a = _create_repo_harness(root / "h_a", "alpha-app", cfg)
+            repo_b, _, _, env_b = _create_repo_harness(root / "h_b", "beta-api", cfg)
+
+            wt_a = Path(json.loads(self._run(env_a, repo_a, "start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            self._run(env_b, repo_b, "start", "43", "--json")
+
+            # Add in_progress + planned TASK and uncommitted code edits in wt_a
+            task_dir = wt_a / "TASK/42-export-csv"
+            task_dir.mkdir(parents=True)
+            (task_dir / "TASK-01-impl.md").write_text(
+                "# TASK-01：实现核心接口\n\n"
+                "- Issue: #42\n"
+                "- Status: in_progress\n"
+                "- Depends on: none\n"
+                "- Test: pytest\n",
+                encoding="utf-8",
+            )
+            (task_dir / "TASK-02-test.md").write_text(
+                "# TASK-02：补充测试\n\n"
+                "- Issue: #42\n"
+                "- Status: planned\n"
+                "- Depends on: TASK-01\n"
+                "- Test: pytest\n",
+                encoding="utf-8",
+            )
+            (wt_a / "app.py").write_text("line1 = 1\nline2 = 2\nline3 = 3\n", encoding="utf-8")
+            (wt_a / "new_helper.py").write_text("def helper():\n    return 42\n", encoding="utf-8")
+
+            # Running `idd status` in an empty non-git directory automatically aggregates globally
+            global_json = json.loads(self._run(env_a, empty_dir, "status", "--local-only", "--json").stdout)
+            self.assertTrue(global_json["global"])
+            self.assertEqual(global_json["summary"]["repo_count"], 2)
+            self.assertGreaterEqual(global_json["summary"]["active_worktrees"], 2)
+            self.assertEqual(global_json["summary"]["in_progress_tasks"], 1)
+
+            alpha_snap = next(r for r in global_json["repos"] if r["repo_name"] == "alpha-app")
+            issue42 = next(i for i in alpha_snap["issues"] if i["issue_number"] == 42)
+            self.assertIn("TASK-01", issue42["current_task"])
+            pulse = issue42["pulse"]
+            self.assertEqual(pulse["activity_state"], "active")
+            self.assertGreaterEqual(pulse["dirty_count"], 2)
+            self.assertGreaterEqual(pulse["insertions"], 2)
+            changed_paths = {f["path"] for f in pulse["changed_files"]}
+            self.assertIn("app.py", changed_paths)
+            self.assertIn("new_helper.py", changed_paths)
+
+            md_out = self._run(env_a, empty_dir, "status", "--local-only").stdout
+            self.assertIn("全局 IDD 进度总览", md_out)
+            self.assertIn("alpha-app", md_out)
+            self.assertIn("beta-api", md_out)
+            self.assertIn("实时脉搏", md_out)
+
+    def test_retained_post_land_worktree_vs_newly_started_worktree_without_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            repo, _, _, env = _create_repo_harness(root / "h", "demo-app", cfg)
+
+            # Start #42, finish TASK-01, PR, land -> worktree is retained & clean, Issue #42 closed
+            wt42 = Path(json.loads(self._run(env, repo, "start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            tdir = wt42 / "TASK/42-export-csv"
+            tdir.mkdir(parents=True)
+            (tdir / "TASK-01-impl.md").write_text(
+                "# TASK-01：实现导出\n\n- Issue: #42\n- Status: done\n- Depends on: none\n- Test: pytest\n\n## 执行结果\n- Outcome: passed\n",
+                encoding="utf-8",
+            )
+            (wt42 / "export.py").write_text("ok = True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt42), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(wt42), "commit", "-m",
+                    "feat: 实现导出\n\nTask: 42-export-csv/TASK-01\nRefs: #42\nTest: pytest — 1 passed",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            self._run(env, repo, "pr", "42")
+            self._run(env, repo, "land", "42")
+            self.assertTrue(wt42.exists())
+
+            # Start open Issue #43 BEFORE creating TASK-01.md, and make a dirty edit
+            wt43 = Path(json.loads(self._run(env, repo, "start", "43", "--json").stdout)["worktree"])
+            (wt43 / "app.py").write_text("line1 = 1\nfix = True\n", encoding="utf-8")
+
+            snap = json.loads(self._run(env, repo, "status", "--json").stdout)
+            by_num = {row["issue_number"]: row for row in snap["issues"]}
+
+            # Closed & clean retained post-land #42 must NOT masquerade as an active open row
+            self.assertNotIn(42, by_num)
+            self.assertEqual(len(snap["retained_idle_worktrees"]), 1)
+            self.assertEqual(snap["retained_idle_worktrees"][0]["branch"], "feat/42-export-csv")
+
+            # Newly started open Issue #43 binds immediately even without TASK/
+            self.assertIn(43, by_num)
+            self.assertEqual(by_num[43]["stage"], "🟡 开发中")
+            self.assertTrue(by_num[43]["worktree"])
+            self.assertGreaterEqual(by_num[43]["pulse"]["dirty_count"], 1)
+
+    def test_watch_once_renders_global_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            empty_dir = root / "empty"
+            empty_dir.mkdir()
+            repo, _, _, env = _create_repo_harness(root / "h", "watch-repo", cfg)
+            wt = Path(json.loads(self._run(env, repo, "start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            tdir = wt / "TASK/42-export-csv"
+            tdir.mkdir(parents=True)
+            (tdir / "TASK-01-impl.md").write_text(
+                "# TASK-01：编写同步逻辑\n\n- Issue: #42\n- Status: in_progress\n- Depends on: none\n- Test: pytest\n",
+                encoding="utf-8",
+            )
+
+            out = self._run(env, empty_dir, "watch", "--once", "--local-only").stdout
+            self.assertIn("IDD 实时监控（全局仓库）", out)
+            self.assertIn("watch-repo", out)
+            self.assertIn("▶ TASK-01", out)
+            self.assertIn("🟢", out)
+
+    def test_board_web_server_serves_offline_ui_and_live_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            empty_dir = root / "empty"
+            empty_dir.mkdir()
+            repo, _, _, env = _create_repo_harness(root / "h", "board-repo", cfg)
+            wt = Path(json.loads(self._run(env, repo, "start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+
+            sub_env = dict(env)
+            sub_env["PYTHONUNBUFFERED"] = "1"
+            proc = subprocess.Popen(
+                [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--no-open", "--local-only"],
+                cwd=str(empty_dir),
+                env=sub_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                assert proc.stdout is not None
+                banner = proc.stdout.readline().strip()
+                m = re.search(r"(http://127\.0\.0\.1:\d+)", banner)
+                self.assertIsNotNone(m, f"Unexpected board startup output: {banner!r}")
+                base_url = m.group(1)
+
+                with urllib.request.urlopen(f"{base_url}/api/health", timeout=5) as resp:
+                    self.assertEqual(resp.status, 200)
+                    health = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(health["ok"])
+                    self.assertEqual(health["version"], "0.5.0")
+
+                with urllib.request.urlopen(f"{base_url}/", timeout=5) as resp:
+                    self.assertEqual(resp.status, 200)
+                    html = resp.read().decode("utf-8")
+                    self.assertIn("IDD 实时开发监控看板", html)
+                    self.assertNotIn("cdn.", html.lower())
+
+                with urllib.request.urlopen(f"{base_url}/api/snapshot", timeout=5) as resp:
+                    snap1 = json.loads(resp.read().decode("utf-8"))
+                    self.assertEqual(snap1["summary"]["repo_count"], 1)
+
+                # Modify a file in wt and confirm live snapshot updates without restart
+                (wt / "live_edit.py").write_text("print('live')\n", encoding="utf-8")
+                with urllib.request.urlopen(f"{base_url}/api/snapshot", timeout=5) as resp:
+                    snap2 = json.loads(resp.read().decode("utf-8"))
+                    row42 = next(r for r in snap2["issues"] if r["issue_number"] == 42)
+                    self.assertEqual(row42["pulse"]["dirty_count"], 1)
+                    self.assertEqual(row42["pulse"]["activity_state"], "active")
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                if proc.stdout is not None:
+                    proc.stdout.close()
+                if proc.stderr is not None:
+                    proc.stderr.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

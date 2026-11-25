@@ -31,10 +31,12 @@ from forge import (  # noqa: E402
     save_hosts_config,
     verify_host_token,
 )
+import board_ui  # noqa: E402
+import monitor  # noqa: E402
 import task_status  # noqa: E402
 
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 AUTO_UPDATE_INTERVAL_SECONDS = 6 * 3600
 
 ALLOWED_TYPES = ("feat", "fix", "refactor", "perf", "docs", "test", "ci", "chore")
@@ -200,7 +202,7 @@ def validate_branch_name(
     )
 
 
-def get_repo_info(cwd: Path) -> RepoInfo:
+def get_repo_info(cwd: Path, *, register: bool = True) -> RepoInfo:
     """Resolve main/current worktrees, branches, origin presence, and managed worktree root."""
     try:
         worktrees = task_status.list_git_worktrees(cwd)
@@ -210,6 +212,8 @@ def get_repo_info(cwd: Path) -> RepoInfo:
         raise IddError(f"无法解析 Git 工作树信息：{cwd}")
 
     main_worktree = Path(worktrees[0]["path"]).resolve()
+    if register:
+        monitor.register_repo(main_worktree)
     top_proc = run_cmd(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"])
     current_worktree = Path(top_proc.stdout.strip()).resolve()
 
@@ -592,23 +596,6 @@ def merge_progress_block(original_body: str, block: str) -> str:
     return f"{stripped}\n\n{block}\n"
 
 
-def _format_change_badge(change: dict[str, Any], mr_label: str, mr_prefix: str) -> str:
-    num = change.get("number")
-    prefix = f"{mr_label} {mr_prefix}{num}" if num else mr_label
-    if change.get("isDraft"):
-        prefix += " (Draft)"
-    overall = change.get("checks_overall") or "NONE"
-    badges = {
-        "PASS": "✅ CI 全绿",
-        "FAIL": "❌ CI 失败",
-        "PENDING": "⏳ CI 运行中",
-        "NONE": "⚪ 无 CI",
-    }
-    state = change.get("mergeStateStatus") or ""
-    extra = " (落后/冲突)" if state in {"BEHIND", "DIRTY"} else ""
-    return f"{prefix} · {badges.get(overall, overall)}{extra}"
-
-
 def _require_clean_worktree(worktree: Path) -> None:
     st = run_cmd(["git", "-C", str(worktree), "status", "--porcelain"])
     if st.stdout.strip():
@@ -620,106 +607,31 @@ def _require_clean_worktree(worktree: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def cmd_status(args: argparse.Namespace) -> int:
-    root = args.root.resolve()
-    try:
-        repo = get_repo_info(root)
-        wt_data = task_status.collect_all_worktrees(repo.main_worktree, args.issue, args.open_only)
-        scan_root = repo.main_worktree
-    except IddError:
-        task_root = root / "TASK"
-        if not task_root.is_dir():
-            raise IddError(f"当前路径既不是 Git 仓库，也不存在 TASK/ 目录：{root}")
-        wt_data = task_status.collect(task_root, args.issue, args.open_only)
-        repo = None
-        scan_root = root
-
-    warnings = list(wt_data.get("warnings", []))
-    local_entries = wt_data.get("issues", [])
-
-    open_issues: list[dict[str, Any]] = []
-    open_changes: list[dict[str, Any]] = []
-    forge_connected = False
-    forge_type = "local"
-    mr_label = "PR/MR"
-    mr_prefix = "#"
-
-    if repo is not None and not args.local_only and not args.issue and repo.has_origin:
-        forge = get_forge(scan_root)
-        forge_type = forge.forge_type
-        mr_label = forge.mr_label
-        mr_prefix = forge.mr_prefix
-        try:
-            issues_res = forge.list_open_issues(limit=100)
-            changes_res = forge.list_changes(state="open", limit=100)
-            if isinstance(issues_res, list) and isinstance(changes_res, list):
-                open_issues = issues_res
-                open_changes = changes_res
-                forge_connected = True
-            else:
-                warnings.append("远端仓库查询不可用，已降级为本地工作树视图。")
-        except ForgeError as exc:
-            warnings.append(f"{exc}（已降级为本地工作树视图）")
-
-    items_by_issue: dict[int, dict[str, Any]] = {}
-    local_only_items: list[dict[str, Any]] = []
-    for item in local_entries:
-        inum = item.get("issue_number")
-        if inum is not None:
-            items_by_issue[inum] = item
-        else:
-            local_only_items.append(item)
-
-    changes_by_branch = {c.get("headRefName", ""): c for c in open_changes}
-    changes_by_issue: dict[int, dict[str, Any]] = {}
-    for ch in open_changes:
-        m = re.search(r"(?:^|/)(\d+)(?:-|$)", ch.get("headRefName", ""))
-        if m:
-            changes_by_issue[int(m.group(1))] = ch
-
-    rows: list[dict[str, Any]] = []
-    seen_issues: set[int] = set()
-
-    for issue in open_issues:
-        inum = issue["number"]
-        seen_issues.add(inum)
-        item = items_by_issue.get(inum)
-        branch = item.get("branch", "") if item else ""
-        change = (changes_by_branch.get(branch) if branch else None) or changes_by_issue.get(inum)
-        rows.append(_build_status_row(inum, issue.get("title", ""), issue.get("url", ""), item, change, mr_label, mr_prefix))
-
-    for inum, item in sorted(items_by_issue.items()):
-        if inum not in seen_issues:
-            change = changes_by_branch.get(item.get("branch", "")) or changes_by_issue.get(inum)
-            rows.append(_build_status_row(inum, item["issue"], "", item, change, mr_label, mr_prefix))
-
-    used_change_numbers = {r["change"]["number"] for r in rows if r.get("change")}
-    orphan_changes = [ch for ch in open_changes if ch.get("number") not in used_change_numbers]
-
-    payload = {
-        "forge": forge_type,
-        "forge_connected": forge_connected,
-        "issues": rows,
-        "local_only_items": local_only_items,
-        "orphan_changes": orphan_changes,
-        "tasks": local_entries,
-        "warnings": warnings,
-    }
-    if args.json:
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return 0
+def _render_repo_status_markdown(snap: dict[str, Any]) -> str:
+    rows = snap.get("issues") or []
+    local_only_items = snap.get("local_only_items") or []
+    orphan_changes = snap.get("orphan_changes") or []
+    local_entries = snap.get("tasks") or []
+    retained = snap.get("retained_idle_worktrees") or []
+    mr_label = snap.get("mr_label", "PR/MR")
+    mr_prefix = snap.get("mr_prefix", "#")
 
     lines: list[str] = []
     if rows:
         lines.extend([
-            f"| Issue | 标题 | 阶段 | TASK 进度 | Worktree / 分支 | {mr_label} & CI 状态 |",
-            "| --- | --- | --- | --- | --- | --- |",
+            f"| Issue | 标题 | 阶段 | TASK 进度 | Worktree / 分支 | 实时脉搏 | {mr_label} & CI 状态 |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
         ])
         for row in rows:
-            wt_label = f"`{Path(row['worktree']).name}` ({row['branch']})" if row["worktree"] else "—"
+            wt_label = f"`{Path(row['worktree']).name}` ({row['branch']})" if row.get("worktree") else "—"
+            pulse = row.get("pulse") or {}
+            pulse_text = pulse.get("pulse_summary") or "—"
+            if row.get("current_task"):
+                pulse_text = f"{pulse_text} · ▶ {row['current_task']}" if pulse_text != "—" else f"▶ {row['current_task']}"
             lines.append(
                 f"| #{row['issue_number']} | {task_status.cell(row['title'])} | {row['stage']} | "
-                f"{row['task_progress']} | {task_status.cell(wt_label)} | {task_status.cell(row['change_summary'])} |"
+                f"{row['task_progress']} | {task_status.cell(wt_label)} | {task_status.cell(pulse_text)} | "
+                f"{task_status.cell(row['change_summary'])} |"
             )
 
     if local_only_items:
@@ -734,7 +646,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             lines.append("")
         lines.append(f"其他未关联本地工作树的 Open {mr_label}：")
         for ch in orphan_changes:
-            badge = _format_change_badge(ch, mr_label, mr_prefix)
+            badge = ch.get("change_summary") or monitor.format_change_badge(ch, mr_label, mr_prefix)
             lines.append(f"- {mr_label} {mr_prefix}{ch['number']} `{ch.get('headRefName', '')}`: {ch.get('title', '')} — {badge}")
 
     remaining = [(item, t) for item in local_entries for t in item.get("tasks", []) if t["status"] != "done"]
@@ -746,63 +658,187 @@ def cmd_status(args: argparse.Namespace) -> int:
             prefix = f"#{item['issue_number']} " if item.get("issue_number") is not None else ""
             lines.append(f"- {prefix}{item['issue']}/{t['id']} [{t['status']}] {t['title']}；依赖：{t['depends_on'] or '未记录'}")
 
+    if retained:
+        if lines:
+            lines.append("")
+        lines.append(f"已合入保留的干净工作树：{len(retained)} 个")
+
     if not lines:
         lines.append("当前没有活跃的 Issue、本地 Worktree 任务或 Open PR/MR。")
 
+    return "\n".join(lines)
+
+
+def _render_global_status_markdown(snapshot: dict[str, Any]) -> str:
+    s = snapshot.get("summary") or {}
+    lines = [
+        f"## 全局 IDD 进度总览（共 {s.get('repo_count', 0)} 个仓库 | 活跃 Worktree {s.get('active_worktrees', 0)} | "
+        f"刚刚活跃 {s.get('coding_now_count', 0)} | 进行中 TASK {s.get('in_progress_tasks', 0)} | "
+        f"疑似卡住 {s.get('stalled_worktrees', 0)}）"
+    ]
+    repos = snapshot.get("repos") or []
+    if not repos:
+        lines.extend([
+            "",
+            "暂无已注册仓库。可在任意 Git 项目目录运行 `idd start <issue#>`、`idd status` 或 `idd repos add .` 后自动加入全局监控。",
+            "直观网页看板可运行：`idd board`（或终端实时刷新 `idd watch`）。",
+        ])
+        return "\n".join(lines)
+
+    for repo in repos:
+        forge_tag = {"github": "GitHub", "gitlab": "GitLab", "local": "Local"}.get(repo.get("forge", "local"), "Local")
+        lines.extend([
+            "",
+            f"### 📦 {repo['repo_name']} [{forge_tag}] — `{repo['repo_path']}`",
+            "",
+            _render_repo_status_markdown(repo),
+        ])
+
+    warnings = snapshot.get("warnings") or []
     if warnings:
         lines.extend(["", "提示 / 记录问题："])
         lines.extend(f"- {w}" for w in warnings)
+    return "\n".join(lines)
 
-    print("\n".join(lines))
+
+def cmd_status(args: argparse.Namespace) -> int:
+    explicit_root = args.root is not None
+    root = (args.root or Path.cwd()).resolve()
+
+    use_global = bool(args.global_mode)
+    if not use_global and not explicit_root:
+        if monitor.resolve_main_worktree_ro(root) is None and not (root / "TASK").is_dir():
+            use_global = True
+
+    if use_global:
+        snapshot = monitor.collect_global_snapshot(
+            current_cwd=root if explicit_root else Path.cwd(),
+            open_only=args.open_only,
+            local_only=args.local_only,
+        )
+        if args.json:
+            print(json.dumps(snapshot, ensure_ascii=False, indent=2))
+        else:
+            print(_render_global_status_markdown(snapshot))
+        return 0
+
+    try:
+        snap = monitor.collect_repo_snapshot(
+            root,
+            issue_filter=args.issue,
+            open_only=args.open_only,
+            local_only=args.local_only,
+            register=True,
+        )
+    except ValueError as exc:
+        raise IddError(str(exc)) from exc
+
+    if args.json:
+        print(json.dumps(snap, ensure_ascii=False, indent=2))
+        return 0
+
+    text = _render_repo_status_markdown(snap)
+    warnings = snap.get("warnings") or []
+    if warnings:
+        text += "\n\n提示 / 记录问题：\n" + "\n".join(f"- {w}" for w in warnings)
+    print(text)
     return 0
 
 
-def _build_status_row(
-    issue_number: int,
-    title: str,
-    url: str,
-    item: dict[str, Any] | None,
-    change: dict[str, Any] | None,
-    mr_label: str,
-    mr_prefix: str,
-) -> dict[str, Any]:
-    task_progress = f"{item['done']} / {item['total']}" if item else "—"
-    wt_path = item.get("worktree", "") if item else ""
-    branch = item.get("branch", "") if item else (change.get("headRefName", "") if change else "")
+def cmd_board(args: argparse.Namespace) -> int:
+    global_mode = not args.current_only and args.root is None
+    root: Path | None = None
+    if not global_mode:
+        root = (args.root or Path.cwd()).resolve()
+        if monitor.resolve_main_worktree_ro(root) is None and not (root / "TASK").is_dir():
+            raise IddError(f"当前路径既不是 Git 仓库，也不存在 TASK/ 目录：{root}")
+    return board_ui.run_board_server(
+        host=args.host,
+        port=args.port,
+        root=root,
+        global_mode=global_mode,
+        local_only=args.local_only,
+        forge_ttl=args.forge_ttl,
+        no_open=args.no_open,
+        version=__version__,
+    )
 
-    if change:
-        overall = change.get("checks_overall") or "NONE"
-        if overall == "FAIL":
-            stage = "🛠️ 修 CI"
-        elif overall == "PENDING":
-            stage = "⏳ CI 运行中"
-        elif change.get("isDraft"):
-            stage = f"📝 草稿 {mr_label}"
-        else:
-            stage = "🔵 待合入"
-    elif item:
-        counts = item["counts"]
-        if counts.get("blocked", 0) > 0:
-            stage = "⛔ 受阻"
-        elif item["total"] > 0 and item["done"] == item["total"]:
-            stage = f"🟢 待提 {mr_label}"
-        else:
-            stage = "🟡 开发中"
-    else:
-        stage = "⚪ 待认领"
 
-    change_summary = _format_change_badge(change, mr_label, mr_prefix) if change else "—"
-    return {
-        "issue_number": issue_number,
-        "title": title,
-        "url": url,
-        "stage": stage,
-        "task_progress": task_progress,
-        "worktree": wt_path,
-        "branch": branch,
-        "change": change,
-        "change_summary": change_summary,
-    }
+def cmd_watch(args: argparse.Namespace) -> int:
+    global_mode = False if (args.current_only or (args.root is not None and not args.global_mode)) else True
+    root: Path | None = None
+    if not global_mode:
+        root = (args.root or Path.cwd()).resolve()
+        if monitor.resolve_main_worktree_ro(root) is None and not (root / "TASK").is_dir():
+            raise IddError(f"当前路径既不是 Git 仓库，也不存在 TASK/ 目录：{root}")
+    return monitor.run_watch_loop(
+        root=root,
+        global_mode=global_mode,
+        interval=args.interval,
+        forge_ttl=args.forge_ttl,
+        local_only=args.local_only,
+        open_only=args.open_only,
+        once=args.once,
+    )
+
+
+def cmd_repos(args: argparse.Namespace) -> int:
+    subcmd = args.repos_command or "list"
+    now = time.time()
+
+    if subcmd == "list":
+        entries = monitor.load_registered_repos(prune_missing=True)
+        payload = {"repos_config_path": str(monitor.get_repos_path()), "repos": entries}
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+        lines = [f"全局仓库索引：{monitor.get_repos_path()}"]
+        if not entries:
+            lines.append("- 暂无已注册仓库（可在仓库内运行 `idd start`、`idd status` 或 `idd repos add .`）。")
+        else:
+            for item in entries:
+                ts = float(item.get("last_seen_at") or 0.0)
+                ago = monitor.format_relative_time(max(0.0, now - ts)) if ts > 0 else "无记录"
+                lines.append(f"- {item['name']} ({ago}): {item['path']}")
+        print("\n".join(lines))
+        return 0
+
+    if subcmd == "add":
+        added: list[dict[str, Any]] = []
+        for raw in args.paths:
+            main_wt = monitor.resolve_main_worktree_ro(Path(raw))
+            if main_wt is None:
+                raise IddError(f"路径不是有效的 Git 仓库：{raw}")
+            added.append(monitor.register_repo(main_wt))
+        if args.json:
+            print(json.dumps({"added": added}, ensure_ascii=False, indent=2))
+        else:
+            for entry in added:
+                print(f"已注册仓库：{entry['name']} ({entry['path']})")
+        return 0
+
+    if subcmd == "remove":
+        target = Path(args.path)
+        removed = monitor.unregister_repo(target)
+        if not removed:
+            raise IddError(f"未在全局索引中找到仓库：{args.path}")
+        if args.json:
+            print(json.dumps({"removed": str(target.expanduser().resolve())}, ensure_ascii=False, indent=2))
+        else:
+            print(f"已移除仓库索引：{target.expanduser().resolve()}")
+        return 0
+
+    if subcmd == "prune":
+        before = monitor.load_registered_repos(prune_missing=False)
+        after = monitor.load_registered_repos(prune_missing=True)
+        removed_count = max(0, len(before) - len(after))
+        if args.json:
+            print(json.dumps({"removed_count": removed_count, "remaining": len(after)}, ensure_ascii=False, indent=2))
+        else:
+            print(f"已清理 {removed_count} 个失效仓库记录，当前保留 {len(after)} 个活跃仓库。")
+        return 0
+
+    raise IddError(f"未知 repos 子命令：{subcmd}")
 
 
 def cmd_issue_create(args: argparse.Namespace) -> int:
@@ -1733,14 +1769,63 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=False)
 
     # status
-    p_status = sub.add_parser("status", help="聚合并展示 Issue、Worktree TASK 进度与 PR/MR CI 状态")
-    p_status.add_argument("--root", type=Path, default=Path.cwd(), help="仓库根目录或工作树路径")
+    p_status = sub.add_parser("status", help="聚合并展示 Issue、Worktree TASK 进度、实时脉搏与 PR/MR CI 状态")
+    p_status.add_argument("-g", "--global", dest="global_mode", action="store_true", help="跨本机所有已注册仓库全局聚合")
+    p_status.add_argument("--root", type=Path, default=None, help="仓库根目录或工作树路径（在非 Git 目录不传此项时自动全局聚合）")
     p_status.add_argument("--issue", dest="issue", help="只查看指定 Issue 目录（或 #编号）")
     p_status.add_argument("--goal", dest="issue", help=argparse.SUPPRESS)
     p_status.add_argument("--open-only", action="store_true", help="只保留存在非 done 任务的 Issue")
     p_status.add_argument("--local-only", action="store_true", help="仅检查本地工作树，不查询远端 Forge")
     p_status.add_argument("--json", action="store_true", help="输出 JSON")
     p_status.set_defaults(func=cmd_status)
+
+    # board (web dashboard)
+    p_board = sub.add_parser("board", aliases=["ui"], help="启动本地 Web 实时监控看板（浏览器零 Token 盯盘）")
+    p_board.add_argument("--host", default="127.0.0.1", help="监听主机地址（默认 127.0.0.1）")
+    p_board.add_argument("--port", type=int, default=None, help="监听端口（默认优先 17890，占用时自动分配）")
+    p_board.add_argument("--root", type=Path, default=None, help="仅监控指定单仓库路径")
+    p_board.add_argument("--current-only", action="store_true", help="仅监控当前工作目录所属单仓库")
+    p_board.add_argument("--local-only", action="store_true", help="仅展示本地工作树与 TASK，不查询远端 Forge")
+    p_board.add_argument("--forge-ttl", type=float, default=30.0, help="远端 Issue/PR/MR 缓存秒数（默认 30）")
+    p_board.add_argument("--no-open", action="store_true", help="启动服务后不自动打开浏览器")
+    p_board.set_defaults(func=cmd_board)
+
+    # watch (terminal live monitor)
+    p_watch = sub.add_parser("watch", help="启动终端实时监控面板（默认跨全部已注册仓库，每 2 秒刷新）")
+    p_watch.add_argument("-g", "--global", dest="global_mode", action="store_true", help="监控所有已注册仓库（默认）")
+    p_watch.add_argument("--current-only", action="store_true", help="仅监控当前仓库")
+    p_watch.add_argument("--root", type=Path, default=None, help="指定监控目录")
+    p_watch.add_argument("--interval", type=float, default=2.0, help="本地脉搏刷新间隔秒数（默认 2）")
+    p_watch.add_argument("--forge-ttl", type=float, default=30.0, help="远端 PR/MR 与 CI 缓存秒数（默认 30）")
+    p_watch.add_argument("--local-only", action="store_true", help="仅监控本地工作树，不查询远端 Forge")
+    p_watch.add_argument("--open-only", action="store_true", help="仅保留含未完成 TASK 的 Worktree")
+    p_watch.add_argument("--once", action="store_true", help="仅输出一帧后退出")
+    p_watch.set_defaults(func=cmd_watch)
+
+    # repos (global repo registry management)
+    p_repos = sub.add_parser("repos", help="查看或管理本机全局监控的活跃仓库索引（~/.config/idd/repos.json）")
+    p_repos.add_argument("--json", action="store_true", help="输出 JSON")
+    repos_sub = p_repos.add_subparsers(dest="repos_command", required=False)
+
+    p_repos_list = repos_sub.add_parser("list", help="列出已注册的活跃仓库（默认）")
+    p_repos_list.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="输出 JSON")
+    p_repos_list.set_defaults(func=cmd_repos)
+
+    p_repos_add = repos_sub.add_parser("add", help="将指定 Git 仓库加入全局监控索引")
+    p_repos_add.add_argument("paths", nargs="+", help="仓库或工作树路径（如 .）")
+    p_repos_add.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="输出 JSON")
+    p_repos_add.set_defaults(func=cmd_repos)
+
+    p_repos_rm = repos_sub.add_parser("remove", help="从全局监控索引中移除仓库")
+    p_repos_rm.add_argument("path", help="仓库或工作树路径")
+    p_repos_rm.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="输出 JSON")
+    p_repos_rm.set_defaults(func=cmd_repos)
+
+    p_repos_prune = repos_sub.add_parser("prune", help="清理磁盘上已删除或失效的仓库条目")
+    p_repos_prune.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="输出 JSON")
+    p_repos_prune.set_defaults(func=cmd_repos)
+
+    p_repos.set_defaults(func=cmd_repos)
 
     # issue
     p_issue = sub.add_parser("issue", help="GitHub / GitLab Issue 辅助命令")

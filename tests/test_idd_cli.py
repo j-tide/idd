@@ -397,9 +397,13 @@ class TestIddCli(unittest.TestCase):
             subprocess.run(["git", "-C", str(repo), "add", "app.py"], check=True)
             subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"], check=True, capture_output=True)
 
+            env = dict(os.environ)
+            env["IDD_CONFIG_DIR"] = str(tmp_path / "idd-config")
+            env["IDD_NO_AUTO_UPDATE"] = "1"
             res = subprocess.run(
                 [sys.executable, str(IDD_BIN), "start", "local-refactor", "--json"],
                 cwd=str(repo),
+                env=env,
                 capture_output=True,
                 text=True,
                 check=True,
@@ -575,7 +579,7 @@ class TestIddCli(unittest.TestCase):
 
     def test_version_flag_and_missing_subcommand(self) -> None:
         res = subprocess.run([sys.executable, str(IDD_BIN), "--version"], capture_output=True, text=True, check=True)
-        self.assertIn("idd 0.4.0", res.stdout)
+        self.assertIn("idd 0.5.0", res.stdout)
         no_args = subprocess.run([sys.executable, str(IDD_BIN)], capture_output=True, text=True, check=False)
         self.assertEqual(no_args.returncode, 2)
 
@@ -712,6 +716,7 @@ class TestIddCli(unittest.TestCase):
             env = dict(os.environ)
             env["IDD_SKILL_DIR"] = str(skill_repo)
             env["IDD_CACHE_DIR"] = str(cache_dir)
+            env["IDD_CONFIG_DIR"] = str(tmp_path / "idd-config")
             env["IDD_UPDATE_INTERVAL"] = "3600"
             env.pop("IDD_NO_AUTO_UPDATE", None)
 

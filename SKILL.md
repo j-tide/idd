@@ -2,7 +2,7 @@
 name: idd
 description: 面向 Issue 的跨工具开发工作流（Issue-Driven Development）。让 Claude Code、Codex 与 Antigravity 共用同一套「聊想法建 Issue → 独立 Worktree 并行 → TASK 拆解与真测试 → PR/MR CI 自愈 → Squash 直线合入 main 并清理 TASK 目录」流水线，同时支持 GitHub 与自建 GitLab。支持多工具无缝接手、长期阻塞恢复与历史补录；只读咨询或评估不创建任务。
 metadata:
-  version: "0.4.0"
+  version: "0.5.0"
 ---
 
 # IDD（Issue-Driven Development）
@@ -21,7 +21,10 @@ metadata:
 
 | 命令 | 用途 |
 | :--- | :--- |
-| `idd status [--open-only] [--local-only] [--json]` | 聚合并展示 Issue、所有 Worktree 的 `TASK` 进度与 PR/MR CI 状态 |
+| `idd board` / `idd ui` | 启动本地 Web 实时监控看板（浏览器零 Token 跨仓库盯盘，2s 刷新工作树脉搏） |
+| `idd watch [--current-only] [--once]` | 启动终端实时监控面板（默认全局聚合，2s 刷新本地脉搏、30s 缓存远端） |
+| `idd status [-g\|--global] [--open-only] [--local-only] [--json]` | 聚合并展示 Issue、`TASK` 进度、实时脉搏与 PR/MR CI 状态（非 Git 目录自动全局聚合） |
+| `idd repos [list\|add\|remove\|prune]` | 查看或管理本机全局监控的活跃仓库索引（`~/.config/idd/repos.json`） |
 | `idd issue create --title "..." [--body "..."] [--label ...]` | 聊天确认需求后创建 GitHub / GitLab Issue |
 | `idd start <issue# \| slug> [--slug ...] [--prefix ...]` | 认领 Issue 创建（或**幂等复用**已有）独立 Worktree，自动同步 `.worktreeinclude` |
 | `idd sync [issue#] [--dry-run]` | 将当前 Worktree 的 `TASK` 勾选进度同步回 Issue 正文（渲染原生进度条） |
@@ -89,14 +92,20 @@ TASK/
 - 测试命令从项目配置、CI 或文档确认。
 - 若由已明确验收标准的 Issue 启动且范围清晰低风险，或用户已明确授权覆盖本轮范围，创建完 `TASK` 文件（建议顺手跑一次 `idd sync` 更新 Issue 进度条）后直接进入执行；若需求本身模糊或存在重大设计取舍，先向用户展示任务列表、依赖关系与测试映射并等待确认。
 
-### 模式 D｜只读全局进度
+### 模式 D｜只读全局进度与实时监控
 当用户询问“有哪些 Issue 在跑”、“做到哪一步了”或跨工具查看总览时，优先运行：
 
 ```bash
-idd status [--open-only]
+idd status [--open-only]   # 在非 Git 目录或未挂工作区的全局对话中会自动切为跨仓库全局聚合；也可显式传 -g / --global
 ```
 
-纯离线/无 Git 场景可直接调用：
+每次在任意仓库运行 `idd start` / `status` 等命令时，主仓库会自动记入本机全局索引 `~/.config/idd/repos.json`，`idd status` 会附带每个工作树的**实时脉搏**（未提交文件数、`+insertions/-deletions`、活跃心跳与疑似卡住告警）。
+
+当用户希望**不打断当前对话、零 Token 实时盯盘**时，推荐直接让用户在独立终端启动：
+- **浏览器网页看板（最直观）**：`idd board`（别名 `idd ui`，每 2 秒无锁轮询工作树脉搏并按 30 秒缓存同步 GitHub/GitLab 状态）；
+- **终端实时看板**：`idd watch`（支持 `--once`、`--current-only`、`--interval`）。
+
+纯离线/无 Git 场景也可直接调用：
 
 ```bash
 python3 "$HOME/.agents/skills/idd/scripts/task_status.py" --root . --open-only
