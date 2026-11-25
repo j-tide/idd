@@ -10,6 +10,8 @@ import re
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL_MD_PATH = REPO_ROOT / "SKILL.md"
 README_MD_PATH = REPO_ROOT / "README.md"
+README_ZH_PATH = REPO_ROOT / "README.zh-CN.md"
+README_FILENAMES = ("README.md", "README.zh-CN.md")
 FALLBACK_VERSION = "0.0.0-dev"
 
 SEMVER_RE = re.compile(
@@ -154,6 +156,15 @@ def get_version(skill_md: Path = SKILL_MD_PATH, *, fallback: str = FALLBACK_VERS
         return parse_skill_version(skill_md)
     except (OSError, ValueError):
         return fallback
+
+
+def get_readme_paths(repo_root: Path = REPO_ROOT) -> list[Path]:
+    """Return `README.md` plus `README.zh-CN.md` when present under `repo_root`."""
+    paths = [repo_root / "README.md"]
+    zh_path = repo_root / "README.zh-CN.md"
+    if zh_path.is_file():
+        paths.append(zh_path)
+    return paths
 
 
 def parse_readme_badge_version(readme_md: Path = README_MD_PATH) -> str:

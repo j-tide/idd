@@ -50,6 +50,10 @@ def _init_temp_release_repo(root: Path, initial_ver: str = "0.5.0") -> tuple[Pat
         f"[![Version](https://img.shields.io/badge/version-v{initial_ver}-10b981?style=flat-square)](https://github.com/j-tide/idd/releases)\n",
         encoding="utf-8",
     )
+    (repo / "README.zh-CN.md").write_text(
+        f"[![Version](https://img.shields.io/badge/version-v{initial_ver}-10b981?style=flat-square)](https://github.com/j-tide/idd/releases)\n",
+        encoding="utf-8",
+    )
     (repo / "tests").mkdir()
     (repo / "tests" / "test_sample.py").write_text(
         "import unittest\n\nclass SampleTest(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(True)\n",
@@ -70,11 +74,17 @@ class TestVersionAndRelease(unittest.TestCase):
     def test_repo_version_consistency(self) -> None:
         skill_ver = idd_version.parse_skill_version()
         readme_ver = idd_version.parse_readme_badge_version()
+        zh_path = REPO_ROOT / "README.zh-CN.md"
+        self.assertTrue(zh_path.is_file())
+        readme_zh_ver = idd_version.parse_readme_badge_version(zh_path)
         self.assertEqual(skill_ver, idd_cli.__version__)
         self.assertEqual(skill_ver, readme_ver)
+        self.assertEqual(skill_ver, readme_zh_ver)
 
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_zh_text = zh_path.read_text(encoding="utf-8")
         self.assertIn("](https://github.com/j-tide/idd/releases)", readme_text)
+        self.assertIn("](https://github.com/j-tide/idd/releases)", readme_zh_text)
 
         env = dict(os.environ)
         env["IDD_NO_AUTO_UPDATE"] = "1"
@@ -219,6 +229,7 @@ class TestVersionAndRelease(unittest.TestCase):
             self.assertIn("已自动回滚", fail_tag.stderr)
             self.assertEqual(idd_version.parse_skill_version(repo / "SKILL.md"), "0.5.0")
             self.assertEqual(idd_version.parse_readme_badge_version(repo / "README.md"), "0.5.0")
+            self.assertEqual(idd_version.parse_readme_badge_version(repo / "README.zh-CN.md"), "0.5.0")
             self.assertEqual(_git(repo, "status", "--porcelain").stdout.strip(), "")
 
             # Remove failing test and run successful --tag
@@ -230,6 +241,7 @@ class TestVersionAndRelease(unittest.TestCase):
             self.assertIn("git push origin main v0.6.0", tag_res.stdout)
             self.assertEqual(idd_version.parse_skill_version(repo / "SKILL.md"), "0.6.0")
             self.assertEqual(idd_version.parse_readme_badge_version(repo / "README.md"), "0.6.0")
+            self.assertEqual(idd_version.parse_readme_badge_version(repo / "README.zh-CN.md"), "0.6.0")
             self.assertEqual(_git(repo, "log", "-1", "--format=%s").stdout.strip(), "chore(release): v0.6.0")
             self.assertEqual(_git(repo, "tag", "-l", "v0.6.0").stdout.strip(), "v0.6.0")
 
@@ -243,11 +255,23 @@ class TestVersionAndRelease(unittest.TestCase):
             remote_tags = _git(repo, "ls-remote", "--tags", "origin", "v0.6.1").stdout
             self.assertIn("refs/tags/v0.6.1", remote_tags)
 
+            # --check catches README.zh-CN.md drift
+            zh_orig = (repo / "README.zh-CN.md").read_text(encoding="utf-8")
+            (repo / "README.zh-CN.md").write_text(
+                idd_version.replace_readme_badge_version(zh_orig, "0.9.9"),
+                encoding="utf-8",
+            )
+            drift_res = run_rel("--check", "--skip-cli-check", check=False)
+            self.assertNotEqual(drift_res.returncode, 0)
+            self.assertIn("README.zh-CN.md", drift_res.stderr)
+            (repo / "README.zh-CN.md").write_text(zh_orig, encoding="utf-8")
+
             # Plain bump without --tag updates files only
             plain_res = run_rel("major", "--no-test")
             self.assertIn("v0.6.1 -> v1.0.0", plain_res.stdout)
             self.assertEqual(idd_version.parse_skill_version(repo / "SKILL.md"), "1.0.0")
             self.assertEqual(idd_version.parse_readme_badge_version(repo / "README.md"), "1.0.0")
+            self.assertEqual(idd_version.parse_readme_badge_version(repo / "README.zh-CN.md"), "1.0.0")
             self.assertNotEqual(_git(repo, "status", "--porcelain").stdout.strip(), "")
 
     def test_release_notes_generation(self) -> None:

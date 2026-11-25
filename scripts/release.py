@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from version import (  # noqa: E402
     REPO_ROOT,
     bump_semver,
+    get_readme_paths,
     is_valid_semver,
     parse_readme_badge_version,
     parse_skill_version,
@@ -109,26 +110,27 @@ def run_check(
     expect_tag: str | None = None,
     skip_cli_check: bool = False,
 ) -> str:
-    """Validate version consistency across `SKILL.md`, `README.md`, CLI, and optional tag."""
+    """Validate version consistency across `SKILL.md`, READMEs, CLI, and optional tag."""
     skill_path = repo_root / "SKILL.md"
-    readme_path = repo_root / "README.md"
+    readme_paths = get_readme_paths(repo_root)
 
     try:
         skill_ver = parse_skill_version(skill_path)
     except (OSError, ValueError) as exc:
         raise ReleaseError(str(exc)) from exc
 
-    try:
-        readme_ver = parse_readme_badge_version(readme_path)
-    except (OSError, ValueError) as exc:
-        raise ReleaseError(str(exc)) from exc
+    checked_parts = ["SKILL.md"]
+    for readme_path in readme_paths:
+        try:
+            readme_ver = parse_readme_badge_version(readme_path)
+        except (OSError, ValueError) as exc:
+            raise ReleaseError(f"{readme_path.name}: {exc}") from exc
 
-    if skill_ver != readme_ver:
-        raise ReleaseError(
-            f"版本不一致：SKILL.md ({skill_ver}) != README.md 徽章 ({readme_ver})。"
-        )
-
-    checked_parts = ["SKILL.md", "README.md"]
+        if skill_ver != readme_ver:
+            raise ReleaseError(
+                f"版本不一致：SKILL.md ({skill_ver}) != {readme_path.name} 徽章 ({readme_ver})。"
+            )
+        checked_parts.append(readme_path.name)
 
     if not skip_cli_check:
         idd_bin = repo_root / "scripts" / "idd"
@@ -268,9 +270,12 @@ def run_bump(
     dry_run: bool,
     no_test: bool,
 ) -> int:
-    """Bump version in `SKILL.md` and `README.md`, optionally test, commit, tag, and push."""
+    """Bump version in `SKILL.md` and READMEs, optionally test, commit, tag, and push."""
     skill_path = repo_root / "SKILL.md"
-    readme_path = repo_root / "README.md"
+    readme_paths = get_readme_paths(repo_root)
+    target_paths = [skill_path, *readme_paths]
+    rel_names = [p.name for p in target_paths]
+    rel_label = ", ".join(rel_names)
 
     try:
         current_ver = parse_skill_version(skill_path)
@@ -281,11 +286,16 @@ def run_bump(
     if new_ver == current_ver:
         raise ReleaseError(f"目标版本与当前版本相同：v{current_ver}")
 
+    orig_contents: dict[Path, str] = {}
+    new_contents: dict[Path, str] = {}
     try:
         skill_orig = skill_path.read_bytes().decode("utf-8")
-        readme_orig = readme_path.read_bytes().decode("utf-8")
-        skill_new = replace_skill_version(skill_orig, new_ver)
-        readme_new = replace_readme_badge_version(readme_orig, new_ver)
+        orig_contents[skill_path] = skill_orig
+        new_contents[skill_path] = replace_skill_version(skill_orig, new_ver)
+        for readme_path in readme_paths:
+            readme_orig = readme_path.read_bytes().decode("utf-8")
+            orig_contents[readme_path] = readme_orig
+            new_contents[readme_path] = replace_readme_badge_version(readme_orig, new_ver)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise ReleaseError(str(exc)) from exc
 
@@ -296,7 +306,7 @@ def run_bump(
     if dry_run:
         lines = [
             f"[dry-run] 版本将更新：v{current_ver} -> v{new_ver}",
-            "将修改文件：SKILL.md, README.md",
+            f"将修改文件：{rel_label}",
         ]
         if create_tag:
             lines.append(f"将创建提交：chore(release): {tag_name}")
@@ -306,8 +316,8 @@ def run_bump(
         print("\n".join(lines))
         return 0
 
-    skill_path.write_bytes(skill_new.encode("utf-8"))
-    readme_path.write_bytes(readme_new.encode("utf-8"))
+    for path in target_paths:
+        path.write_bytes(new_contents[path].encode("utf-8"))
 
     if not no_test:
         env = dict(os.environ)
@@ -320,13 +330,13 @@ def run_bump(
             env=env,
         )
         if test_proc.returncode != 0:
-            skill_path.write_bytes(skill_orig.encode("utf-8"))
-            readme_path.write_bytes(readme_orig.encode("utf-8"))
+            for path in target_paths:
+                path.write_bytes(orig_contents[path].encode("utf-8"))
             output = "\n".join(part for part in (test_proc.stdout.strip(), test_proc.stderr.strip()) if part)
-            raise ReleaseError(f"单元测试未通过，已自动回滚 SKILL.md 与 README.md：\n{output}")
+            raise ReleaseError(f"单元测试未通过，已自动回滚 {rel_label}：\n{output}")
 
     if create_tag:
-        _run(["git", "-C", str(repo_root), "add", "SKILL.md", "README.md"], cwd=repo_root)
+        _run(["git", "-C", str(repo_root), "add", *rel_names], cwd=repo_root)
         _run(["git", "-C", str(repo_root), "commit", "-m", f"chore(release): {tag_name}"], cwd=repo_root)
         _run(["git", "-C", str(repo_root), "tag", "-a", tag_name, "-m", f"Release {tag_name}"], cwd=repo_root)
         if push:
@@ -335,7 +345,7 @@ def run_bump(
         else:
             print(f"已提交并打标签 {tag_name}。\n下一步执行：`git push origin main {tag_name}`")
     else:
-        print(f"已更新版本：v{current_ver} -> v{new_ver}（SKILL.md, README.md）")
+        print(f"已更新版本：v{current_ver} -> v{new_ver}（{rel_label}）")
 
     return 0
 
