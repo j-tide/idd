@@ -25,8 +25,28 @@ if str(SCRIPT_DIR) not in sys.path:
 import task_status  # noqa: E402
 
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 AUTO_UPDATE_INTERVAL_SECONDS = 6 * 3600
+
+ALLOWED_TYPES = ("feat", "fix", "refactor", "perf", "docs", "test", "ci", "chore")
+ISSUE_BRANCH_RE = re.compile(r"^(feat|fix|refactor|perf|docs|test|ci|chore)/(\d+)-[a-z0-9]+(?:-[a-z0-9]+)*$")
+LOCAL_BRANCH_RE = re.compile(r"^(feat|fix|refactor|perf|docs|test|ci|chore)/[a-z0-9]+(?:-[a-z0-9]+)*$")
+FORBIDDEN_PREFIXES = {
+    "codex",
+    "claude",
+    "agy",
+    "antigravity",
+    "cursor",
+    "copilot",
+    "ai",
+    "feature",
+    "bugfix",
+    "hotfix",
+    "tmp",
+    "temp",
+    "wip",
+    "dev",
+}
 
 PROGRESS_START = "<!-- idd:progress:start -->"
 PROGRESS_END = "<!-- idd:progress:end -->"
@@ -129,6 +149,62 @@ def slugify(text: str, fallback: str) -> str:
     if len(slug) > 40:
         slug = slug[:40].strip("-")
     return slug or fallback
+
+
+def _suggest_branch_name(branch: str, issue_number: int | None = None) -> str:
+    """Compute a valid `<type>/<issue#>-<slug>` or `<type>/<slug>` suggestion for a bad branch name."""
+    prefix_map = {
+        "feature": "feat",
+        "bugfix": "fix",
+        "hotfix": "fix",
+        "bug": "fix",
+    }
+    if "/" in branch:
+        raw_prefix, raw_tail = branch.split("/", 1)
+        raw_prefix_l = raw_prefix.lower()
+        suggested_type = prefix_map.get(raw_prefix_l, raw_prefix_l if raw_prefix_l in ALLOWED_TYPES else "feat")
+    else:
+        raw_tail = branch
+        suggested_type = "feat"
+
+    if issue_number is not None:
+        tail_no_num = re.sub(rf"^{issue_number}(?:-|$)", "", raw_tail)
+        clean_slug = slugify(tail_no_num, "task")
+        return f"{suggested_type}/{issue_number}-{clean_slug}"
+    clean_slug = slugify(raw_tail, "task")
+    return f"{suggested_type}/{clean_slug}"
+
+
+def validate_branch_name(
+    branch: str,
+    issue_number: int | None = None,
+    worktree: Path | None = None,
+) -> None:
+    """Enforce 8-type branch naming and reject tool/alias prefixes without modifying Git hooks."""
+    if not branch or branch == "(detached)":
+        raise IddError("当前处于游离 HEAD（detached），请先切换到规范分支（如 `feat/<issue#>-<slug>`）。")
+
+    prefix_part = branch.split("/", 1)[0].lower() if "/" in branch else ""
+    if prefix_part in FORBIDDEN_PREFIXES:
+        reason = f"禁止使用 `{prefix_part}/` 前缀"
+    elif issue_number is not None:
+        m = ISSUE_BRANCH_RE.fullmatch(branch)
+        if m and int(m.group(2)) == issue_number:
+            return
+        reason = f"绑定 Issue #{issue_number} 的分支须匹配 `<type>/{issue_number}-<slug>`"
+    else:
+        if LOCAL_BRANCH_RE.fullmatch(branch):
+            return
+        reason = "分支须匹配 `<type>/<slug>`（kebab-case 小写字母数字）"
+
+    suggested = _suggest_branch_name(branch, issue_number)
+    rename_cmd = f"git -C {worktree} branch -m {branch} {suggested}" if worktree else f"git branch -m {branch} {suggested}"
+    allowed_str = " | ".join(ALLOWED_TYPES)
+    raise IddError(
+        f"分支名 `{branch}` 不符合 IDD 规范（{reason}）。\n"
+        f"允许的分支前缀：{allowed_str}\n"
+        f"请先重命名分支再继续：{rename_cmd}"
+    )
 
 
 def get_repo_info(cwd: Path) -> RepoInfo:
@@ -848,15 +924,35 @@ def cmd_issue_create(args: argparse.Namespace) -> int:
     return 0
 
 
+def _infer_prefix_from_labels(labels: set[str]) -> str:
+    """Map GitHub issue labels to one of the 8 standard branch/commit types."""
+    if labels & {"bug", "fix", "bugfix"}:
+        return "fix"
+    if "refactor" in labels:
+        return "refactor"
+    if labels & {"perf", "performance"}:
+        return "perf"
+    if labels & {"docs", "documentation"}:
+        return "docs"
+    if labels & {"test", "testing"}:
+        return "test"
+    if "ci" in labels:
+        return "ci"
+    if labels & {"chore", "dependencies"}:
+        return "chore"
+    return "feat"
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     repo = get_repo_info(Path.cwd())
     existing = find_worktree_for_target(repo.main_worktree, args.target)
     if existing:
         wt_path = Path(existing["path"])
         branch = existing.get("branch", "")
+        goal_name, issue_num = _infer_goal_and_issue(wt_path, branch, args.target)
+        validate_branch_name(branch, issue_num, wt_path)
         st = run_cmd(["git", "-C", str(wt_path), "status", "--short"], check=False).stdout.strip()
         log_out = run_cmd(["git", "-C", str(wt_path), "log", "-5", "--oneline"], check=False).stdout.strip()
-        goal_name, issue_num = _infer_goal_and_issue(wt_path, branch, args.target)
         task_summary = None
         if (wt_path / "TASK").is_dir() and goal_name and (wt_path / "TASK" / goal_name).is_dir():
             task_summary = task_status.collect(wt_path / "TASK", goal_name, open_only=False)
@@ -898,12 +994,22 @@ def cmd_start(args: argparse.Namespace) -> int:
         slug = slugify(args.slug, "") if args.slug else slugify(issue_data.get("title", ""), "task")
         goal_name = f"{issue_num}-{slug}"
         labels = {str(lbl.get("name", "")).lower() for lbl in issue_data.get("labels", [])}
-        prefix = args.prefix or ("fix" if labels & {"bug", "fix", "bugfix"} else "feat")
+        prefix = args.prefix or _infer_prefix_from_labels(labels)
         branch = f"{prefix}/{goal_name}"
     else:
-        goal_name = slugify(args.slug or args.target, args.target)
-        prefix = args.prefix or "feat"
+        raw_target = args.target.strip()
+        inferred_prefix: str | None = None
+        if "/" in raw_target:
+            raw_prefix, raw_rest = raw_target.split("/", 1)
+            if raw_prefix.lower() not in ALLOWED_TYPES:
+                validate_branch_name(raw_target)
+            inferred_prefix = raw_prefix.lower()
+            raw_target = raw_rest
+        goal_name = slugify(args.slug or raw_target, "task")
+        prefix = args.prefix or inferred_prefix or "feat"
         branch = f"{prefix}/{goal_name}"
+
+    validate_branch_name(branch, issue_num)
 
     if repo.has_origin:
         run_cmd(["git", "-C", str(repo.main_worktree), "fetch", "origin", repo.default_branch], check=False)
@@ -974,6 +1080,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
         if issue_num is None:
             raise IddError("无法从当前工作树或分支推断 Issue 编号，请显式传入 Issue 编号。")
 
+    validate_branch_name(branch, issue_num, wt_path)
+
     task_root = wt_path / "TASK"
     if not task_root.is_dir() or not goal_name or not (task_root / goal_name).is_dir():
         raise IddError(f"在工作树 `{wt_path}` 中找不到任务目录 `TASK/{goal_name}`。")
@@ -1001,6 +1109,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
 def cmd_pr(args: argparse.Namespace) -> int:
     repo = get_repo_info(Path.cwd())
     wt_path, branch, goal_name, issue_num = _resolve_target_worktree(repo, args.target)
+    validate_branch_name(branch, issue_num, wt_path)
     _require_clean_worktree(wt_path)
 
     base_branch = args.base or repo.default_branch
@@ -1173,6 +1282,7 @@ def cmd_land(args: argparse.Namespace) -> int:
     caller_cwd = Path.cwd().resolve()
     repo = get_repo_info(caller_cwd)
     wt_path, branch, goal_name, issue_num = _resolve_target_worktree(repo, args.target)
+    validate_branch_name(branch, issue_num, wt_path)
     _require_clean_worktree(wt_path)
 
     pr = _resolve_pr_for_branch(wt_path, branch)
@@ -1245,8 +1355,9 @@ def cmd_land(args: argparse.Namespace) -> int:
             f"Squash 提交标题: {final_title}",
             "Squash 提交正文:",
             summary.rstrip(),
-            f"合入命令: gh pr merge {pr_num} --squash --delete-branch{' --auto' if args.auto else ''}",
-            f"合入后清理工作树: {'否（--auto 模式需待合并后运行 idd cleanup）' if args.auto else '是'}",
+            f"合入命令: gh pr merge {pr_num} --squash{' --auto' if args.auto else ''}",
+            f"分支策略: 默认保留本地与远端需求分支 `{branch}`",
+            f"工作树策略: {'合入后移除本地工作树（--rm-worktree）' if (args.rm_worktree and not args.auto) else '默认保留本地工作树（如需释放空间可手动执行 idd cleanup）'}",
         ]
         print("\n".join(lines))
         return 0
@@ -1264,7 +1375,7 @@ def cmd_land(args: argparse.Namespace) -> int:
         if local_head != remote_head:
             run_cmd(["git", "-C", str(wt_path), "push", "--force-with-lease", "origin", "HEAD"])
 
-        # Step F: Squash Merge (Zero Merge Commits!)
+        # Step F: Squash Merge (Zero Merge Commits!) — keep remote feature branch
         fresh_pr = run_gh_json(
             ["pr", "view", str(pr_num), "--json", "number,url,statusCheckRollup,mergeStateStatus"],
             cwd=wt_path,
@@ -1280,7 +1391,6 @@ def cmd_land(args: argparse.Namespace) -> int:
                     str(pr_num),
                     "--squash",
                     "--auto",
-                    "--delete-branch",
                     "--subject",
                     final_title,
                     "--body-file",
@@ -1289,8 +1399,8 @@ def cmd_land(args: argparse.Namespace) -> int:
                 cwd=wt_path,
             )
             print(
-                f"已为 PR #{pr_num} 开启自动 Squash 合并（CI 通过后将直线合入 {base_branch}）：{pr.get('url', '')}\n"
-                "注意：在合并完成前已保留本地工作树，合并完成后请执行 `idd cleanup` 清理工作树。"
+                f"已为 PR #{pr_num} 开启自动 Squash 合并（CI 通过后将直线合入 {base_branch}，保留需求分支）：{pr.get('url', '')}\n"
+                "本地工作树与需求分支已保留；合并完成后如需释放工作树目录可执行 `idd cleanup`。"
             )
             return 0
 
@@ -1308,7 +1418,6 @@ def cmd_land(args: argparse.Namespace) -> int:
                 "merge",
                 str(pr_num),
                 "--squash",
-                "--delete-branch",
                 "--subject",
                 final_title,
                 "--body-file",
@@ -1317,10 +1426,11 @@ def cmd_land(args: argparse.Namespace) -> int:
             cwd=wt_path,
         )
 
-    # Step G: Cleanup local worktree and fast-forward main
-    in_removed_wt = caller_cwd == wt_path or wt_path in caller_cwd.parents
-    run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
-    run_cmd(["git", "-C", str(repo.main_worktree), "branch", "-D", branch], check=False)
+    # Step G: Retain branches & worktree by default; optionally remove worktree; fast-forward main
+    in_removed_wt = False
+    if args.rm_worktree:
+        in_removed_wt = caller_cwd == wt_path or wt_path in caller_cwd.parents
+        run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
 
     main_sha = ""
     if repo.has_origin:
@@ -1333,8 +1443,12 @@ def cmd_land(args: argparse.Namespace) -> int:
 
     lines = [
         f"已通过 Squash Merge 直线合入 PR #{pr_num}（无 Merge 节点）：{pr.get('url', '')}",
-        f"已清理工作树与分支：{wt_path} ({branch})",
+        f"已保留本地与远端分支：{branch}",
     ]
+    if args.rm_worktree:
+        lines.append(f"已移除本地工作树：{wt_path}")
+    else:
+        lines.append(f"已保留本地工作树：{wt_path}（如需释放磁盘空间可运行 `idd cleanup`）")
     if main_sha:
         lines.append(f"本地 `{base_branch}` 已快进至：{main_sha}")
     if in_removed_wt:
@@ -1347,9 +1461,11 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     repo = get_repo_info(Path.cwd())
     worktrees = task_status.list_git_worktrees(repo.main_worktree)
     main_resolved = repo.main_worktree.resolve()
+    allowed_prefixes = tuple(f"{t}/" for t in ALLOWED_TYPES)
 
     removed: list[str] = []
     skipped_dirty: list[str] = []
+    skipped_unmerged: list[str] = []
 
     for wt in worktrees:
         wt_path = Path(wt["path"]).resolve()
@@ -1357,12 +1473,12 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
         if wt_path == main_resolved or not branch or branch == "(detached)":
             continue
         under_managed_root = repo.worktree_root == wt_path.parent
-        feature_branch = branch.startswith(("feat/", "fix/", "refactor/", "docs/", "chore/"))
+        feature_branch = branch.startswith(allowed_prefixes)
         if not (under_managed_root or feature_branch):
             continue
 
         merged_prs = run_gh_json(
-            ["pr", "list", "--state", "merged", "--head", branch, "--limit", "1", "--json", "number,url"],
+            ["pr", "list", "--state", "merged", "--head", branch, "--limit", "10", "--json", "number,url,headRefOid"],
             cwd=repo.main_worktree,
             check=False,
         )
@@ -1374,19 +1490,30 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
             skipped_dirty.append(f"{wt_path} ({branch})")
             continue
 
+        local_head = run_cmd(["git", "-C", str(wt_path), "rev-parse", "HEAD"]).stdout.strip()
+        matching_pr = next(
+            (pr for pr in merged_prs if pr.get("headRefOid") and pr.get("headRefOid") == local_head),
+            None,
+        )
+        if not matching_pr:
+            skipped_unmerged.append(f"{wt_path} ({branch} @ {local_head[:7]})")
+            continue
+
         if args.dry_run:
-            removed.append(f"[dry-run] 将清理 {wt_path} ({branch}) — PR #{merged_prs[0]['number']}")
+            removed.append(f"[dry-run] 将仅移除工作树目录 {wt_path}（保留分支 {branch}）— PR #{matching_pr['number']}")
         else:
             run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
-            run_cmd(["git", "-C", str(repo.main_worktree), "branch", "-D", branch], check=False)
-            removed.append(f"已清理 {wt_path} ({branch}) — PR #{merged_prs[0]['number']}")
+            removed.append(f"已移除工作树目录 {wt_path}（保留分支 {branch}）— PR #{matching_pr['number']}")
 
     lines = list(removed)
     if skipped_dirty:
-        lines.append("以下工作树已有已合入 PR，但存在未提交改动，已跳过清理：")
+        lines.append("以下工作树存在未提交改动，已跳过清理：")
         lines.extend(f"- {item}" for item in skipped_dirty)
+    if skipped_unmerged:
+        lines.append("以下工作树本地最新提交与已合入 PR 的 headRefOid 不一致（可能存在合入后新增本地提交），已跳过清理：")
+        lines.extend(f"- {item}" for item in skipped_unmerged)
     if not lines:
-        lines.append("没有发现可清理的已合入工作树。")
+        lines.append("没有发现可安全清理的已合入工作树。")
     print("\n".join(lines))
     return 0
 
@@ -1405,14 +1532,14 @@ def cmd_repo_init(args: argparse.Namespace) -> int:
                 "-F",
                 "allow_squash_merge=true",
                 "-F",
-                "delete_branch_on_merge=true",
+                "delete_branch_on_merge=false",
             ],
             cwd=repo.main_worktree,
         )
-        prefix = "已应用线性合入配置："
+        prefix = "已应用线性合入配置（仅 Squash 合入并保留需求分支）："
     else:
         data = run_gh_json(["api", "repos/{owner}/{repo}"], cwd=repo.main_worktree)
-        prefix = "当前仓库合入策略（加 `--apply` 可自动设为仅允许 Squash + 自动删分支）："
+        prefix = "当前仓库合入策略（加 `--apply` 可自动设为仅允许 Squash 并保留需求分支）："
 
     lines = [
         prefix,
@@ -1751,7 +1878,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_start = sub.add_parser("start", help="认领 Issue（或本地目标）并创建/幂等复用独立 worktree")
     p_start.add_argument("target", help="Issue 编号（如 42 / #42 / URL）或纯本地目标 slug")
     p_start.add_argument("--slug", help="覆盖自动生成的英文短别名")
-    p_start.add_argument("--prefix", choices=["feat", "fix", "refactor", "docs", "chore"], help="分支前缀")
+    p_start.add_argument("--prefix", choices=list(ALLOWED_TYPES), help="分支前缀（允许 8 类标准 type）")
     p_start.add_argument("--base", help="基准分支（默认 origin/<default_branch> 或本地主分支）")
     p_start.add_argument("--json", action="store_true", help="输出 JSON")
     p_start.set_defaults(func=cmd_start)
@@ -1782,24 +1909,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_ci.set_defaults(func=cmd_ci)
 
     # land
-    p_land = sub.add_parser("land", help="Rebase、清理 TASK 目录并 Squash 直线合入主分支")
+    p_land = sub.add_parser("land", help="Rebase、清理 TASK 目录并 Squash 直线合入主分支（默认保留分支与工作树）")
     p_land.add_argument("target", nargs="?", help="Issue 编号或目标名（在工作树内可省略）")
     p_land.add_argument("--title", help="自定义 Squash 提交标题")
     p_land.add_argument("--keep-tasks", action="store_true", help="保留 TASK/<goal>/ 目录不清理")
     p_land.add_argument("--force-clean-evidence", action="store_true", help="强制一并清理 evidence/ 下附件")
+    p_land.add_argument("--rm-worktree", action="store_true", help="合入后顺带移除本地工作树目录（仍保留本地与远端分支）")
     p_land.add_argument("--auto", action="store_true", help="启用 GitHub auto-squash-merge 等待 CI 后合并")
     p_land.add_argument("--no-rebase", action="store_true", help="跳过合入前自动 rebase")
     p_land.add_argument("--dry-run", action="store_true", help="仅预览合入计划与清理清单")
     p_land.set_defaults(func=cmd_land)
 
     # cleanup
-    p_cleanup = sub.add_parser("cleanup", help="清理 PR 已合并的干净工作树及本地分支")
-    p_cleanup.add_argument("--dry-run", action="store_true", help="仅预览待清理项")
+    p_cleanup = sub.add_parser("cleanup", help="按需清理已合入且 HEAD 一致的干净工作树目录（保留所有分支）")
+    p_cleanup.add_argument("--dry-run", action="store_true", help="仅预览待清理工作树目录")
     p_cleanup.set_defaults(func=cmd_cleanup)
 
     # repo-init
-    p_repo_init = sub.add_parser("repo-init", help="检查或配置 GitHub 仓库的仅 Squash 线性合入策略")
-    p_repo_init.add_argument("--apply", action="store_true", help="禁用 merge commit、仅启用 squash merge 并合并后自动删分支")
+    p_repo_init = sub.add_parser("repo-init", help="检查或配置 GitHub 仓库的仅 Squash 线性合入策略（保留分支）")
+    p_repo_init.add_argument("--apply", action="store_true", help="禁用 merge commit、仅启用 squash merge 且合并后保留远端分支")
     p_repo_init.set_defaults(func=cmd_repo_init)
 
     # upgrade

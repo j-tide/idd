@@ -2,7 +2,7 @@
 name: idd
 description: 面向 Issue 的跨工具开发工作流（Issue-Driven Development）。让 Claude Code、Codex 与 Antigravity 共用同一套「聊想法建 Issue → 独立 Worktree 并行 → TASK 拆解与真测试 → PR/CI 自愈 → Squash 直线合入 main 并清理 TASK 目录」流水线。支持多工具无缝接手、长期阻塞恢复与历史补录；只读咨询或评估不创建任务。
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 # IDD（Issue-Driven Development）
@@ -27,9 +27,9 @@ metadata:
 | `idd sync [issue#] [--dry-run]` | 将当前 Worktree 的 `TASK` 勾选进度同步回 GitHub Issue 正文（渲染原生进度条） |
 | `idd pr [issue# \| slug] [--draft] [--dry-run]` | 基于 `TASK` 记录与提交日志生成结构化描述（含 `Closes #<id>`）并创建/更新 PR |
 | `idd ci [issue# \| pr#] [--watch] [--logs] [--json]` | 查看 PR 的 CI 检查汇总与 Merge 状态，自动拉取失败 Job 日志 |
-| `idd land [issue# \| slug] [--keep-tasks] [--auto] [--dry-run]` | 自动 Rebase 最新 `main`、持久化汇总正文、清理 `TASK/<goal>/` 并 Squash 直线合入 |
-| `idd cleanup [--dry-run]` | 批量回收 PR 已合并且工作区干净的本地 Worktree 与分支 |
-| `idd repo-init [--apply]` | 检查或配置仓库为仅允许 Squash Merge 且合入后自动删远端分支 |
+| `idd land [issue# \| slug] [--keep-tasks] [--rm-worktree] [--auto] [--dry-run]` | 自动 Rebase、汇总正文、清理 `TASK/<goal>/` 并 Squash 直线合入（默认保留分支与工作树） |
+| `idd cleanup [--dry-run]` | 按需移除已合入且 HEAD 一致的干净工作树目录（保留所有分支） |
+| `idd repo-init [--apply]` | 检查或配置仓库为仅允许 Squash Merge（并保留远端分支） |
 | `idd upgrade [--check]` | 检查或立即拉取远端更新并快进同步本地 `idd`（另支持后台 6 小时安全自动同步） |
 
 ---
@@ -39,8 +39,10 @@ metadata:
 一个可独立验收的需求优先绑定一个 GitHub Issue，全链路使用稳定一致的命名映射：
 
 - **Issue ↔ 目标 ↔ Worktree ↔ 分支**：
-  - `Issue #42` ↔ 目标目录 `42-<slug>` ↔ 独立工作树 `../<主仓库名>-worktrees/42-<slug>` ↔ 分支 `feat/42-<slug>`（或 `fix/42-<slug>`）。
-  - 纯本地/无远端场景使用 `<目标名称>` 与 `feature/<目标名称>`。
+  - `Issue #42` ↔ 目标目录 `42-<slug>` ↔ 独立工作树 `../<主仓库名>-worktrees/42-<slug>` ↔ 分支 `<type>/42-<slug>`（例如 `feat/42-export-csv`、`fix/43-dark-flicker`）。
+  - 纯本地/无远端场景使用 `<目标名称>` 与 `<type>/<目标名称>`。
+  - **分支与提交共用 8 类合法 `<type>`**：`feat | fix | refactor | perf | docs | test | ci | chore`。
+  - **严禁使用不规范分支前缀**：禁止 `codex/*`、`claude/*`、`agy/*`、`antigravity/*`、`cursor/*`、`ai/*` 等工具前缀，也禁止 `feature/*`、`bugfix/*`、`tmp/*`、`wip/*` 等混写或临时前缀。`idd` 命令会在入口和出口直接拦截并给出 `git branch -m` 重命名提示。
 - **任务记录**：`TASK/<目标名称>/TASK-XX-<任务名称>.md`。
 - **测试规范**：沿用项目现有的目录、命名、工具与入口；新测试按行为或模块命名，任务与测试的映射以任务文件的 `Test` 字段为准。不要额外创建平行的 `TEST/` 目录。
 - **禁止冗余文档**：不要创建重复的 SPEC、PLAN、DESIGN、README、人工进度看板或索引文件。进度派生靠 `idd status` / `task_status.py`（以及 `idd sync` 回写 Issue 正文）。
@@ -121,7 +123,7 @@ python3 "$HOME/.agents/skills/idd/scripts/task_status.py" --root . --open-only
 
 ### 提交标题与正文
 
-开发提交和主线 Squash 提交都使用单行标题 `<type>: <中文改动>`（如 `feat`、`fix`、`refactor`、`docs`、`test`），冒号后直接写「哪个对象发生了什么变化」。
+开发提交和主线 Squash 提交都使用单行标题 `<type>: <中文改动>`（`<type>` 同分支前缀：`feat`、`fix`、`refactor`、`perf`、`docs`、`test`、`ci`、`chore`），冒号后直接写「哪个对象发生了什么变化」。
 
 开发提交模板：
 
@@ -173,13 +175,14 @@ Test: <本任务实际执行的验证及结果>
    idd land <issue#>
    ```
    `idd land` 会自动完成：
-   - 核对工作树干净 → `git fetch` 并自动 rebase 到最新 `origin/main`；
+   - 核对工作树干净与分支命名合规 → `git fetch` 并自动 rebase 到最新 `origin/main`；
    - 在删除 `TASK/<goal>/` 前，先将完整 `Goal`、`Closes #<id>` 与所有 `TASK-XX` / `Test:` 写入 PR 描述与 Squash Commit 正文；
    - 执行 `git rm -rf TASK/<goal>` 并提交清理（若 `evidence/` 含附件且未传 `--force-clean-evidence` 会安全暂停提示）；
-   - 通过 `gh pr merge --squash --delete-branch` 以**单条 Squash 提交**直线合入 `main`（自动关闭 Issue、删除远端分支）；
-   - 删除本地 Worktree 与特性分支，并快进本地 `main`。
-2. **无远端 / 纯本地仓库回退**：按照[Issue 与 Git 协作流 · 纯本地回退](references/git-issue-workflow.md#纯本地无远端回退流程)在临时集成分支完成压缩、删除 `TASK/<goal>/`、变基并与主线 `git merge --ff-only`。
-3. 补录历史任务仍先读[补录流程](references/task-records.md#事后补录)，不得伪造事前记录。
+   - 通过 `gh pr merge --squash` 以**单条 Squash 提交**直线合入 `main`（自动关闭 Issue，**默认保留远端与本地需求分支**）；
+   - **默认保留本地 Worktree**（只有显式传入 `--rm-worktree` 时才顺带移除工作树目录，分支依然保留），并尝试将干净的主工作树 `main` 快进至最新。
+2. **释放本地工作树空间（按需手动）**：平时保留工作树便于回顾上下文；需要清理磁盘时手动运行 `idd cleanup`——它只删除工作树目录（**绝不删除分支**），且仅当工作区干净**且**本地 `HEAD` 与已合入 PR 的 `headRefOid` 完全一致时才清理，避免误删合入后的本地新增提交。
+3. **无远端 / 纯本地仓库回退**：按照[Issue 与 Git 协作流 · 纯本地回退](references/git-issue-workflow.md#纯本地无远端回退流程)在临时集成分支完成压缩、删除 `TASK/<goal>/`、变基并与主线 `git merge --ff-only`。
+4. 补录历史任务仍先读[补录流程](references/task-records.md#事后补录)，不得伪造事前记录。
 
 ---
 

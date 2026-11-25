@@ -11,8 +11,25 @@
 | Issue | GitHub 仓库 Issue 编号 | `#42` |
 | 目标名 / 任务目录 | `<issue>-<slug>` | `42-export-csv` / `TASK/42-export-csv/` |
 | 独立工作树路径 | `<主仓库同级>/<仓库名>-worktrees/<目标名>`（可用 `IDD_WORKTREE_ROOT` 覆盖） | `../my-app-worktrees/42-export-csv` |
-| 开发分支 | `feat/<目标名>`（含 `bug`/`fix` 标签时默认 `fix/<目标名>`） | `feat/42-export-csv` |
+| 开发分支 | `<type>/<目标名>`（纯本地无 Issue 为 `<type>/<slug>`） | `feat/42-export-csv` |
 | PR 关联 | PR 正文自动带 `Closes #<issue>` | `Closes #42` |
+
+### 允许的 8 类分支与提交 `<type>`
+
+| `type` | 适用场景 | 分支示例（带 Issue） |
+| :--- | :--- | :--- |
+| `feat` | 新增功能、UI 页面/样式/动效迭代（默认项） | `feat/42-export-csv` |
+| `fix` | 修复 Bug 或异常问题（Issue 含 `bug` 标签自动采用） | `fix/43-dark-mode-flicker` |
+| `refactor` | 重构代码结构（不改变外部业务行为） | `refactor/44-auth-token` |
+| `perf` | 专项性能优化（耗时、内存、包体积、帧率） | `perf/45-table-virtual-scroll` |
+| `docs` | 纯文档、注释或说明更新 | `docs/46-setup-guide` |
+| `test` | 补充或重构测试代码（无生产逻辑改动） | `test/47-webhook-retry` |
+| `ci` | CI/CD 工作流配置调整 | `ci/48-parallel-unittest` |
+| `chore` | 依赖升级、构建脚本、工程配置杂项 | `chore/49-bump-deps` |
+
+**禁止前缀（零 Git Hooks 侵入，由 `idd` 命令自动拦截）**：
+- 禁止工具/身份前缀：`codex/*`、`claude/*`、`agy/*`、`antigravity/*`、`cursor/*`、`copilot/*`、`ai/*`
+- 禁止混写/临时前缀：`feature/*`（用 `feat/*`）、`bugfix/*` / `hotfix/*`（用 `fix/*`）、`tmp/*`、`temp/*`、`wip/*`、`dev/*`
 
 > **关键约束**：永远保留主工作树干净地停留在 `main`（或仓库默认分支），不要在主工作树直接切分支改代码。
 
@@ -64,27 +81,33 @@ config/local.*.json
 
 ## 5. 仓库线性设置与 `idd land` 合入清理
 
-### 一次锁定仓库仅 Squash 合入
+### 一次锁定仓库仅 Squash 合入（同时保留需求分支）
 
-首次接管仓库时，可检查或一键启用仅允许 Squash Merge 与自动清理远端分支：
+首次接管仓库时，可检查或一键启用仅允许 Squash Merge 且合入后保留远端分支：
 
 ```bash
 idd repo-init          # 只读检查当前设置
-idd repo-init --apply  # 等价于 PATCH allow_merge_commit=false, allow_squash_merge=true, delete_branch_on_merge=true
+idd repo-init --apply  # 等价于 PATCH allow_merge_commit=false, allow_squash_merge=true, delete_branch_on_merge=false
 ```
 
-*(底层使用 `gh api -X PATCH repos/{owner}/{repo} -F allow_merge_commit=false -F allow_squash_merge=true -F delete_branch_on_merge=true`，建议同步在 GitHub Branch Ruleset 勾选 `Require linear history`。)*
+*(底层使用 `gh api -X PATCH repos/{owner}/{repo} -F allow_merge_commit=false -F allow_squash_merge=true -F delete_branch_on_merge=false`，建议同步在 GitHub Branch Ruleset 勾选 `Require linear history`。)*
 
 ### `idd land` 标准执行顺序
 
 当 PR 已获验收且 CI 绿灯后，执行 `idd land <issue#>`（建议先用 `--dry-run` 预览）：
 
-1. **检查洁净度与自动 Rebase**：确认工作树干净后 `git fetch origin <base>`；若分支落后于 `origin/<base>` 自动执行 `git rebase`（发生冲突时以退出码 `2` 暂停并列出冲突文件，等待解决并 `git rebase --continue`）。
+1. **检查洁净度、分支名与自动 Rebase**：校验分支名合法且工作树干净后 `git fetch origin <base>`；若分支落后于 `origin/<base>` 自动执行 `git rebase`（发生冲突时以退出码 `2` 暂停并列出冲突文件，等待解决并 `git rebase --continue`）。
 2. **先持久化汇总，再清理目录**：在删除 `TASK/` 前读取 `TASK/<目标>/` 与提交历史生成完整的 `Goal` + `Closes #<id>` + 逐 `TASK` 验证清单。
 3. **清理 `TASK/<目标>/` 目录**：默认执行 `git rm -rf TASK/<目标>` 并提交 `chore: 清理已汇总的任务记录 (<目标>)`，确保 `main` 主干不堆积临时任务目录（传 `--keep-tasks` 可保留）。
    - **证据保护**：若 `TASK/<目标>/evidence/` 内存在附件文件，默认会安全拦截并列出清单；需确认附件已不再需要或已转存后，传 `--force-clean-evidence` 才一并清理。
-4. **同步 PR 并 Squash 直线合入**：刷新 PR 正文、如有新提交则 `--force-with-lease` 推送；确认 CI 通过后执行 `gh pr merge --squash --delete-branch`（若刚强推需要等新一轮 CI，可传 `--auto` 挂起自动合入，合入完成后再跑 `idd cleanup`）。
-5. **本地回收**：自动 `git worktree remove` 删除当前工作树、`git branch -D` 删除本地分支，并尝试将干净的主工作树 `main` 快进（`git merge --ff-only`）到最新 `origin/main`。
+4. **同步 PR 并 Squash 直线合入**：刷新 PR 正文、如有新提交则 `--force-with-lease` 推送；确认 CI 通过后执行 `gh pr merge --squash`（**不加 `--delete-branch`，保留远端分支**；若刚强推需要等新一轮 CI，可传 `--auto` 挂起自动合入）。
+5. **默认保留与快进主线**：**默认同时保留本地需求分支与本地 Worktree 目录**（如希望合入时顺带移除工作树目录可显式传 `--rm-worktree`），随后将干净的主工作树 `main` 快进（`git merge --ff-only`）到最新 `origin/main`。
+
+### `idd cleanup` 安全释放工作树磁盘空间
+
+需要清理旧工作树目录释放磁盘时，手动运行 `idd cleanup`（支持 `--dry-run`）：
+- **只删工作树目录，绝不删除本地或远端分支**；
+- **双重安全校验**：仅当工作树工作区完全干净、且本地当前 `HEAD SHA` 与 GitHub 已合入 PR 的 `headRefOid` **完全一致**时才执行 `git worktree remove`；若 PR 合入后本地又追加了任何新提交，一律跳过绝不误删。
 
 ---
 

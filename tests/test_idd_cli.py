@@ -52,6 +52,17 @@ def arg_vals(args, flag):
     return vals
 
 
+def origin_head_oid(branch):
+    if not branch:
+        return ""
+    proc = subprocess.run(
+        ["git", "--git-dir", str(ORIGIN_DIR), "rev-parse", f"refs/heads/{branch}"],
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
 args = sys.argv[1:]
 state = load_state()
 state.setdefault("calls", []).append(args)
@@ -136,6 +147,7 @@ if args[:2] == ["pr", "create"]:
         "body": body,
         "baseRefName": base,
         "headRefName": head,
+        "headRefOid": origin_head_oid(head),
         "state": "OPEN",
         "isDraft": "--draft" in args,
         "mergeStateStatus": "CLEAN",
@@ -153,6 +165,9 @@ if args[:2] == ["pr", "edit"]:
         pr["title"] = arg_val(args, "--title")
     if arg_val(args, "--body-file"):
         pr["body"] = Path(arg_val(args, "--body-file")).read_text(encoding="utf-8")
+    oid = origin_head_oid(pr.get("headRefName", ""))
+    if oid:
+        pr["headRefOid"] = oid
     save_state(state)
     print(pr["url"])
     sys.exit(0)
@@ -186,6 +201,9 @@ if args[:2] == ["pr", "merge"]:
 
     head = pr["headRefName"]
     base = pr["baseRefName"]
+    oid = origin_head_oid(head)
+    if oid:
+        pr["headRefOid"] = oid
     tree = subprocess.check_output(["git", "--git-dir", str(ORIGIN_DIR), "rev-parse", f"refs/heads/{head}^{{tree}}"], text=True).strip()
     parent = subprocess.check_output(["git", "--git-dir", str(ORIGIN_DIR), "rev-parse", f"refs/heads/{base}"], text=True).strip()
     env = dict(os.environ)
@@ -222,7 +240,7 @@ if args[:1] == ["api"]:
         state["repo_settings"].update({
             "allow_merge_commit": False,
             "allow_squash_merge": True,
-            "delete_branch_on_merge": True,
+            "delete_branch_on_merge": False,
         })
     save_state(state)
     print(json.dumps(state["repo_settings"]))
@@ -508,10 +526,23 @@ class TestIddCli(unittest.TestCase):
             self.assertEqual(blocked_land.returncode, 2)
             self.assertIn("evidence", blocked_land.stderr)
 
-            # Now land with --force-clean-evidence
+            # Now land with --force-clean-evidence (default retains branch + worktree)
             land_res = h.run_idd("land", "42", "--force-clean-evidence")
             self.assertIn("Squash Merge 直线合入", land_res.stdout)
-            self.assertFalse(wt.exists(), "Worktree should be removed after land")
+            self.assertIn("已保留本地与远端分支：feat/42-export-csv", land_res.stdout)
+            self.assertTrue(wt.exists(), "Worktree should be retained by default after land")
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(h.repo), "show-ref", "--verify", "--quiet", "refs/heads/feat/42-export-csv"]
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "--git-dir", str(h.origin), "show-ref", "--verify", "--quiet", "refs/heads/feat/42-export-csv"]
+                ).returncode,
+                0,
+            )
 
             # Verify local main fast-forwarded, linear (0 merge commits), TASK/42-export-csv removed, code present
             merge_count = subprocess.check_output(
@@ -540,13 +571,101 @@ class TestIddCli(unittest.TestCase):
             applied = h.run_idd("repo-init", "--apply").stdout
             self.assertIn("allow_merge_commit: False", applied)
             self.assertIn("allow_squash_merge: True", applied)
-            self.assertIn("delete_branch_on_merge: True", applied)
+            self.assertIn("delete_branch_on_merge: False", applied)
 
     def test_version_flag_and_missing_subcommand(self) -> None:
         res = subprocess.run([sys.executable, str(IDD_BIN), "--version"], capture_output=True, text=True, check=True)
-        self.assertIn("idd 0.2.0", res.stdout)
+        self.assertIn("idd 0.3.0", res.stdout)
         no_args = subprocess.run([sys.executable, str(IDD_BIN)], capture_output=True, text=True, check=False)
         self.assertEqual(no_args.returncode, 2)
+
+    def test_cleanup_verifies_head_oid_and_preserves_branches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+            self._write_task(wt, "42-export-csv", 1, "实现导出", "done")
+            (wt / "export.py").write_text("x = 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(wt), "commit", "-m",
+                    "feat: 实现导出\n\nTask: 42-export-csv/TASK-01\nRefs: #42\nTest: pytest — 1 passed",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            h.run_idd("pr", "42")
+            h.run_idd("land", "42")
+            self.assertTrue(wt.exists())
+
+            # Extra post-merge local commit: working tree is clean, but HEAD != merged PR headRefOid
+            subprocess.run(
+                ["git", "-C", str(wt), "commit", "--allow-empty", "-m", "feat: post-merge local wip"],
+                check=True,
+                capture_output=True,
+            )
+            skipped = h.run_idd("cleanup").stdout
+            self.assertTrue(wt.exists(), "cleanup MUST NOT remove worktree with post-merge local commit")
+            self.assertIn("headRefOid 不一致", skipped)
+
+            # Reset back to merged PR commit -> cleanup removes ONLY worktree directory, keeping local & remote branches
+            subprocess.run(["git", "-C", str(wt), "reset", "--hard", "HEAD~1"], check=True, capture_output=True)
+            cleaned = h.run_idd("cleanup").stdout
+            self.assertIn("已移除工作树目录", cleaned)
+            self.assertIn("保留分支 feat/42-export-csv", cleaned)
+            self.assertFalse(wt.exists())
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(h.repo), "show-ref", "--verify", "--quiet", "refs/heads/feat/42-export-csv"]
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "--git-dir", str(h.origin), "show-ref", "--verify", "--quiet", "refs/heads/feat/42-export-csv"]
+                ).returncode,
+                0,
+            )
+
+    def test_branch_naming_enforces_eight_types_and_blocks_tool_prefixes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            for bad in ("codex/bad-branch", "claude/bad-branch", "feature/bad-branch", "bugfix/bad"):
+                res = h.run_idd("start", bad, check=False)
+                self.assertNotEqual(res.returncode, 0, f"Expected failure for {bad}")
+                self.assertIn("不符合 IDD 规范", res.stderr)
+                self.assertIn("git branch -m", res.stderr)
+
+            # Valid typed slug target without issue
+            perf_data = json.loads(h.run_idd("start", "perf/cache-layer", "--json").stdout)
+            self.assertEqual(perf_data["branch"], "perf/cache-layer")
+
+            # Verify --prefix accepts all 8 allowed types (test remaining types quickly)
+            for idx, branch_type in enumerate(["refactor", "docs", "test", "ci", "chore"], start=100):
+                res = json.loads(h.run_idd("start", f"local-item-{idx}", "--prefix", branch_type, "--json").stdout)
+                self.assertEqual(res["branch"], f"{branch_type}/local-item-{idx}")
+
+            # Start #42 legitimately, then rename branch to forbidden `codex/42-export-csv`
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            self._write_task(wt, "42-export-csv", 1, "测试拦截", "done")
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "feat: 测试"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(wt), "branch", "-m", "codex/42-export-csv"], check=True)
+
+            for cmd_args in (["start", "42"], ["sync", "42"], ["pr", "42"], ["land", "42"]):
+                blocked = h.run_idd(*cmd_args, cwd=wt, check=False)
+                self.assertNotEqual(blocked.returncode, 0, f"{cmd_args} should block codex/42-export-csv")
+                self.assertIn("codex/", blocked.stderr)
+                self.assertIn("feat/42-export-csv", blocked.stderr)
+
+            # Zero invasive git hooks installed
+            hooks_dir = h.repo / ".git/hooks"
+            custom_hooks = [p.name for p in hooks_dir.iterdir() if not p.name.endswith(".sample")]
+            self.assertEqual(custom_hooks, [])
 
     def test_safe_auto_update_and_upgrade_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
