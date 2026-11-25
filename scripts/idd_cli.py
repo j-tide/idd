@@ -11,9 +11,11 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Iterator
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -22,6 +24,9 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import task_status  # noqa: E402
 
+
+__version__ = "0.2.0"
+AUTO_UPDATE_INTERVAL_SECONDS = 6 * 3600
 
 PROGRESS_START = "<!-- idd:progress:start -->"
 PROGRESS_END = "<!-- idd:progress:end -->"
@@ -1423,12 +1428,303 @@ def cmd_repo_init(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Safe background auto-update & `idd upgrade`
+# ---------------------------------------------------------------------------
+
+
+def get_skill_repo_dir() -> Path:
+    """Return the local `idd` skill git repository root."""
+    override = os.environ.get("IDD_SKILL_DIR", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return SCRIPT_DIR.parent.resolve()
+
+
+def get_update_state_path() -> Path:
+    """Return path to the local auto-update state JSON file."""
+    cache_override = os.environ.get("IDD_CACHE_DIR", "").strip()
+    base = Path(cache_override).expanduser() if cache_override else (Path.home() / ".cache" / "idd")
+    return base / "update_state.json"
+
+
+def _get_update_interval() -> float:
+    raw = os.environ.get("IDD_UPDATE_INTERVAL", "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+    return float(AUTO_UPDATE_INTERVAL_SECONDS)
+
+
+def _load_update_state() -> dict[str, Any]:
+    path = get_update_state_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_update_state(state: dict[str, Any]) -> None:
+    path = get_update_state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(prefix="state-", suffix=".tmp", dir=str(path.parent))
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(state, handle, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _ensure_scripts_executable(skill_dir: Path) -> None:
+    filemode = subprocess.run(
+        ["git", "-C", str(skill_dir), "config", "--get", "core.filemode"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip().lower()
+    for rel in ("scripts/idd", "scripts/task_status.py"):
+        target = skill_dir / rel
+        if not target.is_file():
+            continue
+        mode = target.stat().st_mode
+        if mode & stat.S_IXUSR:
+            continue
+        if filemode != "false":
+            ls_out = subprocess.run(
+                ["git", "-C", str(skill_dir), "ls-files", "-s", "--", rel],
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            if ls_out.startswith("100644 "):
+                continue
+        try:
+            target.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        except OSError:
+            pass
+
+
+def _inspect_skill_repo_sync(skill_dir: Path) -> tuple[str, str, int, int, str]:
+    """Inspect (branch, dirty, behind, ahead, cur_sha) of the local skill git repo."""
+    branch = subprocess.run(
+        ["git", "-C", str(skill_dir), "branch", "--show-current"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    dirty = subprocess.run(
+        ["git", "-C", str(skill_dir), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    behind_proc = subprocess.run(
+        ["git", "-C", str(skill_dir), "rev-list", "--count", "HEAD..origin/main"],
+        capture_output=True,
+        text=True,
+    )
+    ahead_proc = subprocess.run(
+        ["git", "-C", str(skill_dir), "rev-list", "--count", "origin/main..HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    behind = int(behind_proc.stdout.strip()) if behind_proc.returncode == 0 and behind_proc.stdout.strip().isdigit() else 0
+    ahead = int(ahead_proc.stdout.strip()) if ahead_proc.returncode == 0 and ahead_proc.stdout.strip().isdigit() else 0
+    cur_sha = subprocess.run(
+        ["git", "-C", str(skill_dir), "rev-parse", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return branch, dirty, behind, ahead, cur_sha
+
+
+def run_bg_auto_update() -> int:
+    """Safely fetch origin/main and fast-forward when local skill repo is clean on main."""
+    skill_dir = get_skill_repo_dir()
+    if not (skill_dir / ".git").exists():
+        return 0
+
+    remotes_proc = subprocess.run(
+        ["git", "-C", str(skill_dir), "remote"],
+        capture_output=True,
+        text=True,
+    )
+    if remotes_proc.returncode != 0 or "origin" not in {r.strip() for r in remotes_proc.stdout.splitlines()}:
+        return 0
+
+    now = time.time()
+    try:
+        fetch_proc = subprocess.run(
+            ["git", "-C", str(skill_dir), "fetch", "origin", "main", "--quiet"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        state = _load_update_state()
+        state["last_checked_at"] = now
+        _save_update_state(state)
+        return 0
+
+    if fetch_proc.returncode != 0:
+        state = _load_update_state()
+        state["last_checked_at"] = now
+        _save_update_state(state)
+        return 0
+
+    branch, dirty, behind, ahead, old_sha = _inspect_skill_repo_sync(skill_dir)
+    if behind == 0:
+        _save_update_state({"last_checked_at": now, "pending_notice": "", "behind_count": 0})
+        return 0
+
+    if branch == "main" and not dirty and ahead == 0:
+        merge_proc = subprocess.run(
+            ["git", "-C", str(skill_dir), "merge", "--ff-only", "origin/main"],
+            capture_output=True,
+            text=True,
+        )
+        if merge_proc.returncode == 0:
+            _ensure_scripts_executable(skill_dir)
+            new_sha = subprocess.run(
+                ["git", "-C", str(skill_dir), "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            subject = subprocess.run(
+                ["git", "-C", str(skill_dir), "log", "-1", "--format=%s", "HEAD"],
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            notice = f"✨ idd 已自动同步至最新 ({old_sha} → {new_sha}): {subject}"
+            _save_update_state({"last_checked_at": now, "pending_notice": notice, "behind_count": 0})
+            return 0
+
+    _save_update_state({"last_checked_at": now, "pending_notice": "", "behind_count": behind})
+    return 0
+
+
+def maybe_notify_and_trigger_auto_update(current_command: str | None) -> None:
+    """Print cached update notice to stderr and trigger detached background check if due."""
+    try:
+        if os.environ.get("IDD_NO_AUTO_UPDATE") == "1" or current_command == "upgrade":
+            return
+        state = _load_update_state()
+        pending_notice = state.get("pending_notice")
+        behind_count = int(state.get("behind_count") or 0)
+
+        if pending_notice:
+            print(pending_notice, file=sys.stderr)
+            state["pending_notice"] = ""
+            _save_update_state(state)
+        elif behind_count > 0:
+            print(
+                f"💡 idd 远端有 {behind_count} 个新提交（本地技能目录未处于干净的 main 分支，已跳过自动合并），可运行 `idd upgrade` 查看。",
+                file=sys.stderr,
+            )
+
+        last_checked = float(state.get("last_checked_at", 0) or 0)
+        if time.time() - last_checked >= _get_update_interval():
+            state["last_checked_at"] = time.time()
+            _save_update_state(state)
+            subprocess.Popen(
+                [sys.executable, str(Path(__file__).resolve()), "--_bg-auto-update"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+    except Exception:
+        pass
+
+
+def cmd_upgrade(args: argparse.Namespace) -> int:
+    skill_dir = get_skill_repo_dir()
+    git_check = run_cmd(["git", "-C", str(skill_dir), "rev-parse", "--git-dir"], check=False)
+    if git_check.returncode != 0:
+        raise IddError(f"技能目录 `{skill_dir}` 不是 Git 仓库，无法执行更新。")
+
+    remotes_proc = run_cmd(["git", "-C", str(skill_dir), "remote"])
+    if "origin" not in {r.strip() for r in remotes_proc.stdout.splitlines()}:
+        raise IddError(f"技能目录 `{skill_dir}` 未配置 `origin` 远端。")
+
+    run_cmd(["git", "-C", str(skill_dir), "fetch", "origin", "main"])
+    branch, dirty, behind, ahead, cur_sha = _inspect_skill_repo_sync(skill_dir)
+    now = time.time()
+
+    if args.check:
+        lines = [
+            f"当前版本：idd {__version__}",
+            f"技能目录：{skill_dir}",
+            f"当前状态：{branch or '(detached)'} @ {cur_sha}{' (有未提交改动)' if dirty else ''}",
+        ]
+        if behind > 0:
+            incoming = run_cmd(
+                ["git", "-C", str(skill_dir), "log", "--oneline", "HEAD..origin/main"],
+                check=False,
+            ).stdout.strip()
+            lines.append(f"远端有 {behind} 个新提交：")
+            if incoming:
+                lines.append(incoming)
+        else:
+            lines.append("已是最新，与 origin/main 一致。")
+        _save_update_state({"last_checked_at": now, "pending_notice": "", "behind_count": behind})
+        print("\n".join(lines))
+        return 0
+
+    if behind == 0:
+        _ensure_scripts_executable(skill_dir)
+        _save_update_state({"last_checked_at": now, "pending_notice": "", "behind_count": 0})
+        print(f"idd 已是最新版本 (v{__version__}, {cur_sha})。")
+        return 0
+
+    reasons: list[str] = []
+    if branch != "main":
+        reasons.append(f"当前分支为 `{branch or '(detached)'}`（而非 `main`）")
+    if dirty:
+        reasons.append("存在未提交改动")
+    if ahead > 0:
+        reasons.append(f"本地存在 {ahead} 个未推送提交")
+
+    if reasons:
+        incoming = run_cmd(
+            ["git", "-C", str(skill_dir), "log", "--oneline", "HEAD..origin/main"],
+            check=False,
+        ).stdout.strip()
+        _save_update_state({"last_checked_at": now, "pending_notice": "", "behind_count": behind})
+        raise IddError(
+            f"已跳过自动快进更新，原因：{'、'.join(reasons)}。\n"
+            f"远端待合入提交：\n{incoming}\n"
+            "请清理改动或切回干净的 `main` 后重试 `idd upgrade`。"
+        )
+
+    run_cmd(["git", "-C", str(skill_dir), "merge", "--ff-only", "origin/main"])
+    _ensure_scripts_executable(skill_dir)
+    new_sha = run_cmd(["git", "-C", str(skill_dir), "rev-parse", "--short", "HEAD"]).stdout.strip()
+    changelog = run_cmd(
+        ["git", "-C", str(skill_dir), "log", "--oneline", f"{cur_sha}..{new_sha}"],
+        check=False,
+    ).stdout.strip()
+    _save_update_state({"last_checked_at": now, "pending_notice": "", "behind_count": 0})
+
+    lines = [f"已更新 idd：{cur_sha} → {new_sha}"]
+    if changelog:
+        lines.append(changelog)
+    print("\n".join(lines))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="idd",
         description="Issue-Driven Development (IDD) 跨工具共享开发流水线工具",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("-v", "--version", action="version", version=f"idd {__version__}")
+    parser.add_argument("--_bg-auto-update", action="store_true", dest="bg_auto_update", help=argparse.SUPPRESS)
+    sub = parser.add_subparsers(dest="command", required=False)
 
     # status
     p_status = sub.add_parser("status", help="聚合并展示 GitHub Issue、Worktree TASK 进度与 PR/CI 状态")
@@ -1506,12 +1802,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_repo_init.add_argument("--apply", action="store_true", help="禁用 merge commit、仅启用 squash merge 并合并后自动删分支")
     p_repo_init.set_defaults(func=cmd_repo_init)
 
+    # upgrade
+    p_upgrade = sub.add_parser("upgrade", help="检查或立即拉取远端更新并快进同步本地 idd")
+    p_upgrade.add_argument("--check", action="store_true", help="仅检查远端是否有更新，不合并")
+    p_upgrade.set_defaults(func=cmd_upgrade)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.bg_auto_update:
+        return run_bg_auto_update()
+    if not args.command:
+        parser.error("需要提供子命令（使用 -h 查看帮助）")
+    maybe_notify_and_trigger_auto_update(args.command)
     try:
         return args.func(args)
     except IddError as exc:

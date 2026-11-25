@@ -63,6 +63,15 @@ ln -sfn "$HOME/.agents/skills/idd/scripts/idd" "$HOME/.local/bin/idd"
 | `idd land [issue# \| slug] [--keep-tasks] [--auto] [--dry-run]` | 自动 Rebase 最新 `main`、持久化汇总、清理 `TASK/<goal>/` 并 Squash 直线合入 |
 | `idd cleanup [--dry-run]` | 批量清理 PR 已合并的干净本地 Worktree 与分支 |
 | `idd repo-init [--apply]` | 检查或一键将仓库设置为仅允许 Squash Merge 且合入后自动删分支 |
+| `idd upgrade [--check]` | 检查或立即拉取远端更新并快进同步本地 `idd` |
+| `idd --version` | 查看当前安装的 `idd` 版本号 |
+
+---
+
+## 自动更新说明
+
+- **后台静默安全同步**：运行任意 `idd` 命令且距上次检查超过 6 小时时，会在后台异步检查 `origin/main`（不阻塞当前命令，不污染 `stdout`）；仅当本地技能目录停留在 `main`、工作区完全干净且无未推送提交时才自动 `merge --ff-only`，并在下一次执行时于 `stderr` 提示更新结果。
+- **存在本地改动时自动跳过**：若本地有未提交改动或不在 `main` 分支，只提示存在更新而不修改本地文件，可随时运行 `idd upgrade --check` 查看或清理后运行 `idd upgrade` 更新（设置 `IDD_NO_AUTO_UPDATE=1` 可临时禁用后台检测）。
 
 ---
 

@@ -1,6 +1,8 @@
 ---
 name: idd
 description: 面向 Issue 的跨工具开发工作流（Issue-Driven Development）。让 Claude Code、Codex 与 Antigravity 共用同一套「聊想法建 Issue → 独立 Worktree 并行 → TASK 拆解与真测试 → PR/CI 自愈 → Squash 直线合入 main 并清理 TASK 目录」流水线。支持多工具无缝接手、长期阻塞恢复与历史补录；只读咨询或评估不创建任务。
+metadata:
+  version: "0.2.0"
 ---
 
 # IDD（Issue-Driven Development）
@@ -28,6 +30,7 @@ description: 面向 Issue 的跨工具开发工作流（Issue-Driven Development
 | `idd land [issue# \| slug] [--keep-tasks] [--auto] [--dry-run]` | 自动 Rebase 最新 `main`、持久化汇总正文、清理 `TASK/<goal>/` 并 Squash 直线合入 |
 | `idd cleanup [--dry-run]` | 批量回收 PR 已合并且工作区干净的本地 Worktree 与分支 |
 | `idd repo-init [--apply]` | 检查或配置仓库为仅允许 Squash Merge 且合入后自动删远端分支 |
+| `idd upgrade [--check]` | 检查或立即拉取远端更新并快进同步本地 `idd`（另支持后台 6 小时安全自动同步） |
 
 ---
 

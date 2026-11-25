@@ -13,6 +13,7 @@ import unittest
 
 
 IDD_BIN = Path(__file__).resolve().parents[1] / "scripts/idd"
+IDD_CLI = Path(__file__).resolve().parents[1] / "scripts/idd_cli.py"
 
 
 FAKE_GH_SCRIPT = r"""#!/usr/bin/env python3
@@ -315,6 +316,7 @@ class GitHubHarness:
         env["PATH"] = f"{self.bin_dir}{os.pathsep}{env.get('PATH', '')}"
         env["FAKE_GH_STATE"] = str(self.state_file)
         env["FAKE_GH_ORIGIN"] = str(self.origin)
+        env["IDD_NO_AUTO_UPDATE"] = "1"
         env.pop("IDD_WORKTREE_ROOT", None)
         return subprocess.run(
             [sys.executable, str(IDD_BIN), *args],
@@ -539,6 +541,139 @@ class TestIddCli(unittest.TestCase):
             self.assertIn("allow_merge_commit: False", applied)
             self.assertIn("allow_squash_merge: True", applied)
             self.assertIn("delete_branch_on_merge: True", applied)
+
+    def test_version_flag_and_missing_subcommand(self) -> None:
+        res = subprocess.run([sys.executable, str(IDD_BIN), "--version"], capture_output=True, text=True, check=True)
+        self.assertIn("idd 0.2.0", res.stdout)
+        no_args = subprocess.run([sys.executable, str(IDD_BIN)], capture_output=True, text=True, check=False)
+        self.assertEqual(no_args.returncode, 2)
+
+    def test_safe_auto_update_and_upgrade_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            skill_origin = tmp_path / "skill_origin.git"
+            skill_repo = tmp_path / "skill_repo"
+            upstream_pusher = tmp_path / "upstream_pusher"
+            cache_dir = tmp_path / "cache"
+            work_repo = tmp_path / "work_repo"
+
+            subprocess.run(["git", "init", "--bare", "-b", "main", str(skill_origin)], check=True, capture_output=True)
+            subprocess.run(["git", "clone", str(skill_origin), str(skill_repo)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(skill_repo), "checkout", "-b", "main"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(skill_repo), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(skill_repo), "config", "user.email", "test@example.com"], check=True)
+            (skill_repo / "README.md").write_text("v1\n", encoding="utf-8")
+            (skill_repo / "scripts").mkdir()
+            idd_script = skill_repo / "scripts/idd"
+            idd_script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            idd_script.chmod(idd_script.stat().st_mode | stat.S_IXUSR)
+            subprocess.run(["git", "-C", str(skill_repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(skill_repo), "commit", "-m", "init skill"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(skill_repo), "push", "-u", "origin", "main"], check=True, capture_output=True)
+            subprocess.run(["git", "--git-dir", str(skill_origin), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
+
+            # Separate work repo where user runs `idd status --local-only --json`
+            work_repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(work_repo)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(work_repo), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(work_repo), "config", "user.email", "test@example.com"], check=True)
+            (work_repo / "f.txt").write_text("x\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(work_repo), "add", "f.txt"], check=True)
+            subprocess.run(["git", "-C", str(work_repo), "commit", "-m", "init work"], check=True, capture_output=True)
+
+            # Push commit #2 to skill_origin
+            subprocess.run(["git", "clone", str(skill_origin), str(upstream_pusher)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(upstream_pusher), "config", "user.name", "Upstream"], check=True)
+            subprocess.run(["git", "-C", str(upstream_pusher), "config", "user.email", "up@example.com"], check=True)
+            (upstream_pusher / "README.md").write_text("v2\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(upstream_pusher), "add", "README.md"], check=True)
+            subprocess.run(["git", "-C", str(upstream_pusher), "commit", "-m", "feat: skill v2 update"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(upstream_pusher), "push", "origin", "main"], check=True, capture_output=True)
+
+            env = dict(os.environ)
+            env["IDD_SKILL_DIR"] = str(skill_repo)
+            env["IDD_CACHE_DIR"] = str(cache_dir)
+            env["IDD_UPDATE_INTERVAL"] = "3600"
+            env.pop("IDD_NO_AUTO_UPDATE", None)
+
+            # Background auto-update safely fast-forwards clean main
+            subprocess.run([sys.executable, str(IDD_CLI), "--_bg-auto-update"], env=env, check=True, capture_output=True)
+            self.assertEqual((skill_repo / "README.md").read_text(encoding="utf-8"), "v2\n")
+
+            # Next command prints notice to stderr without breaking JSON on stdout
+            res1 = subprocess.run(
+                [sys.executable, str(IDD_BIN), "status", "--local-only", "--json"],
+                cwd=str(work_repo),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertIsInstance(json.loads(res1.stdout), dict)
+            self.assertIn("✨ idd 已自动同步至最新", res1.stderr)
+            self.assertIn("feat: skill v2 update", res1.stderr)
+
+            # Subsequent command does not repeat the already-shown notice
+            res2 = subprocess.run(
+                [sys.executable, str(IDD_BIN), "status", "--local-only", "--json"],
+                cwd=str(work_repo),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertNotIn("✨ idd 已自动同步至最新", res2.stderr)
+
+            # Make skill_repo dirty and push commit #3
+            (skill_repo / "README.md").write_text("local-dirty-edit\n", encoding="utf-8")
+            head_before = subprocess.check_output(["git", "-C", str(skill_repo), "rev-parse", "HEAD"], text=True).strip()
+            (upstream_pusher / "README.md").write_text("v3\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(upstream_pusher), "add", "README.md"], check=True)
+            subprocess.run(["git", "-C", str(upstream_pusher), "commit", "-m", "feat: skill v3 update"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(upstream_pusher), "push", "origin", "main"], check=True, capture_output=True)
+
+            # Background auto-update MUST skip merging when dirty
+            subprocess.run([sys.executable, str(IDD_CLI), "--_bg-auto-update"], env=env, check=True, capture_output=True)
+            head_after = subprocess.check_output(["git", "-C", str(skill_repo), "rev-parse", "HEAD"], text=True).strip()
+            self.assertEqual(head_before, head_after)
+            self.assertEqual((skill_repo / "README.md").read_text(encoding="utf-8"), "local-dirty-edit\n")
+
+            # Command notifies user on stderr that remote has updates
+            res3 = subprocess.run(
+                [sys.executable, str(IDD_BIN), "status", "--local-only", "--json"],
+                cwd=str(work_repo),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertIsInstance(json.loads(res3.stdout), dict)
+            self.assertIn("idd upgrade", res3.stderr)
+
+            # `idd upgrade` while dirty refuses without clobbering local changes
+            up_dirty = subprocess.run(
+                [sys.executable, str(IDD_BIN), "upgrade"],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(up_dirty.returncode, 0)
+            self.assertEqual((skill_repo / "README.md").read_text(encoding="utf-8"), "local-dirty-edit\n")
+
+            # Clean dirty file and run `idd upgrade`
+            subprocess.run(["git", "-C", str(skill_repo), "checkout", "--", "README.md"], check=True)
+            up_clean = subprocess.run(
+                [sys.executable, str(IDD_BIN), "upgrade"],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertIn("已更新 idd", up_clean.stdout)
+            self.assertEqual((skill_repo / "README.md").read_text(encoding="utf-8"), "v3\n")
+            state_json = json.loads((cache_dir / "update_state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state_json["behind_count"], 0)
 
 
 if __name__ == "__main__":
