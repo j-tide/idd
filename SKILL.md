@@ -35,6 +35,7 @@ metadata:
 | `idd repo-init [--apply]` | 检查或配置 GitHub / GitLab 为线性 Squash 合入策略（保留分支） |
 | `idd auth login <host> --token <PAT>` / `status` / `logout` | 保存与检查自建 GitLab / GitHub 企业版主机凭据 |
 | `idd upgrade [--check]` | 检查或立即拉取远端更新并快进同步本地 `idd`（另支持后台 6 小时安全自动同步） |
+| `idd uninstall [--dry-run] [--keep-config] [-y]` | 安全完全卸载 `idd`（移除软链、技能仓库、配置与缓存） |
 
 ---
 

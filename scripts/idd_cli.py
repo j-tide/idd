@@ -24,6 +24,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from forge import (  # noqa: E402
     ForgeError,
+    get_config_dir,
     get_forge,
     get_hosts_path,
     load_hosts_config,
@@ -1483,11 +1484,25 @@ def get_skill_repo_dir() -> Path:
     return SCRIPT_DIR.parent.resolve()
 
 
+def get_bin_dir() -> Path:
+    """Return the directory containing the global `idd` CLI symlink."""
+    override = os.environ.get("IDD_BIN_DIR", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return (Path.home() / ".local" / "bin").resolve()
+
+
+def get_cache_dir() -> Path:
+    """Return the local `idd` cache directory."""
+    cache_override = os.environ.get("IDD_CACHE_DIR", "").strip()
+    if cache_override:
+        return Path(cache_override).expanduser().resolve()
+    return (Path.home() / ".cache" / "idd").resolve()
+
+
 def get_update_state_path() -> Path:
     """Return path to the local auto-update state JSON file."""
-    cache_override = os.environ.get("IDD_CACHE_DIR", "").strip()
-    base = Path(cache_override).expanduser() if cache_override else (Path.home() / ".cache" / "idd")
-    return base / "update_state.json"
+    return get_cache_dir() / "update_state.json"
 
 
 def _get_update_interval() -> float:
@@ -1652,7 +1667,7 @@ def run_bg_auto_update() -> int:
 def maybe_notify_and_trigger_auto_update(current_command: str | None) -> None:
     """Print cached update notice to stderr and trigger detached background check if due."""
     try:
-        if os.environ.get("IDD_NO_AUTO_UPDATE") == "1" or current_command == "upgrade":
+        if os.environ.get("IDD_NO_AUTO_UPDATE") == "1" or current_command in {"upgrade", "uninstall"}:
             return
         state = _load_update_state()
         pending_notice = state.get("pending_notice")
@@ -1756,6 +1771,198 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     if changelog:
         lines.append(changelog)
     print("\n".join(lines))
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Safe complete uninstall (`idd uninstall`)
+# ---------------------------------------------------------------------------
+
+
+def _is_unsafe_delete_root(path: Path) -> bool:
+    """Return True when `path` is filesystem root, $HOME, or an ancestor of $HOME."""
+    candidate = path.resolve(strict=False)
+    home = Path.home().resolve(strict=False)
+    return candidate == candidate.parent or candidate == home or candidate in home.parents
+
+
+def _looks_like_idd_skill_dir(skill_dir: Path) -> bool:
+    """Verify `skill_dir` actually looks like an `idd` skill directory before deletion."""
+    return any((skill_dir / marker).exists() for marker in ("SKILL.md", "scripts/idd", "scripts/idd_cli.py"))
+
+
+def _symlink_points_to_idd(link: Path, skill_dir: Path, *, is_bin: bool) -> bool:
+    """Return True if `link` is a symlink pointing to `skill_dir` (or its CLI entrypoint)."""
+    if not link.is_symlink():
+        return False
+    try:
+        raw = os.readlink(link)
+    except OSError:
+        return False
+    raw_path = Path(raw)
+    target = raw_path if raw_path.is_absolute() else (link.parent / raw_path)
+    resolved_target = target.resolve(strict=False)
+    resolved_skill = skill_dir.resolve(strict=False)
+    if is_bin:
+        return resolved_target in {
+            resolved_skill / "scripts" / "idd",
+            resolved_skill / "scripts" / "idd_cli.py",
+        }
+    return resolved_target == resolved_skill
+
+
+def _check_skill_repo_uninstall_safety(skill_dir: Path) -> list[str]:
+    """Return human-readable reasons if `skill_dir` has dirty edits or unpushed commits."""
+    if not (skill_dir / ".git").exists():
+        return []
+    reasons: list[str] = []
+    dirty_proc = subprocess.run(
+        ["git", "-C", str(skill_dir), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+    )
+    if dirty_proc.returncode == 0 and dirty_proc.stdout.strip():
+        reasons.append("存在未提交改动")
+
+    upstream_proc = subprocess.run(
+        ["git", "-C", str(skill_dir), "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        capture_output=True,
+        text=True,
+    )
+    upstream = upstream_proc.stdout.strip() if upstream_proc.returncode == 0 else ""
+    if not upstream and _ref_exists(skill_dir, "refs/remotes/origin/main"):
+        upstream = "origin/main"
+
+    if upstream:
+        ahead_proc = subprocess.run(
+            ["git", "-C", str(skill_dir), "rev-list", "--count", f"{upstream}..HEAD"],
+            capture_output=True,
+            text=True,
+        )
+        if ahead_proc.returncode == 0 and ahead_proc.stdout.strip().isdigit():
+            ahead_count = int(ahead_proc.stdout.strip())
+            if ahead_count > 0:
+                reasons.append(f"本地存在 {ahead_count} 个未推送提交")
+    return reasons
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    skill_dir = get_skill_repo_dir()
+    bin_dir = get_bin_dir()
+    config_dir = get_config_dir()
+    cache_dir = get_cache_dir()
+    home_dir = Path.home()
+
+    candidates: list[tuple[bool, Path]] = [
+        (False, home_dir / ".claude" / "skills" / "idd"),
+        (False, home_dir / ".codex" / "skills" / "idd"),
+        (False, home_dir / ".gemini" / "config" / "skills" / "idd"),
+        (True, bin_dir / "idd"),
+    ]
+    seen_links = {p.parent.resolve(strict=False) / p.name for _, p in candidates}
+    if sys.argv and sys.argv[0]:
+        argv0 = Path(sys.argv[0]).expanduser()
+        argv0_key = argv0.parent.resolve(strict=False) / argv0.name
+        if argv0.is_symlink() and argv0_key not in seen_links:
+            if _symlink_points_to_idd(argv0, skill_dir, is_bin=True):
+                candidates.append((True, argv0))
+                seen_links.add(argv0_key)
+
+    links_to_remove: list[Path] = []
+    warnings: list[str] = []
+    for is_bin, link_path in candidates:
+        if link_path.is_symlink():
+            if _symlink_points_to_idd(link_path, skill_dir, is_bin=is_bin):
+                links_to_remove.append(link_path)
+            else:
+                warnings.append(f"跳过无关软链：{link_path}")
+        elif link_path.exists():
+            warnings.append(f"跳过非软链路径：{link_path}")
+
+    dirs_to_remove: list[tuple[str, Path]] = []
+    kept_items: list[str] = []
+    if cache_dir.exists() or cache_dir.is_symlink():
+        dirs_to_remove.append(("缓存目录", cache_dir))
+    if args.keep_config:
+        if config_dir.exists() or config_dir.is_symlink():
+            kept_items.append(f"保留配置目录：{config_dir}")
+    else:
+        if config_dir.exists() or config_dir.is_symlink():
+            dirs_to_remove.append(("配置目录", config_dir))
+    if skill_dir.exists() or skill_dir.is_symlink():
+        dirs_to_remove.append(("技能仓库", skill_dir))
+
+    for _, d in dirs_to_remove:
+        if _is_unsafe_delete_root(d):
+            raise IddError(f"拒绝删除受保护路径：{d}")
+        if d == skill_dir and not d.is_symlink() and not _looks_like_idd_skill_dir(d):
+            raise IddError(f"目录 `{d}` 不像是 idd 技能目录（缺少 SKILL.md / scripts/idd），已中止卸载。")
+
+    if not links_to_remove and not dirs_to_remove:
+        for warn in warnings:
+            print(f"- {warn}", file=sys.stderr)
+        for item in kept_items:
+            print(f"- {item}")
+        print("未检测到可卸载的 idd 安装文件。")
+        return 0
+
+    safety_reasons: list[str] = []
+    if any(d == skill_dir for _, d in dirs_to_remove) and not skill_dir.is_symlink():
+        safety_reasons = _check_skill_repo_uninstall_safety(skill_dir)
+
+    print("将要移除以下 idd 文件：")
+    for link in links_to_remove:
+        print(f"  - 软链：{link}")
+    for label, d in dirs_to_remove:
+        print(f"  - {label}：{d}")
+    for item in kept_items:
+        print(f"- {item}")
+    for warn in warnings:
+        print(f"- {warn}", file=sys.stderr)
+
+    if args.dry_run:
+        if safety_reasons and not args.force:
+            print(f"提示：技能仓库存在本地状态（{'、'.join(safety_reasons)}），实际卸载需先清理或传入 `--force`。")
+        print("[dry-run] 仅预览，未删除任何文件。")
+        return 0
+
+    if safety_reasons and not args.force:
+        raise IddError(
+            f"技能仓库 `{skill_dir}` {'、'.join(safety_reasons)}，已中止卸载。\n"
+            "请先提交/清理改动，或传入 `idd uninstall --force` 强制移除。"
+        )
+
+    if not args.yes:
+        if not sys.stdin.isatty():
+            raise IddError("当前为非交互环境，请传入 `-y` / `--yes` 确认卸载，或先用 `--dry-run` 预览。")
+        try:
+            answer = input("确认完全卸载 idd？[y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消卸载。")
+            return 1
+        if answer not in {"y", "yes"}:
+            print("已取消卸载。")
+            return 1
+
+    cwd_inside_skill = False
+    try:
+        cwd_resolved = Path.cwd().resolve(strict=False)
+        skill_resolved = skill_dir.resolve(strict=False)
+        cwd_inside_skill = cwd_resolved == skill_resolved or skill_resolved in cwd_resolved.parents
+    except OSError:
+        cwd_inside_skill = False
+
+    for link in links_to_remove:
+        link.unlink(missing_ok=True)
+    for _, d in dirs_to_remove:
+        if d.is_symlink():
+            d.unlink(missing_ok=True)
+        elif d.exists():
+            shutil.rmtree(d)
+
+    print(f"已完成 idd 卸载（共移除 {len(links_to_remove)} 条软链、{len(dirs_to_remove)} 个目录）。")
+    if cwd_inside_skill:
+        print("提示：当前终端所在目录已被移除，请执行 `cd ~` 返回主目录。")
     return 0
 
 
@@ -1917,6 +2124,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_upgrade = sub.add_parser("upgrade", help="检查或立即拉取远端更新并快进同步本地 idd")
     p_upgrade.add_argument("--check", action="store_true", help="仅检查远端是否有更新，不合并")
     p_upgrade.set_defaults(func=cmd_upgrade)
+
+    # uninstall
+    p_uninstall = sub.add_parser("uninstall", help="安全完全卸载 idd（移除软链、技能仓库、配置与缓存）")
+    p_uninstall.add_argument("-y", "--yes", action="store_true", help="跳过交互确认直接卸载")
+    p_uninstall.add_argument("--dry-run", action="store_true", help="仅预览待删除路径，不实际删除")
+    p_uninstall.add_argument("--keep-config", action="store_true", help="保留 ~/.config/idd 配置目录（主机凭据与仓库索引）")
+    p_uninstall.add_argument("--force", action="store_true", help="即使本地技能仓库有未提交改动或未推送提交也强制卸载")
+    p_uninstall.set_defaults(func=cmd_uninstall)
 
     return parser
 

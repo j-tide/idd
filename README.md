@@ -29,28 +29,19 @@
 
 ---
 
-## 快速安装
+## 安装与卸载
 
-前置条件：本机已安装 `git` 与 `python3`（GitHub 仓库需登录 `gh` CLI；自建 GitLab 只需执行一次 `idd auth login` 或设置 `GITLAB_TOKEN`）。
+前置条件：本机已安装 `git` 与 `python3`（GitHub 仓库需登录 `gh`；自建 GitLab 安装后执行 `idd auth login <host> --token <PAT>`）。
 
 ```bash
-git clone https://github.com/j-tide/idd.git "$HOME/.agents/skills/idd"
+# 一键安装（克隆仓库并挂载到 Claude Code / Codex / Antigravity 与 ~/.local/bin/idd）
+curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh
 
-# 1. 挂载 Skill 到 Claude Code、Codex 与 Antigravity（同源软链，一改全生效）
-mkdir -p "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.gemini/config/skills" "$HOME/.local/bin"
-ln -sfn "$HOME/.agents/skills/idd" "$HOME/.claude/skills/idd"
-ln -sfn "$HOME/.agents/skills/idd" "$HOME/.codex/skills/idd"
-ln -sfn "$HOME/.agents/skills/idd" "$HOME/.gemini/config/skills/idd"
-
-# 2. 挂载共用命令 idd（确保 ~/.local/bin 在 PATH 中）
-chmod +x "$HOME/.agents/skills/idd/scripts/idd" "$HOME/.agents/skills/idd/scripts/task_status.py"
-ln -sfn "$HOME/.agents/skills/idd/scripts/idd" "$HOME/.local/bin/idd"
-
-# 3. 若使用自建 GitLab，登录配置一次即可（多级子组/自定义端口全兼容）
-idd auth login gitlab.company.com --token <Personal-Access-Token>
+# 完全卸载（移除所有软链、技能仓库、配置与缓存；不影响业务仓库）
+idd uninstall
 ```
 
-> **内置安全自动更新**：每 6 小时会在后台异步检查一次 `origin/main`（不阻塞命令）；仅当本地技能仓库处于干净的 `main` 分支且无未推送提交时才自动 `ff-only` 同步。也可随时手动运行 `idd upgrade [--check]`。
+> 每 6 小时会在后台安全检查并快进同步 `origin/main`（干净 `main` 分支才更新，也可手动 `idd upgrade [--check]`）。卸载支持 `--dry-run` 预览、`--keep-config` 保留配置与 `-y` 免确认；若 `idd` 已不可用，可执行 `curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh -s -- --uninstall -y` 兜底清理。
 
 ---
 
@@ -91,6 +82,7 @@ idd auth login gitlab.company.com --token <Personal-Access-Token>
 | `idd repo-init [--apply]` | 检查或配置 GitHub / GitLab 为线性 Squash 合入策略且保留分支 |
 | `idd auth login / status / logout` | 管理自建 GitLab / GitHub 企业版主机凭据 |
 | `idd upgrade [--check]` | 检查或立即快进更新本地 `idd`（`idd --version` 查看版本） |
+| `idd uninstall [--dry-run] [--keep-config] [-y]` | 安全完全卸载 `idd`（移除软链、技能仓库、配置与缓存） |
 
 ### 分支规范（零 Git Hooks 侵入）
 
