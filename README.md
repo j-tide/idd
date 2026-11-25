@@ -2,7 +2,7 @@
 
 # IDD
 
-**Issue-Driven Development for Claude Code, Codex, and Antigravity**
+**Run Claude Code, Codex, and Antigravity in parallel without stepping on each other—track every worktree on a local board and hand off to any agent in one click.**
 
 **English** · [简体中文](README.zh-CN.md)
 
@@ -17,84 +17,69 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/board-dark.png" />
     <source media="(prefers-color-scheme: light)" srcset="assets/board-light.png" />
-    <img src="assets/board-light.png" width="100%" alt="IDD live web dashboard across light and dark themes" />
+    <img src="assets/board-dark.png" width="100%" alt="IDD live worktree radar and one-click cross-agent handoff drawer" />
   </picture>
 </p>
 
 ---
 
-## Why IDD
+## What IDD Actually Is
 
-Turn every idea into an **Issue** before touching code, then unify **branches, Git worktrees, `TASK` ledgers, PR/MR summaries, and linear squash merges** into a single zero-dependency Skill + CLI (`idd`) with native support for **GitHub** and **Self-Hosted GitLab**:
+When you run multiple AI coding tools at the same time, two problems show up fast: agents step on each other's files in one working directory, and when one model stalls or hits a quota limit, your context is trapped in that chat window.
 
-- **Issue-first scoping**: Align boundaries and acceptance criteria in chat and create a GitHub / GitLab Issue cleanly without polluting your working tree.
-- **Zero-amnesia cross-tool handoff**: Claude Code, Codex, and Antigravity share the exact same worktree layout and `idd start` contract—switch agents anytime and resume from `TASK/<issue>/` seamlessly.
-- **True parallel worktrees**: Each Issue runs in its own isolated worktree and validated branch while automatically syncing `.worktreeinclude` files (such as `.env`).
-- **Live observability (Web + Terminal, 0 tokens)**: Track active repositories and lock-free worktree pulses (`idd board` Web Kanban / `idd watch` TUI / `idd status` CLI) without interrupting running agents or spending extra tokens.
-- **Always-linear `main`**: Once CI passes, `idd land` rebases onto `main`, writes a structured `TASK` summary into the PR/MR and commit body, removes temporary `TASK/<issue>/` files, and lands via **Squash merge**—while safely keeping branches and worktrees until you run `idd cleanup`.
+**IDD fixes this without locking you into a heavy wrapper UI.** You keep using Claude Code, Codex, and Antigravity natively, while three lightweight pieces work as one loop:
+
+- **Shared Agent Skill (`SKILL.md`)**: Teaches every agent the exact same workflow—anchor work to a GitHub or GitLab **Issue**, develop inside an isolated **Git Worktree**, and record step-by-step progress in `TASK/<issue>/` on disk.
+- **Local Radar & Handoff Launchpad (`idd board`)**: Open a zero-token browser radar showing every active repository, worktree directory, branch, `TASK` progress, and CI status. When you want another agent to take over, click **Copy Handoff Prompt** (or copy the worktree path / branch directly) and paste it into any other agent window.
+- **Deterministic Under-the-Hood CLI (`idd`)**: Handles worktree creation, `.worktreeinclude` (`.env`) syncing, branch-prefix validation, PR/MR summaries, CI log inspection, and linear **Squash merges** onto `main` when agents invoke it—no Git plumbing commands to memorize.
 
 ---
 
-## How It Works
+## How Daily Handoff Works
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/workflow-dark.svg" />
     <source media="(prefers-color-scheme: light)" srcset="assets/workflow-light.svg" />
-    <img src="assets/workflow-light.svg" width="100%" alt="IDD linear issue-driven workflow architecture" />
+    <img src="assets/workflow-light.svg" width="100%" alt="IDD parallel native agents, isolated issue worktrees, and board handoff loop" />
   </picture>
 </p>
 
-Four lightweight steps from idea to linear `main`, with free handoff between AI tools at any point:
+1. **Turn a chat into an Issue anchor**: Align on scope in any agent window and ask it to open an Issue (for example, *"Create an Issue for streaming CSV export"*). Your working tree stays untouched.
+2. **Run multiple agents in parallel**: Tell **Claude Code** *"Start #115"* and **Codex** *"Start #51"*. Each task gets its own physical worktree directory, validated branch, `.env` copy, and `TASK/<issue>/` ledger—zero conflicts.
+3. **Glance at `idd board` & switch agents in one click**: Watch live file diffs, task steps, and CI status without interrupting any agent. Need to swap tools? Click **Copy Handoff** (or copy the worktree path / branch) on the card or drawer, paste into **Antigravity** (or any other agent), and continue right from `TASK/`.
+4. **Land a single linear commit onto `main`**: Once CI is green, tell the active agent *"Land #115"*. IDD rebases onto `main`, writes the `TASK` summary into the PR/MR and commit body, removes temporary `TASK/<issue>/` files, and Squash-merges cleanly—while keeping your branch and worktree safe until you run `idd cleanup`.
 
-1. **Create an Issue**: Discuss scope in any agent window and ask it to open an Issue (or run `idd issue create --title "..."`).
-2. **Start or hand off**: Run `idd start <issue#>` in any tool—creates an isolated worktree and syncs `.env` on first run, or idempotently reuses the existing worktree and `TASK/` progress when another tool takes over.
-3. **Break down `TASK`, test for real, open PR / MR**: Follow [SKILL.md](SKILL.md) to split `TASK/<issue>/TASK-XX.md`, verify and commit each step (`idd sync` pushes a live checklist back to the Issue body), then run `idd pr` (or `idd mr` on GitLab). If CI fails, run `idd ci --logs` to inspect failing job logs.
-4. **Land linearly onto `main`**: Once verified and CI is green, run `idd land <issue#>` to rebase, summarize `TASK` records, strip `TASK/<issue>/`, and Squash-merge into `main`. Feature branches and worktrees are preserved by default.
-
-*(Recommended once per repository: run `idd repo-init --apply` to enforce Squash-only linear merges on GitHub or `ff` + `squash` on GitLab while keeping branches.)*
+*(Tip: run `idd repo-init --apply` once per repository to enforce Squash-only linear merges on GitHub or `ff` + `squash` on GitLab while preserving branches.)*
 
 ---
 
-## Live Observability (Web & Terminal)
-
-`idd` automatically indexes active local repositories in `~/.config/idd/repos.json` and inspects worktree pulse metrics (active task, dirty diff stats, heartbeat, and stall detection) with zero token overhead:
-
-- **`idd board` / `idd ui`**: Offline single-page Web dashboard with Kanban, Repo, and List views, light/dark themes, and 2-second pulse polling.
-- **`idd watch`**: Live terminal monitor refreshing local worktree pulse every 2 seconds and remote PR/MR CI on a 30-second cache.
-- **`idd status`**: One-shot summary card in the terminal (automatically switches to global mode outside a Git repo).
-
-<p align="center">
-  <img src="assets/terminal-status.png" width="88%" alt="idd status --global terminal output" />
-</p>
-
----
-
-## Install & Uninstall
+## Quick Start
 
 Prerequisites: `git` and `python3` (`gh` authenticated for GitHub; `idd auth login <host> --token <PAT>` for self-hosted GitLab).
 
 ```bash
-# Install or repair skill links (Claude Code / Codex / Antigravity) and ~/.local/bin/idd
+# 1. Install the shared skill for Claude Code, Codex, and Antigravity + global `idd` CLI
 curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh
 
-# Cleanly remove all symlinks, skill repository, config, and cache (never touches project repos)
-idd uninstall
+# 2. Open the local worktree radar & 1-click handoff board
+idd board
 ```
 
-> `idd` safely checks `origin/main` in the background every 6 hours and fast-forwards only when your local skill repo is on a clean `main` branch (or run `idd upgrade [--check]`). `idd uninstall` supports `--dry-run`, `--keep-config`, and `-y`; if the CLI is unavailable, run `curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh -s -- --uninstall -y`.
+> `idd` safely checks `origin/main` in the background every 6 hours and fast-forwards only when your local skill repo is on a clean `main` branch (or run `idd upgrade [--check]`). Run `idd uninstall` (or `curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh -s -- --uninstall -y`) anytime for clean removal without touching your project repositories.
 
 ---
 
-## CLI Reference & Branch Conventions
+<details>
+<summary><strong>CLI Reference &amp; Branch Naming Rules</strong> (mostly called automatically by Agents, or runnable by hand)</summary>
 
 ### Common Commands
 
 | Command | Description |
 | :--- | :--- |
-| `idd board` / `idd ui` | Start the local offline Web dashboard (2s live worktree pulse across all repos) |
+| `idd board` / `idd ui` | Start the offline Web radar & 1-click handoff board (2s live worktree pulse) |
 | `idd watch [--current-only]` | Live terminal monitor for global or single-repo worktrees, tasks, and CI |
-| `idd status [-g\|--global]` | Aggregate Open Issues, `TASK` progress, pulse, and PR/MR CI in one view |
+| `idd status [-g\|--global]` | One-shot terminal summary of Open Issues, `TASK` progress, pulse, and PR/MR CI |
 | `idd repos [list\|add\|remove\|prune]` | Inspect or manage the global monitored repository index (`~/.config/idd/repos.json`) |
 | `idd issue create --title "..."` | Create a GitHub or GitLab Issue |
 | `idd start <issue# \| slug>` | Create or idempotently reuse an isolated worktree, sync `.worktreeinclude`, and validate branch naming |
@@ -114,24 +99,18 @@ Branches and commit `<type>` tags share **8 standard prefixes** (`<type>/<issue#
 
 `feat` · `fix` · `refactor` · `perf` · `docs` · `test` · `ci` · `chore`
 
-> `idd` blocks non-standard prefixes such as `codex/*`, `claude/*`, `agy/*`, `feature/*`, `bugfix/*`, and `tmp/*` with an exact `git branch -m` fix command—without installing any Git hooks in your repositories.
+`idd` rejects tool-specific or noisy prefixes (`codex/*`, `claude/*`, `agy/*`, `feature/*`, `bugfix/*`, `tmp/*`) with an exact `git branch -m` fix command—without writing any Git hooks into your repositories.
+
+</details>
 
 ---
 
 ## Development, Testing & Releases
 
-Zero external dependencies—run the full Python standard-library test suite directly, with [SKILL.md](SKILL.md) (`metadata.version`) as the single source of truth:
+Zero external dependencies—run the Python standard-library test suite directly, with [SKILL.md](SKILL.md) (`metadata.version`) as the single source of truth:
 
 ```bash
-# Run all unit tests
 python3 -m unittest discover -s tests -v
-
-# Verify version consistency across SKILL.md, READMEs, and `idd --version`
 python3 scripts/release.py --check
-
-# Release milestone: bump version, run full tests, commit, and create annotated tag
-python3 scripts/release.py minor --tag
-git push origin main v0.7.0
+python3 scripts/release.py patch --tag && git push origin main v0.0.2
 ```
-
-> Pushing a `vX.Y.Z` tag triggers GitHub Actions to validate versions, run the full test suite, and publish a GitHub Release, while end users continue syncing `origin/main` safely via `idd upgrade`.

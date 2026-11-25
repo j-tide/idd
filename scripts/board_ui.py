@@ -24,996 +24,1028 @@ from version import get_version  # noqa: E402
 
 
 BOARD_HTML = r"""<!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>IDD 实时开发监控看板</title>
   <style>
     :root {
-      --bg: #0b0b0e;
-      --bg-elev: rgba(11, 11, 14, 0.84);
-      --bg-surface: #111115;
-      --bg-col: rgba(255, 255, 255, 0.025);
-      --bg-card: #131317;
-      --bg-card-hover: #19191f;
-      --bg-pill-active: rgba(255, 255, 255, 0.085);
-      --bg-inset: rgba(255, 255, 255, 0.035);
-      --border: rgba(255, 255, 255, 0.07);
-      --border-faint: rgba(255, 255, 255, 0.048);
-      --border-strong: rgba(255, 255, 255, 0.14);
-      --text: #f4f4f5;
-      --text-dim: #a1a1aa;
-      --text-faint: #71717a;
-      --accent: #38bdf8;
-      --accent-soft: rgba(56, 189, 248, 0.12);
-      --accent-ring: rgba(56, 189, 248, 0.32);
-      --green: #34d399;
-      --green-soft: rgba(52, 211, 153, 0.12);
-      --green-ring: rgba(52, 211, 153, 0.32);
-      --yellow: #fbbf24;
-      --yellow-soft: rgba(251, 191, 36, 0.12);
-      --yellow-ring: rgba(251, 191, 36, 0.32);
-      --orange: #fb923c;
-      --orange-soft: rgba(251, 146, 60, 0.13);
-      --orange-ring: rgba(251, 146, 60, 0.34);
-      --red: #fb7185;
-      --red-soft: rgba(251, 113, 133, 0.13);
-      --red-ring: rgba(251, 113, 133, 0.34);
-      --purple: #c084fc;
-      --purple-soft: rgba(192, 132, 252, 0.12);
-      --purple-ring: rgba(192, 132, 252, 0.32);
-      --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
-      --shadow-float: 0 20px 50px rgba(0, 0, 0, 0.58);
-      --radius: 11px;
-      --radius-sm: 7px;
+      --bg-app: #111417;
+      --bg-sidebar: #161a1e;
+      --bg-card: #1c2025;
+      --bg-card-hover: #22272d;
+      --bg-well: #14171b;
+      --bg-input: rgba(255, 255, 255, 0.06);
+      --bg-tile: rgba(255, 255, 255, 0.045);
+      --bg-tile-active: rgba(255, 255, 255, 0.11);
+      --bg-row-active: rgba(255, 255, 255, 0.068);
+      --bg-inset: rgba(255, 255, 255, 0.04);
+      --bg-col: rgba(255, 255, 255, 0.028);
+      --border: rgba(255, 255, 255, 0.072);
+      --border-subtle: rgba(255, 255, 255, 0.05);
+      --border-strong: rgba(255, 255, 255, 0.15);
+      --text: #f3f4f6;
+      --text-dim: #9ca3af;
+      --text-faint: #6b7280;
+      --accent: #60a5fa;
+      --accent-soft: rgba(96, 165, 250, 0.12);
+      --accent-ring: rgba(96, 165, 250, 0.30);
+      --green: #4ade80;
+      --green-soft: rgba(74, 222, 128, 0.12);
+      --amber: #fbbf24;
+      --amber-soft: rgba(251, 191, 36, 0.12);
+      --red: #f87171;
+      --red-soft: rgba(248, 113, 113, 0.13);
+      --purple: #a78bfa;
+      --purple-soft: rgba(167, 139, 250, 0.13);
+      --bar-empty: rgba(255, 255, 255, 0.08);
+      --bar-fill: #f3f4f6;
+      --bar-muted: rgba(255, 255, 255, 0.28);
+      --shadow-panel: 0 20px 50px rgba(0, 0, 0, 0.55);
+      --radius-shell: 16px;
+      --radius-card: 16px;
+      --radius-row: 11px;
+      --radius-sm: 8px;
       --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
       --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     }
 
     html[data-theme="light"] {
-      --bg: #f6f7f9;
-      --bg-elev: rgba(246, 247, 249, 0.86);
-      --bg-surface: #ffffff;
-      --bg-col: #eef0f4;
+      --bg-app: #eceef2;
+      --bg-sidebar: #f6f7f9;
       --bg-card: #ffffff;
-      --bg-card-hover: #fbfcfd;
-      --bg-pill-active: #ffffff;
-      --bg-inset: #f3f5f8;
-      --border: rgba(15, 23, 42, 0.075);
-      --border-faint: rgba(15, 23, 42, 0.055);
+      --bg-card-hover: #f9fafb;
+      --bg-well: #f4f5f7;
+      --bg-input: rgba(15, 23, 42, 0.055);
+      --bg-tile: rgba(15, 23, 42, 0.04);
+      --bg-tile-active: rgba(15, 23, 42, 0.09);
+      --bg-row-active: rgba(15, 23, 42, 0.055);
+      --bg-inset: rgba(15, 23, 42, 0.04);
+      --bg-col: rgba(15, 23, 42, 0.03);
+      --border: rgba(15, 23, 42, 0.08);
+      --border-subtle: rgba(15, 23, 42, 0.055);
       --border-strong: rgba(15, 23, 42, 0.16);
-      --text: #18181b;
-      --text-dim: #52525b;
-      --text-faint: #71717a;
+      --text: #111827;
+      --text-dim: #4b5563;
+      --text-faint: #6b7280;
       --accent: #0284c7;
-      --accent-soft: rgba(2, 132, 199, 0.09);
+      --accent-soft: rgba(2, 132, 199, 0.10);
       --accent-ring: rgba(2, 132, 199, 0.28);
       --green: #059669;
-      --green-soft: rgba(5, 150, 105, 0.09);
-      --green-ring: rgba(5, 150, 105, 0.26);
-      --yellow: #d97706;
-      --yellow-soft: rgba(217, 119, 6, 0.09);
-      --yellow-ring: rgba(217, 119, 6, 0.26);
-      --orange: #ea580c;
-      --orange-soft: rgba(234, 88, 12, 0.09);
-      --orange-ring: rgba(234, 88, 12, 0.28);
-      --red: #e11d48;
-      --red-soft: rgba(225, 29, 72, 0.09);
-      --red-ring: rgba(225, 29, 72, 0.28);
+      --green-soft: rgba(5, 150, 105, 0.10);
+      --amber: #d97706;
+      --amber-soft: rgba(217, 119, 6, 0.10);
+      --red: #dc2626;
+      --red-soft: rgba(220, 38, 38, 0.10);
       --purple: #7c3aed;
-      --purple-soft: rgba(124, 58, 237, 0.08);
-      --purple-ring: rgba(124, 58, 237, 0.25);
-      --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 4px rgba(15, 23, 42, 0.03);
-      --shadow-float: 0 20px 50px rgba(15, 23, 42, 0.14);
+      --purple-soft: rgba(124, 58, 237, 0.10);
+      --bar-empty: rgba(15, 23, 42, 0.08);
+      --bar-fill: #111827;
+      --bar-muted: rgba(15, 23, 42, 0.26);
+      --shadow-panel: 0 20px 50px rgba(15, 23, 42, 0.14);
     }
 
     * { box-sizing: border-box; }
-    html, body { min-height: 100%; }
+    html, body { height: 100%; margin: 0; }
     body {
-      margin: 0;
       font-family: var(--sans);
       font-size: 13px;
-      line-height: 1.5;
+      line-height: 1.48;
       color: var(--text);
-      background-color: var(--bg);
+      background: var(--bg-app);
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
     }
 
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    code, pre, .mono { font-family: var(--mono); }
+    a { color: inherit; text-decoration: none; }
+    button { font-family: inherit; }
     .num { font-variant-numeric: tabular-nums; }
-    svg { display: block; flex-shrink: 0; }
+    .mono { font-family: var(--mono); }
 
-    ::-webkit-scrollbar { width: 7px; height: 7px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
-
-    /* Minimal Topbar */
-    .topbar-wrap {
-      position: sticky;
-      top: 0;
-      z-index: 30;
-      background: var(--bg-elev);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
-      border-bottom: 1px solid var(--border);
-    }
-    .topbar {
-      max-width: 1480px;
-      margin: 0 auto;
-      padding: 9px 24px;
-      min-height: 50px;
+    /* Desktop Inset App Shell */
+    .app-shell {
       display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
       gap: 12px;
+      padding: 12px;
+      min-height: 100vh;
+      max-width: 1640px;
+      margin: 0 auto;
+      align-items: stretch;
     }
-    .brand {
+
+    /* Collapsible Left Inset Sidebar */
+    .sidebar {
+      width: 248px;
+      flex-shrink: 0;
+      background: var(--bg-sidebar);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-shell);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: width 0.16s ease, padding 0.16s ease;
+    }
+    body.sidebar-collapsed .sidebar {
+      width: 58px;
+      padding: 10px 9px;
+      align-items: center;
+    }
+    body.sidebar-collapsed .hide-collapsed {
+      display: none !important;
+    }
+    .show-collapsed { display: none; }
+    body.sidebar-collapsed .show-collapsed { display: inline-flex; }
+
+    /* Sidebar Search */
+    .sb-search {
+      position: relative;
       display: flex;
       align-items: center;
-      gap: 9px;
-      min-width: 0;
+      background: var(--bg-input);
+      border: 1px solid transparent;
+      border-radius: 10px;
+      height: 36px;
+      padding: 0 10px;
+      gap: 8px;
+      transition: border-color 0.14s, background 0.14s;
     }
-    .logo-mark {
-      width: 26px;
-      height: 26px;
-      border-radius: 7px;
-      background: linear-gradient(135deg, #10b981 0%, #0ea5e9 100%);
-      color: #fff;
+    .sb-search:focus-within { border-color: var(--border-strong); }
+    .sb-search-ic {
+      color: var(--text-dim);
       display: grid;
       place-items: center;
-    }
-    .brand h1 {
-      margin: 0;
-      font-size: 14.5px;
-      font-weight: 620;
-      letter-spacing: -0.015em;
-    }
-    .brand-ver {
-      font-family: var(--mono);
-      font-size: 11.5px;
-      color: var(--text-faint);
-    }
-    .brand-sep { color: var(--border-strong); font-size: 12px; }
-    .brand-scope {
-      font-size: 12px;
-      color: var(--text-dim);
-      font-weight: 500;
-    }
-
-    .controls {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-    .live-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 11.5px;
-      padding: 4px 10px;
-      border-radius: 999px;
-      background: var(--bg-inset);
-      color: var(--text-dim);
-      margin-right: 4px;
-    }
-    .live-pill.is-live { color: var(--green); background: var(--green-soft); }
-    .live-pill.is-paused { color: var(--yellow); background: var(--yellow-soft); }
-    .live-pill.is-err { color: var(--red); background: var(--red-soft); }
-    .live-pill .sep { opacity: 0.45; }
-
-    .dot-pulse {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--green);
-      display: inline-block;
-      box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.65);
-      animation: pulse 2s infinite;
-    }
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); }
-      70% { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .spin svg { animation: spin 0.8s linear infinite; }
-
-    /* Quiet Ghost Buttons */
-    .btn {
-      appearance: none;
-      border: 1px solid transparent;
-      background: transparent;
-      color: var(--text-dim);
-      border-radius: var(--radius-sm);
-      height: 30px;
-      padding: 0 10px;
-      font-family: var(--sans);
-      font-size: 12px;
-      font-weight: 500;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      transition: background 0.14s, color 0.14s, border-color 0.14s;
-      white-space: nowrap;
-    }
-    .btn:hover {
-      background: var(--bg-inset);
-      color: var(--text);
-    }
-    .btn-primary { color: var(--accent); }
-    .btn-primary:hover { background: var(--accent-soft); color: var(--accent); }
-    .btn-outline {
-      border-color: var(--border);
-      background: var(--bg-card);
-    }
-    .btn-outline:hover { border-color: var(--border-strong); background: var(--bg-card-hover); }
-    .btn-xs {
-      height: 24px;
-      padding: 0 7px;
-      font-size: 11px;
-      border-radius: 6px;
-    }
-    .btn-icon-only {
-      width: 26px;
-      height: 24px;
-      padding: 0;
-      justify-content: center;
-    }
-    .btn.copied {
-      color: var(--green);
-      background: var(--green-soft);
-    }
-
-    /* Main Container */
-    .container {
-      max-width: 1480px;
-      margin: 0 auto;
-      padding: 16px 24px 40px;
-    }
-
-    /* Unified Telemetry Strip (Replaces 5 giant boxes) */
-    .telemetry-strip {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: stretch;
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow-card);
-      overflow: hidden;
-    }
-    .metric-cell {
-      flex: 1 1 160px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 10px 16px;
-      border: 0;
-      border-right: 1px solid var(--border);
-      background: transparent;
-      color: inherit;
-      text-align: left;
-      font-family: var(--sans);
-      transition: background 0.14s;
-    }
-    .metric-cell:last-child { border-right: 0; }
-    .metric-cell.clickable { cursor: pointer; }
-    .metric-cell.clickable:hover { background: var(--bg-inset); }
-    .metric-cell.is-filtered {
-      background: var(--accent-soft);
-      box-shadow: inset 0 -2px 0 var(--accent);
-    }
-    .metric-cell.is-warn.is-filtered {
-      background: var(--orange-soft);
-      box-shadow: inset 0 -2px 0 var(--orange);
-    }
-    .metric-left { min-width: 0; }
-    .metric-label {
-      font-size: 11.5px;
-      color: var(--text-dim);
-      font-weight: 500;
-    }
-    .metric-sub {
-      font-size: 11px;
-      color: var(--text-faint);
-      margin-top: 1px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .metric-sub.live { color: var(--green); }
-    .metric-sub.warn { color: var(--orange); }
-    .metric-val {
-      font-size: 20px;
-      font-weight: 650;
-      letter-spacing: -0.02em;
-      color: var(--text);
       flex-shrink: 0;
     }
-    .metric-cell.is-warn .metric-val { color: var(--orange); }
-    @media (max-width: 820px) {
-      .metric-cell {
-        flex: 1 1 48%;
-        border-bottom: 1px solid var(--border);
-      }
-    }
-
-    /* Borderless Airy Control Bar */
-    .toolbar {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      margin: 14px 0 12px;
-    }
-    .pills {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 4px;
-      align-items: center;
-    }
-    .pill {
-      appearance: none;
-      font-family: var(--sans);
-      border: 1px solid transparent;
+    .sb-search input {
+      width: 100%;
+      min-width: 0;
+      border: 0;
       background: transparent;
-      color: var(--text-dim);
-      padding: 5px 10px;
-      border-radius: var(--radius-sm);
-      font-size: 12px;
-      font-weight: 500;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      transition: background 0.14s, color 0.14s, border-color 0.14s;
-    }
-    .pill:hover { background: var(--bg-inset); color: var(--text); }
-    .pill.active {
-      background: var(--bg-pill-active);
-      border-color: var(--border);
       color: var(--text);
-      font-weight: 600;
-      box-shadow: var(--shadow-card);
-    }
-    .pill.alert-pill { color: var(--orange); }
-    .pill.alert-pill.active {
-      background: var(--orange-soft);
-      border-color: var(--orange-ring);
-      color: var(--orange);
-    }
-    .pill-cnt {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--text-faint);
-    }
-    .pill.active .pill-cnt { color: var(--text-dim); }
-
-    .toolbar-right {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 10px;
-    }
-
-    /* Custom Compact Switch */
-    .switch-label {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      font-size: 12px;
-      color: var(--text-dim);
-      cursor: pointer;
-      user-select: none;
-      padding: 4px 6px;
-      border-radius: 6px;
-    }
-    .switch-label:hover { color: var(--text); }
-    .switch-label input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-    .switch-track {
-      width: 28px;
-      height: 16px;
-      border-radius: 999px;
-      background: var(--bg-inset);
-      border: 1px solid var(--border-strong);
-      position: relative;
-      transition: background 0.15s, border-color 0.15s;
-    }
-    .switch-thumb {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--text-dim);
-      position: absolute;
-      top: 2px;
-      left: 2px;
-      transition: transform 0.15s, background 0.15s;
-    }
-    .switch-label input:checked + .switch-track {
-      background: var(--accent-soft);
-      border-color: var(--accent);
-    }
-    .switch-label input:checked + .switch-track .switch-thumb {
-      transform: translateX(12px);
-      background: var(--accent);
-    }
-
-    /* Minimal Search Box */
-    .search-wrap {
-      position: relative;
-      display: flex;
-      align-items: center;
-    }
-    .search-icon {
-      position: absolute;
-      left: 9px;
-      color: var(--text-faint);
-      pointer-events: none;
-    }
-    .search-box {
-      border: 1px solid var(--border);
-      background: var(--bg-surface);
-      color: var(--text);
-      border-radius: var(--radius-sm);
-      height: 30px;
-      padding: 0 28px 0 28px;
       font-family: var(--sans);
-      font-size: 12px;
-      width: 210px;
+      font-size: 12.5px;
       outline: none;
-      transition: border-color 0.14s, width 0.18s;
     }
-    .search-box:focus {
-      border-color: var(--border-strong);
-      width: 240px;
-    }
-    .search-box::-webkit-search-cancel-button {
-      -webkit-appearance: none;
-      appearance: none;
-    }
-    .search-kbd {
-      position: absolute;
-      right: 7px;
+    .sb-search input::placeholder { color: var(--text-faint); }
+    .sb-search input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+    .sb-kbd {
       font-family: var(--mono);
       font-size: 10px;
+      color: var(--text-faint);
       padding: 1px 5px;
       border-radius: 4px;
       border: 1px solid var(--border);
-      color: var(--text-faint);
-      pointer-events: none;
+      flex-shrink: 0;
     }
-    .search-clear {
-      position: absolute;
-      right: 6px;
+    .sb-search-clear {
       border: 0;
       background: transparent;
       color: var(--text-faint);
       cursor: pointer;
       padding: 2px;
       display: none;
-      border-radius: 4px;
+      place-items: center;
     }
-    .search-clear:hover { color: var(--text); }
-    .search-wrap.has-value .search-clear { display: grid; place-items: center; }
-    .search-wrap.has-value .search-kbd,
-    .search-wrap:focus-within .search-kbd { display: none; }
+    .sb-search.has-value .sb-search-clear { display: grid; }
+    .sb-search.has-value .sb-kbd,
+    .sb-search:focus-within .sb-kbd { display: none; }
 
-    /* Segmented View Switcher */
-    .seg {
-      display: inline-flex;
-      padding: 2px;
-      gap: 2px;
-      background: var(--bg-inset);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
+    body.sidebar-collapsed .sb-search {
+      width: 38px;
+      height: 38px;
+      padding: 0;
+      justify-content: center;
+      cursor: pointer;
     }
-    .seg button {
+
+    /* Sidebar Filter Rows (Agents / Alerts / Unstarted) */
+    .sb-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-top: 4px;
+      width: 100%;
+    }
+    body.sidebar-collapsed .sb-nav {
+      align-items: center;
+      gap: 4px;
+    }
+    .sb-item {
+      appearance: none;
+      width: 100%;
       border: 0;
       background: transparent;
       color: var(--text-dim);
-      height: 24px;
-      padding: 0 9px;
-      font-family: var(--sans);
-      font-size: 12px;
-      font-weight: 500;
-      border-radius: 5px;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      transition: background 0.14s, color 0.14s;
-    }
-    .seg button:hover { color: var(--text); }
-    .seg button.active {
-      background: var(--bg-surface);
-      color: var(--text);
-      box-shadow: var(--shadow-card);
-    }
-
-    /* 4-Column Kanban Fitted Cleanly Above the Fold */
-    .kanban {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(220px, 1fr));
-      gap: 12px;
-      align-items: start;
-    }
-    @media (max-width: 960px) {
-      .kanban { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
-    }
-    @media (max-width: 600px) {
-      .kanban { grid-template-columns: 1fr; }
-    }
-    .column {
-      background: var(--bg-col);
-      border: 1px solid var(--border-faint);
-      border-radius: 12px;
-      padding: 10px;
-      min-height: 220px;
-    }
-    .col-hdr {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 2px 4px 9px;
-      margin-bottom: 8px;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--text-dim);
-    }
-    .col-title {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      color: var(--text);
-    }
-    .col-count {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--text-faint);
-    }
-    .card-stack {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .col-empty {
-      padding: 22px 10px;
-      text-align: center;
-      color: var(--text-faint);
-      font-size: 12px;
-    }
-
-    .mini-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      display: inline-block;
-      flex-shrink: 0;
-    }
-    .dot-green { background: var(--green); }
-    .dot-amber { background: var(--yellow); }
-    .dot-orange { background: var(--orange); }
-    .dot-red { background: var(--red); }
-    .dot-blue { background: var(--accent); }
-    .dot-muted { background: var(--text-faint); }
-
-    /* Ultra-Clean Zero-Nested-Box Cards */
-    .card {
-      position: relative;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
       border-radius: 9px;
-      padding: 11px 12px;
-      box-shadow: var(--shadow-card);
-      cursor: pointer;
-      transition: border-color 0.14s, background 0.14s;
-      overflow: hidden;
-    }
-    .card::before {
-      content: "";
-      position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      width: 3px;
-      background: transparent;
-    }
-    .card:hover {
-      border-color: var(--border-strong);
-      background: var(--bg-card-hover);
-    }
-    .card.is-selected {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 1px var(--accent-ring), var(--shadow-card);
-    }
-    .card.is-live::before { background: var(--green); }
-    .card.is-stalled::before { background: var(--orange); }
-    .card.is-fail::before { background: var(--red); }
-
-    .card-top {
+      height: 32px;
+      padding: 0 8px;
+      font-size: 12.5px;
+      font-weight: 500;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      min-height: 18px;
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+      position: relative;
     }
-    .card-meta {
+    .sb-item:hover { background: var(--bg-tile); color: var(--text); }
+    .sb-item.active { background: var(--bg-tile-active); color: var(--text); }
+    .sb-item-left {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
+      gap: 9px;
       min-width: 0;
-      font-size: 11.5px;
-      color: var(--text-faint);
     }
-    .repo-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      max-width: 130px;
+    .sb-item-left span {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      color: var(--text-dim);
     }
-    .id-link {
+    .sb-meta {
       font-family: var(--mono);
-      font-weight: 600;
-      color: var(--text-dim);
       font-size: 11.5px;
+      color: var(--text-faint);
+      flex-shrink: 0;
     }
-    .id-link:hover { color: var(--accent); }
+    .sb-meta.live { color: var(--green); }
+    .sb-meta.warn { color: var(--amber); }
+    .sb-meta.danger { color: var(--red); }
 
+    body.sidebar-collapsed .sb-item {
+      width: 38px;
+      height: 36px;
+      padding: 0;
+      justify-content: center;
+    }
+
+    .corner-dot {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      display: none;
+    }
+    .corner-dot.warn { background: var(--amber); }
+    .corner-dot.danger { background: var(--red); }
+    body.sidebar-collapsed .corner-dot.show { display: block; }
+
+    /* 4 Squircle View Tiles */
+    .sb-tiles {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin-top: 8px;
+      width: 100%;
+    }
+    body.sidebar-collapsed .sb-tiles {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .sb-tile {
+      appearance: none;
+      height: 36px;
+      border-radius: 10px;
+      border: 1px solid transparent;
+      background: var(--bg-tile);
+      color: var(--text-dim);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      position: relative;
+      transition: background 0.14s, color 0.14s, border-color 0.14s;
+    }
+    body.sidebar-collapsed .sb-tile { width: 38px; height: 38px; }
+    .sb-tile:hover { background: var(--bg-tile-active); color: var(--text); }
+    .sb-tile.active {
+      background: var(--bg-tile-active);
+      border-color: var(--border-strong);
+      color: var(--text);
+    }
+    .tile-dot {
+      position: absolute;
+      top: 5px;
+      right: 5px;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--green);
+      display: none;
+    }
+    .tile-dot.show { display: block; }
+
+    .sb-divider {
+      height: 1px;
+      width: 100%;
+      background: var(--border-subtle);
+      margin: 6px 0;
+    }
+
+    .sb-section-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 6px 3px;
+      font-size: 11px;
+      font-weight: 560;
+      color: var(--text-faint);
+      letter-spacing: 0.02em;
+    }
+
+    .sb-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      width: 100%;
+    }
+    body.sidebar-collapsed .sb-list { align-items: center; gap: 4px; }
+
+    .sb-repo-badge {
+      width: 22px;
+      height: 22px;
+      border-radius: 6px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+      background: var(--bg-tile-active);
+      color: var(--text);
+    }
+    .sb-repo-badge.is-github { background: rgba(243, 244, 246, 0.10); color: var(--text); }
+    .sb-repo-badge.is-gitlab { background: rgba(251, 146, 60, 0.14); color: #fb923c; }
+    .sb-repo-badge.is-all { background: var(--accent-soft); color: var(--accent); }
+    html[data-theme="light"] .sb-repo-badge.is-github { background: rgba(15, 23, 42, 0.08); color: #111827; }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      display: inline-block;
+      background: var(--text-faint);
+    }
+    .status-dot.active { background: var(--green); }
+    .status-dot.warm { background: var(--amber); }
+    .status-dot.fail { background: var(--red); }
+    .status-dot.quiet { background: var(--text-faint); }
+
+    .sb-wt-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+      background: var(--bg-tile);
+      color: var(--text-dim);
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .sb-item.active .sb-wt-icon {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .sb-footer {
+      margin-top: auto;
+      padding-top: 10px;
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      width: 100%;
+    }
+    body.sidebar-collapsed .sb-footer {
+      justify-content: center;
+    }
+
+    /* Main Workspace Column */
+    .workspace {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .ws-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 40px;
+      padding: 2px 4px;
+    }
+    .ws-title-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .icon-btn {
+      appearance: none;
+      width: 32px;
+      height: 32px;
+      border-radius: 9px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-dim);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .icon-btn:hover { background: var(--bg-tile); color: var(--text); border-color: var(--border); }
+
+    .ws-logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 9px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      display: grid;
+      place-items: center;
+      color: var(--text);
+      flex-shrink: 0;
+    }
+    .ws-title {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 620;
+      letter-spacing: -0.02em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .ws-scope {
+      font-size: 11.5px;
+      color: var(--text-faint);
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--bg-tile);
+      border: 1px solid var(--border-subtle);
+      flex-shrink: 0;
+    }
+
+    .ws-controls {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-shrink: 0;
+    }
+
+    .btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      color: var(--text-dim);
+      border-radius: var(--radius-sm);
+      height: 30px;
+      padding: 0 10px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .btn:hover { background: var(--bg-card-hover); color: var(--text); border-color: var(--border-strong); }
+    .btn-sm { height: 26px; padding: 0 9px; font-size: 11.5px; border-radius: 7px; }
+    .btn-xs { height: 24px; padding: 0 8px; font-size: 11px; border-radius: 6px; }
+    .btn-icon-only { width: 26px; height: 26px; padding: 0; justify-content: center; }
+    .btn-primary {
+      background: var(--accent-soft);
+      border-color: var(--accent-ring);
+      color: var(--accent);
+      font-weight: 580;
+    }
+    .btn-primary:hover { background: rgba(96, 165, 250, 0.20); color: var(--accent); }
+    .btn.copied {
+      background: var(--green-soft) !important;
+      border-color: rgba(74, 222, 128, 0.35) !important;
+      color: var(--green) !important;
+    }
+    .btn.spin svg { animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 30px;
+      padding: 0 10px;
+      border-radius: var(--radius-sm);
+      font-size: 11.5px;
+      font-weight: 500;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+    }
+    .live-pill.is-live .dot-pulse { background: var(--green); animation: pulse 2s infinite; }
+    .live-pill.is-err { color: var(--red); border-color: rgba(248, 113, 113, 0.32); }
+    .dot-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.45; }
+    }
+
+    /* Bento Telemetry Row (Matches Uptime / CPU Reference Cards) */
+    .telemetry-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    @media (max-width: 900px) {
+      .telemetry-grid { grid-template-columns: 1fr; }
+    }
+    .bento-metric {
+      appearance: none;
+      text-align: left;
+      width: 100%;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      padding: 14px 18px 13px;
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      transition: border-color 0.14s, background 0.14s;
+    }
+    button.bento-metric { cursor: pointer; }
+    button.bento-metric:hover { background: var(--bg-card-hover); border-color: var(--border-strong); }
+    .bento-metric.is-filtered { border-color: var(--accent-ring); }
+    .bento-metric.is-warn { border-color: var(--border); }
+
+    .metric-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-dim);
+    }
+    .metric-hdr-left {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .metric-val-row {
+      margin-top: 6px;
+      display: flex;
+      align-items: baseline;
+      gap: 5px;
+    }
+    .metric-num {
+      font-size: 28px;
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      line-height: 1.08;
+      color: var(--text);
+    }
+    .metric-unit {
+      font-size: 13.5px;
+      font-weight: 480;
+      color: var(--text-dim);
+    }
+
+    /* Chunky Segmented Pill Bar */
+    .seg-bar {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 6px;
+      margin: 12px 0 9px;
+    }
+    .seg-pill {
+      height: 14px;
+      border-radius: 3.5px;
+      background: var(--bar-empty);
+    }
+    .seg-pill.on { background: var(--bar-fill); }
+    .seg-pill.dim { background: var(--bar-muted); }
+    .seg-pill.green { background: var(--green); }
+    .seg-pill.amber { background: var(--amber); }
+    .seg-pill.red { background: var(--red); }
+
+    .metric-sub {
+      font-size: 11.5px;
+      color: var(--text-faint);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .metric-sub.live { color: var(--green); }
+    .metric-sub.warn { color: var(--amber); }
+
+    /* Bento Card Container (Services & Logs Aesthetic) */
+    .bento-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      padding: 15px 16px;
+    }
+    .bento-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .bento-title-row {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      min-width: 0;
+    }
+    .bento-title {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .bento-sub {
+      font-size: 12px;
+      color: var(--text-faint);
+    }
+    .bento-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    /* Services-Style Worktree Rows */
+    .wt-list {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .wt-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 10px 12px;
+      border-radius: var(--radius-row);
+      cursor: pointer;
+      transition: background 0.12s;
+      border: 1px solid transparent;
+    }
+    .wt-row:hover { background: var(--bg-tile); }
+    .wt-row.is-selected {
+      background: var(--bg-row-active);
+      border-color: var(--border-subtle);
+    }
+    .wt-row-left {
+      display: flex;
+      align-items: flex-start;
+      gap: 11px;
+      min-width: 0;
+      flex: 1;
+    }
+    .wt-row-dot { margin-top: 6px; }
+    .wt-row-main { min-width: 0; flex: 1; }
+    .wt-row-top {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+    .wt-row-title {
+      font-size: 13.5px;
+      font-weight: 560;
+      color: var(--text);
+    }
+    .wt-row-sub {
+      margin-top: 3px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--text-dim);
+    }
+    .wt-row-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .todo-strip {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .todo-strip-hdr {
+      font-size: 11.5px;
+      font-weight: 560;
+      color: var(--text-faint);
+      padding: 0 12px 4px;
+    }
+
+    /* Recessed Monospace Console Well (Logs Style) */
+    .console-well {
+      background: var(--bg-well);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 13px 16px;
+      font-family: var(--mono);
+      font-size: 11.8px;
+      line-height: 1.65;
+      color: var(--text-dim);
+      overflow-x: auto;
+    }
+    .log-line {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      white-space: nowrap;
+    }
+    .log-k {
+      width: 68px;
+      flex-shrink: 0;
+      color: var(--text-faint);
+    }
+    .log-v { color: var(--text); min-width: 0; }
+    .log-v.ok { color: var(--green); }
+    .log-v.warn { color: var(--amber); }
+    .log-v.err { color: var(--red); }
+    .log-v.info { color: var(--accent); }
+    .log-sep {
+      height: 1px;
+      background: var(--border-subtle);
+      margin: 10px 0;
+    }
+    .handoff-block {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 11.8px;
+      line-height: 1.6;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .console-tabs {
+      display: inline-flex;
+      padding: 2px;
+      gap: 2px;
+      background: var(--bg-well);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+    }
+    .console-tab {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--text-dim);
+      height: 22px;
+      padding: 0 9px;
+      font-size: 11.5px;
+      font-weight: 500;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .console-tab.active {
+      background: var(--bg-tile-active);
+      color: var(--text);
+    }
+
+    /* Badges & Inline Chips */
     .badge {
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      padding: 1px 6px;
-      border-radius: 5px;
+      padding: 1px 7px;
+      border-radius: 6px;
       font-size: 11px;
-      font-weight: 550;
-      line-height: 1.35;
+      font-weight: 540;
+      line-height: 1.4;
       background: var(--bg-inset);
       color: var(--text-dim);
       white-space: nowrap;
     }
     .tone-info { background: var(--accent-soft); color: var(--accent); }
     .tone-success { background: var(--green-soft); color: var(--green); }
-    .tone-warning { background: var(--yellow-soft); color: var(--yellow); }
-    .tone-orange { background: var(--orange-soft); color: var(--orange); }
+    .tone-warning { background: var(--amber-soft); color: var(--amber); }
     .tone-danger { background: var(--red-soft); color: var(--red); }
     .tone-violet { background: var(--purple-soft); color: var(--purple); }
     .tone-muted { background: var(--bg-inset); color: var(--text-faint); }
 
-    .card-title {
-      margin: 5px 0 0;
-      font-size: 13.5px;
-      font-weight: 560;
-      line-height: 1.45;
-      color: var(--text);
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-      word-break: break-word;
-    }
-
-    .card-context {
-      margin-top: 8px;
-      display: flex;
-      flex-direction: column;
-      gap: 5px;
-    }
-    .card-branch {
-      display: flex;
-      align-items: center;
-      gap: 5px;
+    .id-link {
       font-family: var(--mono);
-      font-size: 11px;
-      color: var(--text-faint);
-      min-width: 0;
-    }
-    .card-branch span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .card-task {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 11.5px;
+      font-weight: 600;
+      font-size: 12px;
       color: var(--text-dim);
-      min-width: 0;
     }
-    .card-task span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .card-prog {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .progress-track {
-      flex: 1;
-      height: 3px;
-      border-radius: 999px;
-      background: var(--bg-inset);
-      overflow: hidden;
-    }
-    .progress-fill {
-      height: 100%;
-      background: linear-gradient(90deg, var(--accent), var(--green));
-      border-radius: 999px;
-      transition: width 0.25s ease;
-    }
-    .prog-num {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--text-faint);
-      flex-shrink: 0;
-    }
+    .id-link:hover { color: var(--accent); }
 
-    .change-inline {
-      display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 6px;
-      font-size: 11.5px;
-    }
-    .pr-link {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      font-weight: 550;
-      color: var(--text);
-    }
-    .pr-link:hover { color: var(--accent); text-decoration: none; }
-    .ci-inline {
-      display: inline-flex;
-      align-items: center;
-      gap: 3px;
-      font-size: 11px;
-      font-weight: 500;
-    }
-    .ci-inline.pass { color: var(--green); }
-    .ci-inline.fail { color: var(--red); }
-    .ci-inline.pending { color: var(--yellow); }
-    .ci-inline.none { color: var(--text-faint); }
-
-    .card-foot {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      margin-top: 8px;
-      font-size: 11px;
-      color: var(--text-faint);
-      min-height: 22px;
-    }
-    .pulse-inline {
-      display: inline-flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 5px;
-      min-width: 0;
-    }
     .diff-ins { font-family: var(--mono); color: var(--green); font-weight: 600; }
     .diff-del { font-family: var(--mono); color: var(--red); font-weight: 600; }
-    .stalled-note {
-      margin-top: 5px;
-      font-size: 11px;
-      color: var(--orange);
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
 
-    .card-copy-btn {
-      opacity: 0.45;
-      transition: opacity 0.14s, background 0.14s, color 0.14s;
-      flex-shrink: 0;
-    }
-    .card:hover .card-copy-btn,
-    .card-copy-btn:focus-visible,
-    .card-copy-btn.copied { opacity: 1; }
-
-    /* Repo Group View */
-    .repo-section {
-      margin-top: 14px;
-      background: var(--bg-col);
-      border: 1px solid var(--border-faint);
-      border-radius: 12px;
-      padding: 13px 14px;
-    }
-    .repo-section:first-child { margin-top: 0; }
-    .repo-hdr {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 11px;
-      padding-bottom: 9px;
-      border-bottom: 1px solid var(--border);
-    }
-    .repo-title-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .repo-path {
+    .copy-chip {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      padding: 2px 5px;
+      margin: -2px -5px;
+      border-radius: 5px;
       font-family: var(--mono);
       font-size: 11px;
-      color: var(--text-faint);
-      margin-top: 2px;
+      color: var(--text-dim);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      max-width: 100%;
+      min-width: 0;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.12s, color 0.12s;
+    }
+    .copy-chip:hover { background: var(--bg-tile-active); color: var(--text); }
+    .copy-chip.copied { background: var(--green-soft); color: var(--green); }
+    .copy-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .copy-chip svg { flex-shrink: 0; }
+
+    /* Secondary Views: Kanban / Repos / List */
+    .kanban {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(210px, 1fr));
+      gap: 12px;
+      align-items: start;
+    }
+    @media (max-width: 1080px) { .kanban { grid-template-columns: repeat(2, minmax(210px, 1fr)); } }
+    @media (max-width: 640px) { .kanban { grid-template-columns: 1fr; } }
+
+    .column {
+      background: var(--bg-sidebar);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      padding: 11px;
+      min-height: 220px;
+    }
+    .col-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 2px 4px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .col-title { display: inline-flex; align-items: center; gap: 7px; }
+    .col-count { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+    .card-stack { display: flex; flex-direction: column; gap: 8px; }
+    .col-empty { padding: 22px 10px; text-align: center; color: var(--text-faint); font-size: 12px; }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      cursor: pointer;
+      transition: border-color 0.14s, background 0.14s;
+    }
+    .card:hover { border-color: var(--border-strong); background: var(--bg-card-hover); }
+    .card.is-selected { border-color: var(--accent-ring); }
+    .card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .card-meta { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-faint); min-width: 0; }
+    .card-title { margin-top: 6px; font-size: 13px; font-weight: 560; color: var(--text); line-height: 1.42; }
+    .card-context { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+    .card-task { display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-dim); min-width: 0; }
+    .card-task span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .card-prog { display: flex; align-items: center; gap: 8px; }
+    .progress-track { flex: 1; height: 4px; border-radius: 999px; background: var(--bar-empty); overflow: hidden; }
+    .progress-fill { height: 100%; background: var(--green); border-radius: 999px; }
+    .prog-num { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+    .card-foot { margin-top: 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--text-faint); }
+
+    .repo-section {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      padding: 14px 16px;
+      margin-bottom: 12px;
+    }
+    .repo-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding-bottom: 10px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--border-subtle);
     }
     .repo-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
       gap: 10px;
     }
 
-    /* List / Table View */
     .list-wrap {
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow-card);
+      border-radius: var(--radius-card);
       overflow-x: auto;
     }
-    .list-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12.5px;
-      min-width: 900px;
-    }
+    .list-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 860px; }
     .list-table th {
       text-align: left;
-      padding: 9px 12px;
+      padding: 10px 14px;
       font-size: 11px;
       font-weight: 600;
       color: var(--text-faint);
       border-bottom: 1px solid var(--border);
-      white-space: nowrap;
     }
-    .list-table td {
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--border-faint);
-      vertical-align: middle;
-    }
-    .list-table tbody tr {
-      cursor: pointer;
-      transition: background 0.12s;
-    }
-    .list-table tbody tr:hover { background: var(--bg-card-hover); }
+    .list-table td { padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; }
+    .list-table tbody tr { cursor: pointer; }
+    .list-table tbody tr:hover { background: var(--bg-tile); }
+    .list-table tbody tr.is-selected { background: var(--bg-row-active); }
     .list-table tbody tr:last-child td { border-bottom: 0; }
-    .list-table tr.is-selected { background: var(--accent-soft); }
-    .list-title-cell {
-      max-width: 290px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-weight: 560;
-      color: var(--text);
-    }
 
-    /* Slide-Over Inspector Drawer */
+    /* Slide-Over Inspector Drawer (Used in Secondary Views) */
     .inspector-overlay {
       position: fixed;
       inset: 0;
       z-index: 50;
-      background: rgba(0, 0, 0, 0.44);
-      backdrop-filter: blur(2px);
+      background: rgba(0, 0, 0, 0.36);
       opacity: 0;
       pointer-events: none;
-      transition: opacity 0.18s ease;
+      transition: opacity 0.16s ease;
     }
     .inspector-overlay.open { opacity: 1; pointer-events: auto; }
     .inspector-panel {
       position: fixed;
-      top: 0;
-      right: 0;
-      bottom: 0;
+      top: 12px;
+      right: 12px;
+      bottom: 12px;
       width: 460px;
-      max-width: 100vw;
+      max-width: calc(100vw - 24px);
       z-index: 60;
-      background: var(--bg-surface);
-      border-left: 1px solid var(--border-strong);
-      box-shadow: var(--shadow-float);
+      background: var(--bg-card);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-shell);
+      box-shadow: var(--shadow-panel);
       display: flex;
       flex-direction: column;
-      transform: translateX(100%);
-      transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+      transform: translateX(106%);
+      transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
     }
     .inspector-panel.open { transform: translateX(0); }
     .inspector-hdr {
       padding: 16px 18px 13px;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--border-subtle);
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
       gap: 12px;
     }
-    .inspector-title {
-      margin: 6px 0 0;
-      font-size: 15.5px;
-      font-weight: 620;
-      line-height: 1.4;
-      word-break: break-word;
-    }
-    .inspector-body {
-      flex: 1;
-      overflow-y: auto;
-      padding: 15px 18px 24px;
-    }
+    .inspector-title { margin: 6px 0 0; font-size: 15px; font-weight: 600; line-height: 1.4; }
+    .inspector-body { flex: 1; overflow-y: auto; padding: 15px 18px 22px; }
     .meta-grid {
       display: flex;
       flex-direction: column;
       gap: 8px;
       padding: 10px 12px;
-      border-radius: 9px;
-      background: var(--bg-inset);
-      border: 1px solid var(--border-faint);
+      border-radius: 10px;
+      background: var(--bg-well);
+      border: 1px solid var(--border-subtle);
     }
-    .meta-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      font-size: 12px;
-    }
+    .meta-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; }
     .meta-key { color: var(--text-faint); flex-shrink: 0; width: 64px; }
-    .meta-val {
-      font-family: var(--mono);
-      font-size: 11.5px;
-      color: var(--text);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      flex: 1;
-      text-align: right;
-    }
-    .cmd-box {
-      margin-top: 12px;
-      padding: 10px 12px;
-      border-radius: 9px;
-      background: var(--bg-inset);
-      border: 1px solid var(--border-faint);
-    }
-    .cmd-box-hdr {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 11.5px;
-      color: var(--text-faint);
-      margin-bottom: 5px;
-    }
-    .cmd-code {
-      font-family: var(--mono);
-      font-size: 11.5px;
-      color: var(--accent);
-      word-break: break-all;
-      line-height: 1.45;
-    }
+    .meta-val { font-family: var(--mono); font-size: 11.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; text-align: right; }
 
-    .tabs {
-      display: flex;
-      gap: 4px;
-      margin-top: 14px;
-      border-bottom: 1px solid var(--border);
+    .handoff-box {
+      margin-top: 12px;
+      padding: 11px 12px;
+      border-radius: 10px;
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-ring);
     }
+    .handoff-box-hdr { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11.5px; font-weight: 600; color: var(--accent); }
+    .handoff-pre { margin: 7px 0 0; font-family: var(--mono); font-size: 11.2px; line-height: 1.5; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+
+    .cmd-box { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--bg-well); border: 1px solid var(--border-subtle); }
+    .cmd-box-hdr { display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; color: var(--text-faint); margin-bottom: 4px; }
+    .cmd-code { font-family: var(--mono); font-size: 11.5px; color: var(--accent); word-break: break-all; }
+
+    .tabs { display: flex; gap: 4px; margin-top: 14px; border-bottom: 1px solid var(--border-subtle); }
     .tab-btn {
       appearance: none;
       border: 0;
@@ -1021,127 +1053,51 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: transparent;
       color: var(--text-dim);
       padding: 8px 12px;
-      font-family: var(--sans);
-      font-size: 12.5px;
+      font-size: 12px;
       font-weight: 550;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       gap: 6px;
     }
-    .tab-btn:hover { color: var(--text); }
     .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
     .tab-pane { margin-top: 12px; }
+    .task-row { padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border-subtle); background: var(--bg-well); margin-bottom: 7px; }
+    .task-row-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 540; }
+    .task-row-sub { margin-top: 4px; font-size: 11px; color: var(--text-faint); display: flex; flex-wrap: wrap; gap: 10px; }
 
-    .task-row {
-      padding: 9px 11px;
-      border-radius: 8px;
-      border: 1px solid var(--border-faint);
-      background: var(--bg-inset);
-      margin-bottom: 7px;
-    }
-    .task-row-top {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 8px;
-      font-size: 12.5px;
-      font-weight: 550;
-      word-break: break-word;
-    }
-    .task-row-sub {
-      margin-top: 4px;
-      font-size: 11px;
-      color: var(--text-faint);
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-
-    .file-list {
-      border: 1px solid var(--border-faint);
-      border-radius: 8px;
-      background: var(--bg-inset);
-      overflow: hidden;
-    }
-    .file-row {
-      display: flex;
-      align-items: center;
-      gap: 9px;
-      padding: 7px 10px;
-      font-family: var(--mono);
-      font-size: 11.5px;
-      border-bottom: 1px solid var(--border-faint);
-      word-break: break-all;
-    }
+    .file-list { border: 1px solid var(--border-subtle); border-radius: 9px; background: var(--bg-well); overflow: hidden; }
+    .file-row { display: flex; align-items: center; gap: 9px; padding: 7px 10px; font-family: var(--mono); font-size: 11.5px; border-bottom: 1px solid var(--border-subtle); }
     .file-row:last-child { border-bottom: 0; }
-    .file-code {
-      min-width: 24px;
-      text-align: center;
-      padding: 1px 5px;
-      border-radius: 4px;
-      font-size: 10.5px;
-      font-weight: 700;
-      background: var(--bg-card);
-      color: var(--accent);
-    }
+    .file-code { min-width: 24px; text-align: center; padding: 1px 5px; border-radius: 4px; font-size: 10.5px; font-weight: 700; background: var(--bg-tile-active); color: var(--accent); }
     .file-code.untracked { color: var(--green); background: var(--green-soft); }
     .file-code.deleted { color: var(--red); background: var(--red-soft); }
 
-    /* Empty State & Warnings & Footer */
     .empty-state {
       text-align: center;
-      padding: 54px 24px;
-      background: var(--bg-col);
+      padding: 46px 24px;
+      background: var(--bg-card);
       border: 1px dashed var(--border-strong);
-      border-radius: 12px;
+      border-radius: var(--radius-card);
       color: var(--text-dim);
     }
-    .empty-icon {
-      width: 40px;
-      height: 40px;
-      margin: 0 auto 12px;
-      border-radius: 10px;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      display: grid;
-      place-items: center;
-      color: var(--accent);
-    }
-    .empty-cmds {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 8px;
-      margin-top: 14px;
-    }
-    .empty-cmd {
-      font-family: var(--mono);
-      font-size: 12px;
-      padding: 5px 10px;
-      border-radius: 7px;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      color: var(--text);
-    }
+    .empty-cmds { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 14px; }
+    .empty-cmd { font-family: var(--mono); font-size: 12px; padding: 5px 10px; border-radius: 7px; background: var(--bg-well); border: 1px solid var(--border); color: var(--text); }
 
     .warnings-box {
       display: flex;
       align-items: flex-start;
       gap: 9px;
-      margin-top: 16px;
       padding: 10px 14px;
-      border-radius: var(--radius);
-      border: 1px solid var(--yellow-ring);
-      background: var(--yellow-soft);
-      color: var(--yellow);
+      border-radius: 12px;
+      border: 1px solid rgba(251, 191, 36, 0.32);
+      background: var(--amber-soft);
+      color: var(--amber);
       font-size: 12px;
     }
 
     .footer {
-      margin-top: 20px;
-      padding-top: 12px;
-      border-top: 1px solid var(--border-faint);
+      padding: 2px 6px;
       font-size: 11.5px;
       color: var(--text-faint);
       display: flex;
@@ -1151,107 +1107,102 @@ BOARD_HTML = r"""<!DOCTYPE html>
       gap: 10px;
     }
 
-    /* Toast */
-    .toast-wrap {
-      position: fixed;
-      right: 22px;
-      bottom: 22px;
-      z-index: 80;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      pointer-events: none;
-    }
+    .toast-wrap { position: fixed; right: 20px; bottom: 20px; z-index: 80; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
     .toast {
       display: inline-flex;
       align-items: center;
       gap: 8px;
       padding: 8px 13px;
-      border-radius: 8px;
-      background: var(--bg-surface);
+      border-radius: 10px;
+      background: var(--bg-card);
       border: 1px solid var(--border-strong);
       color: var(--text);
       font-size: 12px;
       font-weight: 500;
-      box-shadow: var(--shadow-float);
-      animation: toast-in 0.16s ease;
+      box-shadow: var(--shadow-panel);
     }
-    @keyframes toast-in {
-      from { opacity: 0; transform: translateY(8px); }
-      to { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 780px) {
+      .app-shell { flex-direction: column; }
+      .sidebar { width: 100% !important; }
     }
   </style>
 </head>
 <body>
-  <div class="topbar-wrap">
-    <header class="topbar">
-      <div class="brand">
-        <div class="logo-mark" aria-hidden="true">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="6" y1="3" x2="6" y2="15"></line>
-            <circle cx="18" cy="6" r="3"></circle>
-            <circle cx="6" cy="18" r="3"></circle>
-            <path d="M18 9a9 9 0 0 1-9 9"></path>
+  <div class="app-shell">
+    <!-- Left Inset Sidebar -->
+    <aside class="sidebar" aria-label="工作区侧栏">
+      <div id="search-wrap" class="sb-search">
+        <span class="sb-search-ic" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
           </svg>
-        </div>
-        <h1>IDD 实时开发监控看板</h1>
-        <span class="brand-ver">v__IDD_VERSION__</span>
-        <span class="brand-sep">·</span>
-        <span id="scope-tag" class="brand-scope">全局</span>
-      </div>
-      <div class="controls">
-        <span id="conn-tag" class="live-pill is-live">
-          <span class="dot-pulse"></span>
-          <span>实时</span>
-          <span class="sep">·</span>
-          <span id="updated-tag" class="num">同步中...</span>
         </span>
-        <button id="pause-btn" class="btn" type="button"></button>
-        <button id="sync-btn" class="btn btn-primary" type="button" title="快捷键 r"></button>
-        <button id="theme-btn" class="btn" type="button" title="切换深浅色"></button>
+        <input id="search-input" class="hide-collapsed" type="search" placeholder="搜索 #编号、目录、分支" />
+        <span class="sb-kbd hide-collapsed">/</span>
+        <button id="search-clear" class="sb-search-clear hide-collapsed" type="button" aria-label="清空搜索">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
       </div>
-    </header>
-  </div>
 
-  <div class="container">
-    <section id="kpis" class="telemetry-strip"></section>
+      <div id="sb-filters" class="sb-nav"></div>
 
-    <section class="toolbar">
-      <div id="repo-pills" class="pills"></div>
-      <div class="toolbar-right">
-        <label class="switch-label">
-          <input id="wt-only-cb" type="checkbox" />
-          <span class="switch-track"><span class="switch-thumb"></span></span>
-          <span>只看已开工</span>
-        </label>
-        <button id="alerts-only-btn" class="pill alert-pill" type="button" style="display:none;"></button>
-        <div id="search-wrap" class="search-wrap">
-          <span class="search-icon" aria-hidden="true">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-          </span>
-          <input id="search-input" class="search-box" type="search" placeholder="搜索 #编号、标题、分支..." />
-          <span class="search-kbd">/</span>
-          <button id="search-clear" class="search-clear" type="button" aria-label="清空搜索">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18"></line>
-              <line x1="6" y1="6" x2="18" y2="18"></line>
+      <div class="sb-tiles" role="tablist" aria-label="视图切换">
+        <button id="view-cockpit" class="sb-tile active" type="button" title="驾驶舱视图（工作树 + 接力台）"></button>
+        <button id="view-kanban" class="sb-tile" type="button" title="四列看板视图"></button>
+        <button id="view-repos" class="sb-tile" type="button" title="按仓库分组视图"></button>
+        <button id="view-list" class="sb-tile" type="button" title="紧凑列表视图"></button>
+      </div>
+
+      <div class="sb-divider"></div>
+      <div class="sb-section-hdr hide-collapsed"><span>仓库</span><span id="sb-repo-cnt" class="num">0</span></div>
+      <div id="repo-pills" class="sb-list"></div>
+
+      <div class="sb-section-hdr hide-collapsed" style="margin-top:4px;"><span>并行目录</span><span id="sb-wt-cnt" class="num">0</span></div>
+      <div id="wt-rail-list" class="sb-list"></div>
+
+      <div class="sb-footer">
+        <button id="theme-btn" class="sb-item" type="button" title="切换深浅色主题"></button>
+        <span class="sb-meta hide-collapsed">v__IDD_VERSION__</span>
+      </div>
+    </aside>
+
+    <!-- Right Main Cockpit Workspace -->
+    <div class="workspace">
+      <header class="ws-header">
+        <div class="ws-title-group">
+          <button id="sidebar-toggle" class="icon-btn" type="button" title="收起 / 展开侧栏 ([)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="3"></rect>
+              <line x1="9" y1="3" x2="9" y2="21"></line>
             </svg>
           </button>
+          <div id="ws-logo" class="ws-logo" aria-hidden="true"></div>
+          <h1 id="ws-title" class="ws-title">全局工作区</h1>
+          <span id="scope-tag" class="ws-scope">全局</span>
         </div>
-        <div class="seg" role="tablist" aria-label="视图切换">
-          <button id="view-kanban" class="active" type="button"></button>
-          <button id="view-repos" type="button"></button>
-          <button id="view-list" type="button"></button>
+        <div class="ws-controls">
+          <span id="conn-tag" class="live-pill is-live">
+            <span class="dot-pulse"></span>
+            <span>实时</span>
+            <span class="sep">·</span>
+            <span id="updated-tag" class="num">同步中...</span>
+          </span>
+          <button id="pause-btn" class="btn" type="button"></button>
+          <button id="sync-btn" class="btn btn-primary" type="button" title="快捷键 r"></button>
         </div>
-      </div>
-    </section>
+      </header>
 
-    <main id="main-content"></main>
-    <div id="warnings-wrap"></div>
-    <footer id="footer" class="footer"></footer>
+      <section id="kpis" class="telemetry-grid"></section>
+
+      <main id="main-content"></main>
+      <div id="warnings-wrap"></div>
+      <footer id="footer" class="footer"></footer>
+    </div>
   </div>
 
   <div id="inspector-overlay" class="inspector-overlay" aria-hidden="true"></div>
@@ -1265,7 +1216,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         gitlab: '<path d="m22 13.29-3.33-10a.42.42 0 0 0-.14-.18.38.38 0 0 0-.22-.11.39.39 0 0 0-.23.07.42.42 0 0 0-.14.18l-2.26 6.67H8.32L6.1 3.26a.42.42 0 0 0-.1-.18.38.38 0 0 0-.26-.08.39.39 0 0 0-.23.07.42.42 0 0 0-.14.18L2 13.29a.74.74 0 0 0 .27.83L12 21l9.69-6.88a.71.71 0 0 0 .31-.83Z"/>',
         terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
         branch: '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
-        commit: '<circle cx="12" cy="12" r="3"/><line x1="3" y1="12" x2="9" y2="12"/><line x1="15" y1="12" x2="21" y2="12"/>',
         pr: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/>',
         checkCircle: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
         xCircle: '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
@@ -1279,16 +1229,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
         columns: '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/>',
         folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
         list: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+        cockpit: '<rect x="3" y="3" width="18" height="8" rx="2"/><rect x="3" y="13" width="18" height="8" rx="2"/>',
         copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
         check: '<polyline points="20 6 9 17 4 12"/>',
         externalLink: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
         x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
-        fileDiff: '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/>',
-        listChecks: '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
         activity: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
         layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
-        chevronRight: '<polyline points="9 18 15 12 9 6"/>',
-        minusCircle: '<circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/>'
+        sparkle: '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3Z"/>',
+        circle: '<circle cx="12" cy="12" r="8"/>',
+        chevronRight: '<polyline points="9 18 15 12 9 6"/>'
       };
 
       function icon(name, size) {
@@ -1303,15 +1253,21 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return icon("terminal", size || 12);
       }
 
+      const urlParams = new URLSearchParams(window.location.search);
       const state = {
         snapshot: null,
         selectedRepo: "ALL",
-        viewMode: localStorage.getItem("idd_board_view") || "kanban",
+        viewMode: localStorage.getItem("idd_board_view") || "cockpit",
+        sidebarCollapsed: urlParams.get("collapsed") === "1" || localStorage.getItem("idd_sidebar_collapsed") === "1",
         search: "",
         worktreeOnly: false,
         alertsOnly: false,
+        todoOnly: false,
         paused: false,
+        selectedKey: null,
         inspectedKey: null,
+        didAutoInspect: false,
+        consoleTab: "handoff",
         inspectorTab: "tasks",
         timerId: null,
         fetching: false,
@@ -1319,8 +1275,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
         lastSig: ""
       };
 
-      if (!["kanban", "repos", "list"].includes(state.viewMode)) {
-        state.viewMode = "kanban";
+      if (!["cockpit", "kanban", "repos", "list"].includes(state.viewMode)) {
+        state.viewMode = "cockpit";
       }
 
       function escapeHtml(value) {
@@ -1355,9 +1311,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
         wrap.appendChild(el);
         setTimeout(() => {
           el.style.opacity = "0";
-          el.style.transition = "opacity 0.18s";
-          setTimeout(() => el.remove(), 200);
-        }, 1900);
+          el.style.transition = "opacity 0.16s";
+          setTimeout(() => el.remove(), 180);
+        }, 1800);
       }
 
       async function copyText(text, btnEl, toastMsg) {
@@ -1380,12 +1336,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
             btnEl.classList.add("copied");
             btnEl.innerHTML = btnEl.classList.contains("btn-icon-only")
               ? icon("check", 12)
-              : icon("check", 12) + "<span>已复制</span>";
+              : icon("check", 11) + "<span>已复制</span>";
             clearTimeout(Number(btnEl.dataset.timerId || 0));
             const tid = setTimeout(() => {
               btnEl.classList.remove("copied");
               btnEl.innerHTML = prevHtml;
-            }, 1500);
+            }, 1400);
             btnEl.dataset.timerId = String(tid);
           }
           showToast(toastMsg || "已复制到剪贴板");
@@ -1398,10 +1354,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
         document.documentElement.setAttribute("data-theme", theme);
         const btn = document.getElementById("theme-btn");
         if (btn) {
-          btn.innerHTML = theme === "dark"
-            ? icon("sun", 13) + "<span>浅色</span>"
-            : icon("moon", 13) + "<span>深色</span>";
+          const ic = theme === "dark" ? icon("sun", 14) : icon("moon", 14);
+          const lbl = theme === "dark" ? "浅色模式" : "深色模式";
+          btn.innerHTML = '<span class="sb-item-left">' + ic + '<span class="hide-collapsed">' + lbl + "</span></span>";
         }
+      }
+
+      function applySidebarState() {
+        document.body.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
       }
 
       function syncHeaderControls() {
@@ -1416,20 +1376,20 @@ BOARD_HTML = r"""<!DOCTYPE html>
           syncBtn.classList.toggle("spin", state.fetching);
           syncBtn.innerHTML = icon("refresh", 12) + "<span>" + (state.fetching ? "同步中" : "同步远端") + "</span>";
         }
-        const vk = document.getElementById("view-kanban");
-        const vr = document.getElementById("view-repos");
-        const vl = document.getElementById("view-list");
-        if (vk) {
-          vk.classList.toggle("active", state.viewMode === "kanban");
-          vk.innerHTML = icon("columns", 12) + "<span>看板</span>";
-        }
-        if (vr) {
-          vr.classList.toggle("active", state.viewMode === "repos");
-          vr.innerHTML = icon("folder", 12) + "<span>按仓库</span>";
-        }
-        if (vl) {
-          vl.classList.toggle("active", state.viewMode === "list");
-          vl.innerHTML = icon("list", 12) + "<span>列表</span>";
+
+        const s = (state.snapshot && state.snapshot.summary) || {};
+        const hasLive = Number(s.coding_now_count || 0) > 0 || Number(s.active_worktrees || 0) > 0;
+        const modes = [
+          { id: "view-cockpit", mode: "cockpit", ic: "cockpit", dot: hasLive },
+          { id: "view-kanban", mode: "kanban", ic: "columns", dot: false },
+          { id: "view-repos", mode: "repos", ic: "folder", dot: false },
+          { id: "view-list", mode: "list", ic: "list", dot: false }
+        ];
+        for (const m of modes) {
+          const el = document.getElementById(m.id);
+          if (!el) continue;
+          el.classList.toggle("active", state.viewMode === m.mode);
+          el.innerHTML = icon(m.ic, 14) + '<span class="tile-dot ' + (m.dot ? "show" : "") + '"></span>';
         }
       }
 
@@ -1443,23 +1403,23 @@ BOARD_HTML = r"""<!DOCTYPE html>
           return;
         }
         if (state.paused) {
-          tag.className = "live-pill is-paused";
-          tag.innerHTML = icon("pause", 11) + '<span>已暂停</span><span class="sep">·</span><span id="updated-tag" class="num">' + clock + "</span>";
+          tag.className = "live-pill";
+          tag.innerHTML = icon("pause", 11) + '<span>已暂停</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
           return;
         }
         tag.className = "live-pill is-live";
-        tag.innerHTML = '<span class="dot-pulse"></span><span>实时</span><span class="sep">·</span><span id="updated-tag" class="num">' + clock + "</span>";
+        tag.innerHTML = '<span class="dot-pulse"></span><span>实时</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
       }
 
       function parseStage(rawStage) {
         const cleaned = String(rawStage || "").replace(/^[\s\u{1F300}-\u{1FAFF}\u2600-\u27BF\uFE0F]+/u, "").trim();
         const label = cleaned === "待认领" ? "待处理" : (cleaned || "—");
-        if (label === "修 CI" || label === "受阻") return { label, tone: "tone-danger", dot: "dot-red" };
-        if (label === "待合入" || label.startsWith("待提")) return { label, tone: "tone-success", dot: "dot-green" };
-        if (label === "CI 运行中") return { label, tone: "tone-warning", dot: "dot-amber" };
-        if (label.startsWith("草稿")) return { label, tone: "tone-violet", dot: "dot-muted" };
-        if (label === "待处理") return { label, tone: "tone-muted", dot: "dot-muted" };
-        return { label, tone: "tone-info", dot: "dot-blue" };
+        if (label === "修 CI" || label === "受阻") return { label, tone: "tone-danger", dot: "fail" };
+        if (label === "待合入" || label.startsWith("待提")) return { label, tone: "tone-success", dot: "active" };
+        if (label === "CI 运行中") return { label, tone: "tone-warning", dot: "warm" };
+        if (label.startsWith("草稿")) return { label, tone: "tone-violet", dot: "quiet" };
+        if (label === "待处理") return { label, tone: "tone-muted", dot: "quiet" };
+        return { label, tone: "tone-info", dot: "active" };
       }
 
       function isItemAlert(item) {
@@ -1510,6 +1470,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       function matchesFilters(item) {
         if (state.selectedRepo !== "ALL" && item.repo_path !== state.selectedRepo) return false;
         if (state.worktreeOnly && !item.worktree) return false;
+        if (state.todoOnly && (item.worktree || item.change)) return false;
         if (state.alertsOnly && !isItemAlert(item)) return false;
         const q = state.search.trim().toLowerCase();
         if (!q) return true;
@@ -1519,22 +1480,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
           item.title,
           item.issue,
           item.branch,
+          item.worktree,
           item.current_task,
           item.stage
         ].join(" ").toLowerCase();
         return hay.includes(q);
-      }
-
-      function cardBucket(item) {
-        if (item._kind === "local") return "developing";
-        if (item._kind === "orphan") {
-          return item.checks_overall === "FAIL" || item.checks_overall === "PENDING" || item.isDraft ? "review" : "ready";
-        }
-        const label = parseStage(item.stage).label;
-        if (label === "待处理" || label === "待认领") return "todo";
-        if (label === "待合入") return "ready";
-        if (label === "修 CI" || label === "CI 运行中" || label.startsWith("草稿")) return "review";
-        return "developing";
       }
 
       function getProgressNumbers(item) {
@@ -1549,67 +1499,66 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return { total, done, pct };
       }
 
-      function renderPulseInline(pulse, showStalledBanner) {
-        if (!pulse) return "";
-        const st = pulse.activity_state || "quiet";
-        const ago = pulse.last_active_ago || "无记录";
-        let dotCls = "dot-muted";
-        let timeLabel = ago;
-        if (st === "active") {
-          dotCls = "dot-green";
-          timeLabel = ago === "刚刚" ? "刚刚活跃" : ago;
-        } else if (st === "warm") {
-          dotCls = "dot-amber";
-        } else if (st === "stalled") {
-          dotCls = "dot-orange";
-          timeLabel = (ago.endsWith("前") ? ago.slice(0, -1) : ago) + "无动静";
-        }
-        const opHtml = pulse.git_op
-          ? '<span class="badge tone-violet">' + escapeHtml(pulse.git_op.toUpperCase()) + "</span>"
-          : "";
-        const dirtyCount = Number(pulse.dirty_count || 0);
-        const ins = Number(pulse.insertions || 0);
-        const dels = Number(pulse.deletions || 0);
-        let diffHtml = "<span>干净</span>";
-        if (dirtyCount > 0) {
-          diffHtml = "<span>" + dirtyCount + " 文件</span>";
-          if (ins > 0 || dels > 0) {
-            diffHtml += ' <span class="diff-ins">+' + ins + '</span> <span class="diff-del">-' + dels + "</span>";
-          }
-        }
-        let res = '<div class="pulse-inline"><span class="mini-dot ' + dotCls + '"></span><span>' + escapeHtml(timeLabel) + "</span><span>·</span>" + diffHtml + opHtml + "</div>";
-        if (showStalledBanner && st === "stalled") {
-          res += '<div class="stalled-note">' + icon("alertTriangle", 12) + "<span>超过 30 分钟无动静，可能在等人工确认</span></div>";
-        }
-        return res;
+      function shortWorktreePath(wt) {
+        const parts = String(wt || "").split("/").filter(Boolean);
+        if (parts.length <= 2) return String(wt || "");
+        return parts.slice(-2).join("/");
       }
 
-      function renderChangeInline(item) {
-        const ch = item.change;
-        if (!ch) return "";
-        const mrLabel = item.mr_label || (item.forge_type === "gitlab" ? "MR" : "PR");
-        const mrPrefix = item.mr_prefix || (item.forge_type === "gitlab" ? "!" : "#");
-        const num = ch.number != null ? ch.number : "";
-        const prLabel = mrLabel + (num !== "" ? " " + mrPrefix + num : "");
-        const overall = ch.checks_overall || "NONE";
-        const ciMap = {
-          PASS: { cls: "pass", ic: "checkCircle", text: "CI 全绿" },
-          FAIL: { cls: "fail", ic: "xCircle", text: "CI 失败" },
-          PENDING: { cls: "pending", ic: "clock", text: "CI 运行中" },
-          NONE: { cls: "none", ic: "minusCircle", text: "无 CI" }
-        };
-        const ci = ciMap[overall] || ciMap.NONE;
-        const chUrl = safeUrl(ch.url);
-        const prEl = chUrl
-          ? '<a class="pr-link" href="' + escapeHtml(chUrl) + '" target="_blank" rel="noopener noreferrer" data-stop-open="1">' + icon("pr", 12) + "<span>" + escapeHtml(prLabel) + "</span></a>"
-          : '<span class="pr-link">' + icon("pr", 12) + "<span>" + escapeHtml(prLabel) + "</span></span>";
-        const draftEl = ch.isDraft ? '<span class="badge tone-violet">Draft</span>' : "";
-        const ciEl = '<span class="ci-inline ' + ci.cls + '">' + icon(ci.ic, 11) + "<span>" + escapeHtml(ci.text) + "</span></span>";
-        const mstate = ch.mergeStateStatus || "";
-        const conflictEl = (mstate === "BEHIND" || mstate === "DIRTY")
-          ? '<span class="badge tone-danger">有冲突</span>'
-          : "";
-        return '<div class="change-inline">' + prEl + draftEl + ciEl + conflictEl + "</div>";
+      function shortDirSlug(wt) {
+        const parts = String(wt || "").split("/").filter(Boolean);
+        return parts.length ? parts[parts.length - 1] : "";
+      }
+
+      function itemDotClass(item) {
+        const stInfo = parseStage(item.stage);
+        if (stInfo.label === "修 CI" || stInfo.label === "受阻" || (item.change && item.change.checks_overall === "FAIL")) {
+          return "fail";
+        }
+        const p = item.pulse || null;
+        if (p && p.activity_state === "active") return "active";
+        if (p && (p.activity_state === "warm" || p.activity_state === "stalled")) return "warm";
+        if (stInfo.label === "待合入") return "active";
+        return "quiet";
+      }
+
+      function buildHandoffPrompt(item) {
+        const stInfo = parseStage(item.stage);
+        const { total, done } = getProgressNumbers(item);
+        const targetArg = item.issue_number != null ? String(item.issue_number) : (item.issue || item.issue_dir || "");
+        const title = item.title || item.issue || "未命名任务";
+        const header = item.issue_number != null
+          ? ("请接手 Issue #" + item.issue_number + "（" + title + "）")
+          : ("请接手本地任务「" + title + "」");
+        const lines = [header + "："];
+        if (item.repo_name) {
+          lines.push("- 仓库：" + item.repo_name);
+        }
+        if (item.worktree) {
+          lines.push("- 工作目录：" + item.worktree);
+          lines.push("- 分支：" + (item.branch || "—"));
+          if (stInfo.label === "修 CI" || (item.change && item.change.checks_overall === "FAIL")) {
+            const ch = item.change || {};
+            const mrLabel = item.mr_label || (item.forge_type === "gitlab" ? "MR" : "PR");
+            const mrPrefix = item.mr_prefix || (item.forge_type === "gitlab" ? "!" : "#");
+            const chRef = ch.number != null ? (mrLabel + " " + mrPrefix + ch.number) : mrLabel;
+            lines.push("- 状态：" + chRef + " 的 CI 检查失败，已完成 " + done + "/" + total + " 个 TASK");
+            lines.push("请直接进入该工作目录，按 idd 规范运行 `idd ci " + targetArg + " --logs` 排查修复失败项并更新提交。");
+          } else if (stInfo.label === "待合入") {
+            lines.push("- 状态：已完成 " + done + "/" + total + " 个 TASK，PR/MR CI 已全绿待合入");
+            lines.push("请进入该工作目录确认后，运行 `idd land " + targetArg + "` 线性 Squash 合入 main。");
+          } else {
+            const progTxt = total > 0
+              ? ("已完成 " + done + "/" + total + " 个 TASK" + (item.current_task ? "（当前：" + item.current_task + "）" : ""))
+              : "已创建独立工作目录，待拆解 TASK";
+            lines.push("- 进度：" + progTxt);
+            lines.push("请直接进入该工作目录，按 idd 规范读取 TASK/ 下任务记录与当前未提交改动，无缝继续后续实现与测试。");
+          }
+        } else {
+          lines.push("- 仓库目录：" + (item.repo_path || item.repo_name || ""));
+          lines.push("请按 idd 规范在该仓库运行 `idd start " + targetArg + "` 创建独立工作树，再拆解 TASK/ 步骤逐项实现并验证。");
+        }
+        return lines.join("\n");
       }
 
       function renderIdHtml(item) {
@@ -1626,105 +1575,512 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return '<span class="badge tone-violet">本地</span>';
       }
 
-      function renderCard(item, opts) {
-        const options = opts || {};
+      function renderChangeInline(item) {
+        const ch = item.change;
+        if (!ch) return "";
+        const mrLabel = item.mr_label || (item.forge_type === "gitlab" ? "MR" : "PR");
+        const mrPrefix = item.mr_prefix || (item.forge_type === "gitlab" ? "!" : "#");
+        const num = ch.number != null ? ch.number : "";
+        const prLabel = mrLabel + (num !== "" ? " " + mrPrefix + num : "");
+        const overall = ch.checks_overall || "NONE";
+        const toneMap = {
+          PASS: { cls: "tone-success", text: prLabel + " · CI 全绿" },
+          FAIL: { cls: "tone-danger", text: prLabel + " · CI 失败" },
+          PENDING: { cls: "tone-warning", text: prLabel + " · CI 运行中" },
+          NONE: { cls: "tone-muted", text: prLabel }
+        };
+        const cfg = toneMap[overall] || toneMap.NONE;
+        const chUrl = safeUrl(ch.url);
+        if (chUrl) {
+          return '<a class="badge ' + cfg.cls + '" href="' + escapeHtml(chUrl) + '" target="_blank" rel="noopener noreferrer" data-stop-open="1">' + escapeHtml(cfg.text) + "</a>";
+        }
+        return '<span class="badge ' + cfg.cls + '">' + escapeHtml(cfg.text) + "</span>";
+      }
+
+      function renderPulseSummary(pulse) {
+        if (!pulse) return "";
+        const parts = [];
+        const ago = pulse.last_active_ago || "";
+        if (ago) parts.push(ago === "刚刚" ? "刚刚活跃" : ago);
+        const dirty = Number(pulse.dirty_count || 0);
+        const ins = Number(pulse.insertions || 0);
+        const dels = Number(pulse.deletions || 0);
+        if (dirty > 0) {
+          let d = dirty + " 文件";
+          if (ins > 0 || dels > 0) {
+            d += ' <span class="diff-ins">+' + ins + '</span> <span class="diff-del">-' + dels + "</span>";
+          }
+          parts.push(d);
+        } else {
+          parts.push("干净");
+        }
+        return parts.join(" · ");
+      }
+
+      function renderSegBar(filledCount, totalSlots, toneList) {
+        const pills = [];
+        for (let i = 0; i < totalSlots; i++) {
+          let cls = "seg-pill";
+          if (toneList && toneList[i]) {
+            cls += " " + toneList[i];
+          } else if (i < filledCount) {
+            cls += i === filledCount - 1 ? " on" : " dim";
+          }
+          pills.push('<span class="' + cls + '"></span>');
+        }
+        return '<div class="seg-bar">' + pills.join("") + "</div>";
+      }
+
+      function renderSidebarFilters(snap) {
+        const s = snap.summary || {};
+        const allItems = collectItems(true);
+        const todoCount = allItems.filter((it) => it._kind === "issue" && !it.worktree && !it.change).length;
+        const anomalies = Number(s.stalled_worktrees || 0) + Number(s.ci_failed_count || 0);
+        const activeWt = Number(s.active_worktrees || 0);
+
+        const rows = [
+          {
+            id: "filter-wt-btn",
+            act: "toggle-wt",
+            ic: "sparkle",
+            label: "活跃工作树",
+            meta: activeWt + " live",
+            metaCls: activeWt > 0 ? "live" : "",
+            active: state.worktreeOnly,
+            dot: activeWt > 0 ? "show" : ""
+          },
+          {
+            id: "filter-alert-btn",
+            act: "toggle-alerts",
+            ic: "alertTriangle",
+            label: "异常提醒",
+            meta: anomalies > 0 ? (anomalies + " 异常") : "正常",
+            metaCls: anomalies > 0 ? "danger" : "",
+            active: state.alertsOnly,
+            dot: anomalies > 0 ? "show danger" : ""
+          },
+          {
+            id: "filter-todo-btn",
+            act: "toggle-todo",
+            ic: "circle",
+            label: "待处理 Issue",
+            meta: String(todoCount),
+            metaCls: "",
+            active: state.todoOnly,
+            dot: ""
+          }
+        ];
+
+        document.getElementById("sb-filters").innerHTML = rows.map((r) =>
+          '<button id="' + r.id + '" class="sb-item ' + (r.active ? "active" : "") + '" data-kpi-action="' + r.act + '" type="button" title="' + escapeHtml(r.label + " (" + r.meta + ")") + '">' +
+            '<span class="sb-item-left">' + icon(r.ic, 14) + '<span class="hide-collapsed">' + escapeHtml(r.label) + "</span></span>" +
+            '<span class="sb-meta hide-collapsed ' + r.metaCls + '">' + escapeHtml(r.meta) + "</span>" +
+            '<span class="corner-dot ' + r.dot + '"></span>' +
+          "</button>"
+        ).join("");
+      }
+
+      function renderSidebarReposAndWorktrees(snap) {
+        const repos = snap.repos || [];
+        const allItems = collectItems(true);
+        const totalWt = allItems.filter((x) => x.worktree).length;
+
+        const repoCntEl = document.getElementById("sb-repo-cnt");
+        if (repoCntEl) repoCntEl.textContent = String(repos.length);
+
+        const repoHtml = [
+          '<button class="sb-item ' + (state.selectedRepo === "ALL" ? "active" : "") + '" data-repo="ALL" type="button" title="全部仓库 (' + totalWt + '/' + allItems.length + ')">' +
+            '<span class="sb-item-left">' +
+              '<span class="sb-repo-badge is-all">' + icon("layers", 12) + "</span>" +
+              '<span class="hide-collapsed">全部仓库</span>' +
+            "</span>" +
+            '<span class="sb-meta hide-collapsed">' + totalWt + "/" + allItems.length + "</span>" +
+          "</button>"
+        ];
+
+        for (const r of repos) {
+          const items = [...(r.issues || []), ...(r.local_only_items || [])];
+          const wtCnt = items.filter((x) => x.worktree).length;
+          const isAct = state.selectedRepo === r.repo_path;
+          const forgeCls = r.forge === "github" ? "is-github" : (r.forge === "gitlab" ? "is-gitlab" : "");
+          repoHtml.push(
+            '<button class="sb-item ' + (isAct ? "active" : "") + '" data-repo="' + escapeHtml(r.repo_path) + '" type="button" title="' + escapeHtml(r.repo_name + " (" + wtCnt + "/" + items.length + ")") + '">' +
+              '<span class="sb-item-left">' +
+                '<span class="sb-repo-badge ' + forgeCls + '">' + forgeIcon(r.forge, 12) + "</span>" +
+                '<span class="hide-collapsed">' + escapeHtml(r.repo_name) + "</span>" +
+              "</span>" +
+              '<span class="sb-meta hide-collapsed">:' + wtCnt + "/" + items.length + "</span>" +
+            "</button>"
+          );
+        }
+        document.getElementById("repo-pills").innerHTML = repoHtml.join("");
+
+        const wtItems = allItems.filter((x) => x.worktree && (state.selectedRepo === "ALL" || x.repo_path === state.selectedRepo));
+        const wtCntEl = document.getElementById("sb-wt-cnt");
+        if (wtCntEl) wtCntEl.textContent = String(wtItems.length);
+
+        const wtHtml = wtItems.map((it) => {
+          const isSel = state.selectedKey === it._key || state.inspectedKey === it._key;
+          const dotCls = itemDotClass(it);
+          const { total, done } = getProgressNumbers(it);
+          const isCiFail = it.change && it.change.checks_overall === "FAIL";
+          const rightTag = isCiFail ? ":CI!" : (total > 0 ? (":" + done + "/" + total) : ":wt");
+          const slug = shortDirSlug(it.worktree) || it.branch || ("#" + it.issue_number);
+          const shortBadge = it.issue_number != null ? ("#" + it.issue_number) : "wt";
+          return (
+            '<button class="sb-item ' + (isSel ? "active" : "") + '" data-jump-key="' + escapeHtml(it._key) + '" type="button" title="' + escapeHtml(slug + " · " + (it.title || "")) + '">' +
+              '<span class="sb-item-left">' +
+                '<span class="status-dot ' + dotCls + ' hide-collapsed"></span>' +
+                '<span class="sb-wt-icon show-collapsed">' + escapeHtml(shortBadge) + "</span>" +
+                '<span class="hide-collapsed">' + escapeHtml(slug) + "</span>" +
+              "</span>" +
+              '<span class="sb-meta hide-collapsed ' + (isCiFail ? "danger" : "") + '">' + escapeHtml(rightTag) + "</span>" +
+            "</button>"
+          );
+        });
+        document.getElementById("wt-rail-list").innerHTML = wtHtml.join("");
+      }
+
+      function renderWorkspaceHeader(snap) {
+        const repos = snap.repos || [];
+        const activeRepo = state.selectedRepo === "ALL" ? null : repos.find((r) => r.repo_path === state.selectedRepo);
+        const titleEl = document.getElementById("ws-title");
+        const logoEl = document.getElementById("ws-logo");
+        const scopeEl = document.getElementById("scope-tag");
+        if (activeRepo) {
+          if (titleEl) titleEl.textContent = activeRepo.repo_name;
+          if (logoEl) logoEl.innerHTML = forgeIcon(activeRepo.forge, 16);
+          if (scopeEl) scopeEl.textContent = activeRepo.forge ? activeRepo.forge.toUpperCase() : "REPO";
+        } else {
+          if (titleEl) titleEl.textContent = "全局工作区";
+          if (logoEl) logoEl.innerHTML = icon("branch", 15);
+          if (scopeEl) scopeEl.textContent = snap.global ? "全局" : "单仓库";
+        }
+      }
+
+      function renderKpis(snap) {
+        const s = snap.summary || {};
+        const allItems = collectItems(true);
+        const scopedItems = state.selectedRepo === "ALL"
+          ? allItems
+          : allItems.filter((it) => it.repo_path === state.selectedRepo);
+
+        let totalSteps = 0;
+        let doneSteps = 0;
+        for (const it of scopedItems) {
+          const p = getProgressNumbers(it);
+          totalSteps += p.total;
+          doneSteps += p.done;
+        }
+        const pct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
+
+        const activeWt = Number(s.active_worktrees || 0);
+        const codingNow = Number(s.coding_now_count || 0);
+        const dirtyWt = Number(s.dirty_worktrees || 0);
+        const stalled = Number(s.stalled_worktrees || 0);
+        const ciFailed = Number(s.ci_failed_count || 0);
+        const readyCount = Number(s.ready_to_land_count || 0);
+        const openChanges = Number(s.open_changes || 0);
+        const inProg = Number(s.in_progress_tasks || 0);
+
+        const wtTones = [];
+        for (let i = 0; i < 8; i++) {
+          if (i < codingNow) wtTones.push("green");
+          else if (i < activeWt) wtTones.push(i === activeWt - 1 ? "on" : "dim");
+          else wtTones.push("");
+        }
+
+        const taskFilled = totalSteps > 0 ? Math.max(doneSteps > 0 ? 1 : 0, Math.round((doneSteps / totalSteps) * 8)) : 0;
+
+        const prTones = [];
+        for (let i = 0; i < 8; i++) {
+          if (i < readyCount) prTones.push("green");
+          else if (i < readyCount + ciFailed) prTones.push("red");
+          else if (i < openChanges) prTones.push("amber");
+          else prTones.push("");
+        }
+
+        const cards = [
+          {
+            action: "toggle-wt",
+            ic: "refresh",
+            label: "活跃工作树",
+            val: String(activeWt),
+            unit: "live",
+            bar: renderSegBar(activeWt, 8, wtTones),
+            sub: (codingNow > 0 ? ("刚刚活跃 " + codingNow) : "本地隔离目录") + " · " + dirtyWt + " 处未提交改动",
+            subCls: codingNow > 0 ? "live" : "",
+            filtered: state.worktreeOnly,
+            warn: false
+          },
+          {
+            action: "",
+            ic: "layers",
+            label: "任务步骤进度",
+            val: String(pct),
+            unit: "%",
+            bar: renderSegBar(taskFilled, 8, null),
+            sub: "进行中步骤 " + inProg + " · 已完成 " + doneSteps + "/" + totalSteps + " TASK",
+            subCls: "",
+            filtered: false,
+            warn: false
+          },
+          {
+            action: "toggle-alerts",
+            ic: "pr",
+            label: "PR / MR 与合入",
+            val: String(readyCount),
+            unit: "待合入",
+            bar: renderSegBar(openChanges, 8, prTones),
+            sub: "Open " + openChanges + " · CI 失败 " + ciFailed + " · 卡住 " + stalled,
+            subCls: (ciFailed + stalled) > 0 ? "warn" : "",
+            filtered: state.alertsOnly,
+            warn: (ciFailed + stalled) > 0
+          }
+        ];
+
+        document.getElementById("kpis").innerHTML = cards.map((c) => {
+          const cls = ["bento-metric", c.filtered ? "is-filtered" : "", c.warn ? "is-warn" : ""].filter(Boolean).join(" ");
+          const tag = c.action ? "button" : "div";
+          const attrs = c.action ? ' type="button" data-kpi-action="' + c.action + '"' : "";
+          return (
+            "<" + tag + ' class="' + cls + '"' + attrs + ">" +
+              '<div class="metric-hdr">' +
+                '<span class="metric-hdr-left">' + icon(c.ic, 12) + "<span>" + escapeHtml(c.label) + "</span></span>" +
+              "</div>" +
+              '<div class="metric-val-row">' +
+                '<span class="metric-num num">' + escapeHtml(c.val) + "</span>" +
+                '<span class="metric-unit">' + escapeHtml(c.unit) + "</span>" +
+              "</div>" +
+              c.bar +
+              '<div class="metric-sub ' + c.subCls + '">' + escapeHtml(c.sub) + "</div>" +
+            "</" + tag + ">"
+          );
+        }).join("");
+      }
+
+      function renderCockpitConsole(item) {
+        if (!item) {
+          return (
+            '<section class="bento-card">' +
+              '<div class="bento-hdr"><div class="bento-title-row"><span class="bento-title">跨 Agent 接力提示词</span><span class="bento-sub">请在上方选择一个并行工作树或 Issue</span></div></div>' +
+              '<div class="console-well">暂无选中项。</div>' +
+            "</section>"
+          );
+        }
+
+        const prompt = buildHandoffPrompt(item);
+        const tasks = item.tasks || [];
         const pulse = item.pulse || null;
-        const isStalled = pulse && pulse.activity_state === "stalled";
-        const isLive = pulse && pulse.activity_state === "active";
-        const stInfo = parseStage(item.stage);
-        const isFail = stInfo.label === "修 CI" || stInfo.label === "受阻" || (item.change && item.change.checks_overall === "FAIL");
-        const isSelected = state.inspectedKey === item._key;
-        const cardCls = [
-          "card",
-          isLive ? "is-live" : "",
-          isStalled ? "is-stalled" : "",
-          isFail ? "is-fail" : "",
-          isSelected ? "is-selected" : ""
-        ].filter(Boolean).join(" ");
+        const changedFiles = (pulse && pulse.changed_files) || [];
+        const targetArg = item.issue_number != null ? String(item.issue_number) : (item.issue || item.issue_dir || "");
+        const startCmd = targetArg && item.repo_path ? ("cd " + item.repo_path + " && idd start " + targetArg) : "";
+        const issueHref = safeUrl(item.url);
+        const idLabel = item.issue_number != null ? ("#" + item.issue_number) : "本地";
 
-        const suppressStage = options.columnId && (
-          (options.columnId === "todo" && stInfo.label === "待处理") ||
-          (options.columnId === "developing" && stInfo.label === "开发中") ||
-          (options.columnId === "ready" && stInfo.label === "待合入")
+        let wellHtml = "";
+        if (state.consoleTab === "files") {
+          if (changedFiles.length === 0) {
+            wellHtml = '<div style="color:var(--text-faint);">工作区干净，暂无未提交改动。</div>';
+          } else {
+            wellHtml = changedFiles.map((f) => {
+              const code = String(f.code || "M").trim();
+              const cls = code === "??" ? "ok" : (code.includes("D") ? "err" : "info");
+              return '<div class="log-line"><span class="log-k ' + cls + '">' + escapeHtml(code) + '</span><span class="log-v">' + escapeHtml(f.path) + "</span></div>";
+            }).join("");
+          }
+        } else {
+          const metaLines = [
+            '<div class="log-line"><span class="log-k">repo</span><span class="log-v">' + escapeHtml(item.repo_name || "—") + (item.branch ? '  ·  <span style="color:var(--accent)">' + escapeHtml(item.branch) + "</span>" : "") + "</span></div>",
+            '<div class="log-line"><span class="log-k">worktree</span><span class="log-v">' + escapeHtml(item.worktree || "尚未创建（点击右侧复制开工命令）") + "</span></div>"
+          ];
+          if (pulse && pulse.last_commit_sha) {
+            metaLines.push('<div class="log-line"><span class="log-k">commit</span><span class="log-v">' + escapeHtml(pulse.last_commit_sha + "  " + (pulse.last_commit_subject || "")) + "</span></div>");
+          }
+          const taskLines = tasks.map((t) => {
+            const st = t.status || "planned";
+            const sym = st === "done" ? "✓" : (st === "in_progress" ? "◐" : (st === "blocked" ? "✗" : "○"));
+            const cls = st === "done" ? "ok" : (st === "in_progress" ? "info" : (st === "blocked" ? "err" : ""));
+            return '<div class="log-line"><span class="log-k">' + escapeHtml(t.id || "TASK") + '</span><span class="log-v ' + cls + '">' + sym + "  " + escapeHtml(t.title || t.id) + '  <span style="color:var(--text-faint)">[' + escapeHtml(st) + "]</span></span></div>";
+          });
+          wellHtml =
+            metaLines.join("") +
+            (taskLines.length ? '<div class="log-sep"></div>' + taskLines.join("") : "") +
+            '<div class="log-sep"></div>' +
+            '<pre class="handoff-block">' + escapeHtml(prompt) + "</pre>";
+        }
+
+        return (
+          '<section class="bento-card">' +
+            '<div class="bento-hdr">' +
+              '<div class="bento-title-row">' +
+                '<span class="bento-title">跨 Agent 接力提示词</span>' +
+                '<span class="bento-sub">' + escapeHtml(idLabel + " · " + (item.title || item.issue || "")) + "</span>" +
+                '<div class="console-tabs">' +
+                  '<button class="console-tab ' + (state.consoleTab === "handoff" ? "active" : "") + '" data-console-tab="handoff" type="button">接力与步骤 (' + tasks.length + ")</button>" +
+                  '<button class="console-tab ' + (state.consoleTab === "files" ? "active" : "") + '" data-console-tab="files" type="button">改动文件 (' + ((pulse && pulse.dirty_count) || 0) + ")</button>" +
+                "</div>" +
+              "</div>" +
+              '<div class="bento-actions">' +
+                '<button class="btn btn-sm btn-primary" data-copy-val="' + escapeHtml(prompt) + '" data-copy-msg="已复制 Agent 接力词，可直接粘贴给任意 Agent" type="button">' + icon("copy", 12) + "<span>复制接力词</span></button>" +
+                (item.worktree ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="已复制工作目录路径" type="button">' + icon("folder", 12) + "<span>复制目录</span></button>" : "") +
+                (item.branch ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="已复制分支名" type="button">' + icon("branch", 12) + "<span>复制分支</span></button>" : "") +
+                (startCmd ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="已复制终端命令" type="button">' + icon("terminal", 12) + "<span>终端命令</span></button>" : "") +
+                (issueHref ? '<a class="btn btn-sm" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 12) + "<span>原单</span></a>" : "") +
+              "</div>" +
+            "</div>" +
+            '<div class="console-well">' + wellHtml + "</div>" +
+          "</section>"
         );
-        const stageBadgeHtml = suppressStage
-          ? ""
-          : '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>";
+      }
 
-        const { total, done, pct } = getProgressNumbers(item);
-        const ctxParts = [];
-        if (item.branch) {
-          ctxParts.push('<div class="card-branch" title="' + escapeHtml(item.branch) + '">' + icon("branch", 11) + "<span>" + escapeHtml(item.branch) + "</span></div>");
+      function renderCockpitView(items) {
+        const activeItems = items.filter((it) => it.worktree || it.change || (it.tasks && it.tasks.length > 0));
+        const todoItems = items.filter((it) => !(it.worktree || it.change || (it.tasks && it.tasks.length > 0)));
+
+        const displayRows = state.todoOnly ? todoItems : activeItems;
+        let selected = items.find((it) => it._key === state.selectedKey);
+        if (!selected) {
+          selected = displayRows[0] || items[0] || null;
+          if (selected) state.selectedKey = selected._key;
         }
-        if (item.current_task) {
-          ctxParts.push('<div class="card-task" title="' + escapeHtml(item.current_task) + '">' + icon("chevronRight", 12) + "<span>" + escapeHtml(item.current_task) + "</span></div>");
-        } else if (item.worktree && total === 0) {
-          ctxParts.push('<div class="card-task">' + icon("activity", 12) + '<span style="color:var(--text-faint);">已建目录，待拆解步骤</span></div>');
-        }
-        if (total > 0) {
-          ctxParts.push(
-            '<div class="card-prog">' +
-              '<div class="progress-track"><div class="progress-fill" style="width:' + pct + '%"></div></div>' +
-              '<span class="prog-num">' + done + "/" + total + "</span>" +
+
+        const renderWtRow = (item) => {
+          const isSel = selected && selected._key === item._key;
+          const dotCls = itemDotClass(item);
+          const { total, done } = getProgressNumbers(item);
+          const pulseHtml = renderPulseSummary(item.pulse);
+          const handoffPrompt = buildHandoffPrompt(item);
+          const progBadge = total > 0 ? '<span class="badge">' + done + "/" + total + " TASK</span>" : "";
+          const chBadge = item.change ? renderChangeInline(item) : "";
+
+          const subParts = [];
+          if (item.branch) subParts.push("<span>" + escapeHtml(item.branch) + "</span>");
+          if (item.worktree) subParts.push("<span>" + escapeHtml(shortWorktreePath(item.worktree)) + "</span>");
+          if (pulseHtml) subParts.push("<span>" + pulseHtml + "</span>");
+
+          return (
+            '<div class="wt-row ' + (isSel ? "is-selected" : "") + '" data-select-key="' + escapeHtml(item._key) + '">' +
+              '<div class="wt-row-left">' +
+                '<span class="status-dot ' + dotCls + ' wt-row-dot"></span>' +
+                '<div class="wt-row-main">' +
+                  '<div class="wt-row-top">' +
+                    renderIdHtml(item) +
+                    '<span class="wt-row-title">' + escapeHtml(item.title || item.issue || "未命名任务") + "</span>" +
+                    '<span class="badge tone-muted">' + escapeHtml(item.repo_name || "") + "</span>" +
+                    progBadge +
+                    chBadge +
+                  "</div>" +
+                  '<div class="wt-row-sub">' + (subParts.length ? subParts.join("<span>·</span>") : "<span>尚未创建工作目录</span>") + "</div>" +
+                "</div>" +
+              "</div>" +
+              '<div class="wt-row-actions" data-stop-open="1">' +
+                '<button class="btn btn-xs ' + (isSel ? "btn-primary" : "") + '" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="已复制 Agent 接力词，可直接粘贴给任意 Agent" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>接力词</span></button>" +
+                (item.worktree ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="已复制工作目录路径" data-stop-open="1" type="button">' + icon("folder", 11) + "<span>目录</span></button>" : "") +
+                (item.branch ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="已复制分支名" data-stop-open="1" type="button">' + icon("branch", 11) + "<span>分支</span></button>" : "") +
+              "</div>" +
             "</div>"
           );
+        };
+
+        const todoPill = todoItems.length > 0
+          ? '<button class="btn btn-xs ' + (state.todoOnly ? "btn-primary" : "") + '" data-kpi-action="toggle-todo" type="button">' +
+              icon("circle", 11) + "<span>待处理 Issue (" + todoItems.length + ")</span>" +
+            "</button>"
+          : "";
+
+        return (
+          '<section class="bento-card" style="margin-bottom:12px;">' +
+            '<div class="bento-hdr">' +
+              '<div class="bento-title-row">' +
+                '<span class="bento-title">' + (state.todoOnly ? "待处理 Issue" : "并行工作树") + "</span>" +
+                '<span class="bento-sub num">' + displayRows.length + (state.todoOnly ? " items" : " running") + "</span>" +
+              "</div>" +
+              '<div class="bento-actions">' + todoPill + "</div>" +
+            "</div>" +
+            '<div class="wt-list">' +
+              (displayRows.length ? displayRows.map(renderWtRow).join("") : '<div class="col-empty">当前筛选条件下暂无并行工作树</div>') +
+            "</div>" +
+          "</section>" +
+          renderCockpitConsole(selected)
+        );
+      }
+
+      function cardBucket(item) {
+        if (item._kind === "local") return "developing";
+        if (item._kind === "orphan") {
+          return item.checks_overall === "FAIL" || item.checks_overall === "PENDING" || item.isDraft ? "review" : "ready";
+        }
+        const label = parseStage(item.stage).label;
+        if (label === "待处理" || label === "待认领") return "todo";
+        if (label === "待合入") return "ready";
+        if (label === "修 CI" || label === "CI 运行中" || label.startsWith("草稿")) return "review";
+        return "developing";
+      }
+
+      function renderCard(item, opts) {
+        const options = opts || {};
+        const stInfo = parseStage(item.stage);
+        const { total, done, pct } = getProgressNumbers(item);
+        const handoffPrompt = buildHandoffPrompt(item);
+        const isSelected = state.inspectedKey === item._key;
+        const ctxParts = [];
+        if (item.branch) {
+          ctxParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="已复制分支名" data-stop-open="1">' + icon("branch", 11) + "<span>" + escapeHtml(item.branch) + "</span></button>");
+        }
+        if (item.worktree) {
+          ctxParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="已复制工作目录路径" data-stop-open="1">' + icon("folder", 11) + "<span>" + escapeHtml(shortWorktreePath(item.worktree)) + "</span></button>");
+        }
+        if (item.current_task) {
+          ctxParts.push('<div class="card-task">' + icon("chevronRight", 12) + "<span>" + escapeHtml(item.current_task) + "</span></div>");
+        }
+        if (total > 0) {
+          ctxParts.push('<div class="card-prog"><div class="progress-track"><div class="progress-fill" style="width:' + pct + '%"></div></div><span class="prog-num">' + done + "/" + total + "</span></div>");
         }
         if (item.change) {
           ctxParts.push(renderChangeInline(item));
         }
 
-        const targetArg = item.issue_number != null ? String(item.issue_number) : (item.issue || item.issue_dir || "");
-        const startCmd = targetArg && item.repo_path ? ("cd " + item.repo_path + " && idd start " + targetArg) : "";
-        const pulseHtml = renderPulseInline(pulse, false);
-        const copyBtnHtml = startCmd
-          ? '<button class="btn btn-xs btn-icon-only card-copy-btn" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="已复制接手命令" data-stop-open="1" type="button" title="复制接手命令">' + icon("terminal", 12) + "</button>"
-          : "";
-
-        const showFooter = Boolean(pulseHtml || copyBtnHtml);
-        const repoPart = options.showRepo
-          ? '<span class="repo-chip">' + forgeIcon(item.forge_type, 11) + "<span>" + escapeHtml(item.repo_name || "") + "</span></span><span>·</span>"
-          : "";
-
+        const pulseHtml = renderPulseSummary(item.pulse);
         return (
-          '<article class="' + cardCls + '" data-open-key="' + escapeHtml(item._key) + '">' +
+          '<article class="card ' + (isSelected ? "is-selected" : "") + '" data-open-key="' + escapeHtml(item._key) + '">' +
             '<div class="card-top">' +
-              '<div class="card-meta">' + repoPart + renderIdHtml(item) + "</div>" +
-              stageBadgeHtml +
+              '<div class="card-meta">' + (options.showRepo ? ("<span>" + escapeHtml(item.repo_name || "") + "</span><span>·</span>") : "") + renderIdHtml(item) + "</div>" +
+              '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" +
             "</div>" +
             '<div class="card-title">' + escapeHtml(item.title || item.issue || "未命名任务") + "</div>" +
             (ctxParts.length ? '<div class="card-context">' + ctxParts.join("") + "</div>" : "") +
-            (isStalled ? '<div class="stalled-note">' + icon("alertTriangle", 11) + "<span>超过 30 分钟无动静</span></div>" : "") +
-            (showFooter ? '<div class="card-foot">' + (pulseHtml || "<span></span>") + copyBtnHtml + "</div>" : "") +
+            '<div class="card-foot"><span>' + (pulseHtml || " ") + '</span><button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="已复制 Agent 接力词，可直接粘贴给任意 Agent" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>接力词</span></button></div>" +
           "</article>"
         );
       }
 
       function renderListTable(items) {
         const rowsHtml = items.map((item) => {
-          const pulse = item.pulse || null;
           const stInfo = parseStage(item.stage);
           const { total, done, pct } = getProgressNumbers(item);
+          const handoffPrompt = buildHandoffPrompt(item);
+          const isSelected = state.inspectedKey === item._key;
+          const locParts = [];
+          if (item.branch) {
+            locParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="已复制分支名" data-stop-open="1">' + icon("branch", 11) + "<span>" + escapeHtml(item.branch) + "</span></button>");
+          }
+          if (item.worktree) {
+            locParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="已复制工作目录路径" data-stop-open="1">' + icon("folder", 11) + "<span>" + escapeHtml(shortWorktreePath(item.worktree)) + "</span></button>");
+          }
           const progHtml = total > 0
             ? '<div style="display:flex;align-items:center;gap:8px;min-width:110px;"><div class="progress-track"><div class="progress-fill" style="width:' + pct + '%"></div></div><span class="prog-num">' + done + "/" + total + "</span></div>"
             : '<span style="color:var(--text-faint);">—</span>';
-          const targetArg = item.issue_number != null ? String(item.issue_number) : (item.issue || item.issue_dir || "");
-          const startCmd = targetArg && item.repo_path ? ("cd " + item.repo_path + " && idd start " + targetArg) : "";
-          const isSelected = state.inspectedKey === item._key;
           return (
             '<tr class="' + (isSelected ? "is-selected" : "") + '" data-open-key="' + escapeHtml(item._key) + '">' +
-              "<td>" +
-                '<div style="display:flex;align-items:center;gap:8px;">' +
-                  renderIdHtml(item) +
-                  '<span class="list-title-cell" title="' + escapeHtml(item.title || item.issue || "") + '">' + escapeHtml(item.title || item.issue || "未命名任务") + "</span>" +
-                "</div>" +
-              "</td>" +
-              '<td><span class="repo-chip">' + forgeIcon(item.forge_type, 12) + "<span>" + escapeHtml(item.repo_name || "") + "</span></span></td>" +
+              "<td><div style=\"display:flex;align-items:center;gap:8px;\">" + renderIdHtml(item) + "<span>" + escapeHtml(item.title || item.issue || "未命名任务") + "</span></div></td>" +
+              "<td>" + escapeHtml(item.repo_name || "") + "</td>" +
               '<td><span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span></td>" +
-              '<td>' + (item.branch ? '<code style="font-size:11px;color:var(--text-dim);">' + escapeHtml(item.branch) + "</code>" : '<span style="color:var(--text-faint);">—</span>') + "</td>" +
+              "<td>" + (locParts.length ? '<div style="display:flex;flex-direction:column;gap:4px;max-width:240px;">' + locParts.join("") + "</div>" : "—") + "</td>" +
               "<td>" + progHtml + "</td>" +
-              "<td>" + (renderPulseInline(pulse, false) || '<span style="color:var(--text-faint);">—</span>') + "</td>" +
-              "<td>" + (renderChangeInline(item) || '<span style="color:var(--text-faint);">—</span>') + "</td>" +
-              '<td>' + (startCmd ? '<button class="btn btn-xs btn-outline" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="已复制接手命令" data-stop-open="1" type="button">' + icon("terminal", 11) + "<span>接手</span></button>" : "—") + "</td>" +
+              "<td>" + (renderPulseSummary(item.pulse) || "—") + "</td>" +
+              "<td>" + (renderChangeInline(item) || "—") + "</td>" +
+              '<td><button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="已复制 Agent 接力词，可直接粘贴给任意 Agent" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>接力词</span></button></td>" +
             "</tr>"
           );
         }).join("");
@@ -1732,117 +2088,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return (
           '<div class="list-wrap">' +
             '<table class="list-table">' +
-              "<thead><tr><th>Issue / 标题</th><th>仓库</th><th>状态</th><th>分支</th><th>步骤进度</th><th>实时动态</th><th>PR/MR &amp; CI</th><th>操作</th></tr></thead>" +
+              "<thead><tr><th>Issue / 标题</th><th>仓库</th><th>状态</th><th>分支 / 工作目录</th><th>步骤进度</th><th>实时动态</th><th>PR/MR &amp; CI</th><th>操作</th></tr></thead>" +
               "<tbody>" + rowsHtml + "</tbody>" +
             "</table>" +
           "</div>"
         );
-      }
-
-      function renderKpis(snap) {
-        const s = snap.summary || {};
-        const stalled = s.stalled_worktrees || 0;
-        const ciFailed = s.ci_failed_count || 0;
-        const anomalies = stalled + ciFailed;
-        const codingNow = s.coding_now_count || 0;
-        const dirtyWt = s.dirty_worktrees || 0;
-        const openChanges = s.open_changes || 0;
-
-        const cells = [
-          {
-            action: "clear-filters",
-            label: "仓库",
-            value: s.repo_count || 0,
-            sub: "点击重置筛选",
-            subCls: "",
-            warn: false,
-            filtered: false
-          },
-          {
-            action: "toggle-wt",
-            label: "已开工",
-            value: s.active_worktrees || 0,
-            sub: codingNow > 0 ? "刚刚活跃 " + codingNow : "本地工作目录",
-            subCls: codingNow > 0 ? "live" : "",
-            warn: false,
-            filtered: state.worktreeOnly
-          },
-          {
-            action: "",
-            label: "进行中步骤",
-            value: s.in_progress_tasks || 0,
-            sub: dirtyWt > 0 ? dirtyWt + " 处未提交改动" : "工作区干净",
-            subCls: "",
-            warn: false,
-            filtered: false
-          },
-          {
-            action: "",
-            label: "待合入",
-            value: s.ready_to_land_count || 0,
-            sub: openChanges > 0 ? "共 " + openChanges + " 个 Open PR/MR" : "暂无 Open PR/MR",
-            subCls: "",
-            warn: false,
-            filtered: false
-          },
-          {
-            action: "toggle-alerts",
-            label: "异常提醒",
-            value: anomalies,
-            sub: anomalies > 0 ? "卡住 " + stalled + " · CI 失败 " + ciFailed : "全部正常",
-            subCls: anomalies > 0 ? "warn" : "",
-            warn: anomalies > 0,
-            filtered: state.alertsOnly
-          }
-        ];
-
-        document.getElementById("kpis").innerHTML = cells.map((c) => {
-          const cls = ["metric-cell", c.action ? "clickable" : "", c.warn ? "is-warn" : "", c.filtered ? "is-filtered" : ""].filter(Boolean).join(" ");
-          const tag = c.action ? "button" : "div";
-          const attrs = c.action ? ' type="button" data-kpi-action="' + c.action + '"' : "";
-          return (
-            "<" + tag + ' class="' + cls + '"' + attrs + ">" +
-              '<div class="metric-left">' +
-                '<div class="metric-label">' + escapeHtml(c.label) + "</div>" +
-                '<div class="metric-sub ' + c.subCls + '">' + escapeHtml(c.sub) + "</div>" +
-              "</div>" +
-              '<div class="metric-val num">' + c.value + "</div>" +
-            "</" + tag + ">"
-          );
-        }).join("");
-
-        const alertBtn = document.getElementById("alerts-only-btn");
-        if (alertBtn) {
-          if (anomalies > 0 || state.alertsOnly) {
-            alertBtn.style.display = "inline-flex";
-            alertBtn.classList.toggle("active", state.alertsOnly);
-            alertBtn.innerHTML = icon("alertTriangle", 12) + '<span>只看异常</span><span class="pill-cnt">' + anomalies + "</span>";
-          } else {
-            alertBtn.style.display = "none";
-          }
-        }
-      }
-
-      function renderRepoPills(snap) {
-        const repos = snap.repos || [];
-        const totalItems = (snap.issues || []).length + (snap.local_only_items || []).length;
-        const parts = [
-          '<button class="pill ' + (state.selectedRepo === "ALL" ? "active" : "") + '" data-repo="ALL" type="button">' +
-            '<span>全部</span><span class="pill-cnt">' + totalItems + "</span></button>"
-        ];
-        for (const r of repos) {
-          const cnt = (r.issues || []).length + (r.local_only_items || []).length;
-          const activeWt = (r.issues || []).filter((x) => x.worktree).length + (r.local_only_items || []).length;
-          const isAct = state.selectedRepo === r.repo_path;
-          parts.push(
-            '<button class="pill ' + (isAct ? "active" : "") + '" data-repo="' + escapeHtml(r.repo_path) + '" type="button">' +
-              forgeIcon(r.forge, 12) +
-              "<span>" + escapeHtml(r.repo_name) + "</span>" +
-              '<span class="pill-cnt">' + activeWt + "/" + cnt + "</span>" +
-            "</button>"
-          );
-        }
-        document.getElementById("repo-pills").innerHTML = parts.join("");
       }
 
       function renderMain() {
@@ -1854,14 +2104,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (repos.length === 0) {
           container.innerHTML =
             '<div class="empty-state">' +
-              '<div class="empty-icon">' + icon("layers", 18) + "</div>" +
               '<h3 style="margin:0 0 6px;font-size:14.5px;color:var(--text);">暂无已纳管的 Git 仓库</h3>' +
               '<p style="margin:0;font-size:12.5px;">在任意项目目录执行以下任一命令后，仓库会自动同步到这里：</p>' +
-              '<div class="empty-cmds">' +
-                '<code class="empty-cmd">idd start &lt;issue#&gt;</code>' +
-                '<code class="empty-cmd">idd status</code>' +
-                '<code class="empty-cmd">idd repos add .</code>' +
-              "</div>" +
+              '<div class="empty-cmds"><code class="empty-cmd">idd start &lt;issue#&gt;</code><code class="empty-cmd">idd status</code><code class="empty-cmd">idd repos add .</code></div>' +
             "</div>";
           return;
         }
@@ -1870,37 +2115,33 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (items.length === 0) {
           container.innerHTML =
             '<div class="empty-state">' +
-              '<div class="empty-icon">' + icon("activity", 18) + "</div>" +
               '<h3 style="margin:0 0 6px;font-size:14.5px;color:var(--text);">当前筛选条件下没有内容</h3>' +
-              '<p style="margin:0 0 12px;font-size:12.5px;">可以切换仓库、清空搜索词或重置快捷筛选。</p>' +
-              '<button class="btn btn-outline" type="button" data-kpi-action="clear-filters">' + icon("refresh", 12) + "<span>重置筛选</span></button>" +
+              '<p style="margin:0 0 12px;font-size:12.5px;">可以切换仓库、清空搜索词或重置筛选。</p>' +
+              '<button class="btn" type="button" data-kpi-action="clear-filters">' + icon("refresh", 12) + "<span>重置筛选</span></button>" +
             "</div>";
           return;
         }
 
-        const showRepoOnCard = state.selectedRepo === "ALL" && repos.length > 1;
+        if (state.viewMode === "cockpit") {
+          container.innerHTML = renderCockpitView(items);
+          return;
+        }
 
+        const showRepoOnCard = state.selectedRepo === "ALL" && repos.length > 1;
         if (state.viewMode === "kanban") {
           const buckets = {
-            todo: { id: "todo", title: "待处理 Issue", dot: "dot-muted", items: [] },
-            developing: { id: "developing", title: "开发中", dot: "dot-blue", items: [] },
-            review: { id: "review", title: "PR / 修 CI", dot: "dot-amber", items: [] },
-            ready: { id: "ready", title: "待合入", dot: "dot-green", items: [] }
+            todo: { id: "todo", title: "待处理 Issue", dot: "quiet", items: [] },
+            developing: { id: "developing", title: "开发中", dot: "active", items: [] },
+            review: { id: "review", title: "PR / 修 CI", dot: "warm", items: [] },
+            ready: { id: "ready", title: "待合入", dot: "active", items: [] }
           };
           for (const item of items) {
             buckets[cardBucket(item)].items.push(item);
           }
           container.innerHTML = '<div class="kanban">' + Object.values(buckets).map((col) =>
             '<section class="column">' +
-              '<div class="col-hdr">' +
-                '<span class="col-title"><span class="mini-dot ' + col.dot + '"></span><span>' + escapeHtml(col.title) + "</span></span>" +
-                '<span class="col-count">' + col.items.length + "</span>" +
-              "</div>" +
-              '<div class="card-stack">' +
-                (col.items.length
-                  ? col.items.map((it) => renderCard(it, { showRepo: showRepoOnCard, columnId: col.id })).join("")
-                  : '<div class="col-empty">暂无</div>') +
-              "</div>" +
+              '<div class="col-hdr"><span class="col-title"><span class="status-dot ' + col.dot + '"></span><span>' + escapeHtml(col.title) + '</span></span><span class="col-count">' + col.items.length + "</span></div>" +
+              '<div class="card-stack">' + (col.items.length ? col.items.map((it) => renderCard(it, { showRepo: showRepoOnCard })).join("") : '<div class="col-empty">暂无</div>') + "</div>" +
             "</section>"
           ).join("") + "</div>";
         } else if (state.viewMode === "repos") {
@@ -1915,17 +2156,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
           container.innerHTML = Array.from(byRepo.values()).map((grp) =>
             '<section class="repo-section">' +
               '<div class="repo-hdr">' +
-                "<div>" +
-                  '<div class="repo-title-row">' +
-                    forgeIcon(grp.forge, 14) +
-                    '<strong style="font-size:14px;">' + escapeHtml(grp.name) + "</strong>" +
-                    '<span class="badge">' + escapeHtml(grp.forge.toUpperCase()) + "</span>" +
-                  "</div>" +
-                  '<div class="repo-path">' + escapeHtml(grp.path) + "</div>" +
-                "</div>" +
+                '<div><div style="display:flex;align-items:center;gap:8px;">' + forgeIcon(grp.forge, 14) + "<strong>" + escapeHtml(grp.name) + '</strong><span class="badge">' + escapeHtml(grp.forge.toUpperCase()) + '</span></div><div class="mono" style="font-size:11px;color:var(--text-faint);margin-top:2px;">' + escapeHtml(grp.path) + "</div></div>" +
                 '<span class="col-count">' + grp.items.length + " 项</span>" +
               "</div>" +
-              '<div class="repo-grid">' + grp.items.map((it) => renderCard(it, { showRepo: false, columnId: "" })).join("") + "</div>" +
+              '<div class="repo-grid">' + grp.items.map((it) => renderCard(it, { showRepo: false })).join("") + "</div>" +
             "</section>"
           ).join("");
         } else {
@@ -1946,17 +2180,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
           return;
         }
 
-        const allItems = collectItems(true);
-        const item = allItems.find((x) => x._key === state.inspectedKey);
+        const item = collectItems(true).find((x) => x._key === state.inspectedKey);
         if (!item) {
           state.inspectedKey = null;
           overlay.classList.remove("open");
           panel.classList.remove("open");
           return;
         }
-
-        const prevBody = panel.querySelector(".inspector-body");
-        const prevScrollTop = prevBody ? prevBody.scrollTop : 0;
 
         const stInfo = parseStage(item.stage);
         const pulse = item.pulse || null;
@@ -1965,108 +2195,46 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const { total, done, pct } = getProgressNumbers(item);
         const targetArg = item.issue_number != null ? String(item.issue_number) : (item.issue || item.issue_dir || "");
         const startCmd = targetArg && item.repo_path ? ("cd " + item.repo_path + " && idd start " + targetArg) : "";
+        const handoffPrompt = buildHandoffPrompt(item);
         const issueHref = safeUrl(item.url);
-
-        const taskStatusBadge = (st) => {
-          const m = {
-            done: { cls: "tone-success", ic: "checkCircle", text: "已完成" },
-            in_progress: { cls: "tone-info", ic: "activity", text: "进行中" },
-            blocked: { cls: "tone-danger", ic: "xCircle", text: "受阻" },
-            deferred: { cls: "tone-warning", ic: "clock", text: "暂缓" },
-            cancelled: { cls: "tone-muted", ic: "minusCircle", text: "已取消" },
-            planned: { cls: "tone-muted", ic: "clock", text: "待开始" }
-          };
-          const cfg = m[st] || { cls: "tone-warning", ic: "alertTriangle", text: st || "未知" };
-          return '<span class="badge ' + cfg.cls + '">' + icon(cfg.ic, 11) + "<span>" + escapeHtml(cfg.text) + "</span></span>";
-        };
 
         let tabBody = "";
         if (state.inspectorTab === "files") {
-          if (changedFiles.length === 0) {
-            tabBody = '<div class="col-empty">当前工作区干净，暂无未提交改动</div>';
-          } else {
-            const summaryPills =
-              '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">' +
-                '<span class="badge">已修改 ' + (pulse.modified_count || 0) + "</span>" +
-                '<span class="badge">未跟踪 ' + (pulse.untracked_count || 0) + "</span>" +
-                '<span class="badge tone-success">+' + (pulse.insertions || 0) + "</span>" +
-                '<span class="badge tone-danger">-' + (pulse.deletions || 0) + "</span>" +
-              "</div>";
-            const rows = changedFiles.map((f) => {
-              const code = String(f.code || "M").trim();
-              const codeCls = code === "??" ? "untracked" : (code.includes("D") ? "deleted" : "");
-              return '<div class="file-row"><span class="file-code ' + codeCls + '">' + escapeHtml(code) + "</span><span>" + escapeHtml(f.path) + "</span></div>";
-            }).join("");
-            const more = pulse.has_more_files ? '<div style="padding:7px 10px;font-size:11.5px;color:var(--text-faint);">... 还有更多改动文件</div>' : "";
-            tabBody = summaryPills + '<div class="file-list">' + rows + more + "</div>";
-          }
+          tabBody = changedFiles.length === 0
+            ? '<div class="col-empty">当前工作区干净，暂无未提交改动</div>'
+            : '<div class="file-list">' + changedFiles.map((f) => {
+                const code = String(f.code || "M").trim();
+                const cls = code === "??" ? "untracked" : (code.includes("D") ? "deleted" : "");
+                return '<div class="file-row"><span class="file-code ' + cls + '">' + escapeHtml(code) + "</span><span>" + escapeHtml(f.path) + "</span></div>";
+              }).join("") + "</div>";
         } else {
-          if (tasks.length === 0) {
-            tabBody = '<div class="col-empty">' + (item.worktree ? "已建工作目录，尚未拆解任务步骤" : "暂无本地任务步骤") + "</div>";
-          } else {
-            const prog =
-              '<div style="margin-bottom:12px;">' +
-                '<div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--text-faint);margin-bottom:5px;" class="num"><span>总体进度</span><span>' + done + " / " + total + " (" + pct + '%)</span></div>' +
-                '<div class="progress-track" style="height:4px;"><div class="progress-fill" style="width:' + pct + '%"></div></div>' +
-              "</div>";
-            const cards = tasks.map((t) => {
-              const b = taskStatusBadge(t.status);
-              const dep = t.depends_on ? "依赖: " + t.depends_on : "";
-              const testCmd = t.test ? "测试: " + t.test : "";
-              return (
-                '<div class="task-row">' +
-                  '<div class="task-row-top"><span>' + escapeHtml(t.title || t.id) + "</span>" + b + "</div>" +
-                  ((dep || testCmd)
-                    ? '<div class="task-row-sub">' +
-                        (dep ? "<span>" + escapeHtml(dep) + "</span>" : "") +
-                        (testCmd ? '<span class="mono">' + escapeHtml(testCmd) + "</span>" : "") +
-                      "</div>"
-                    : "") +
-                "</div>"
-              );
-            }).join("");
-            tabBody = prog + cards;
-          }
+          tabBody = tasks.length === 0
+            ? '<div class="col-empty">' + (item.worktree ? "已建工作目录，尚未拆解任务步骤" : "暂无本地任务步骤") + "</div>"
+            : '<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--text-faint);margin-bottom:5px;" class="num"><span>总体进度</span><span>' + done + " / " + total + " (" + pct + '%)</span></div><div class="progress-track"><div class="progress-fill" style="width:' + pct + '%"></div></div></div>' +
+              tasks.map((t) => '<div class="task-row"><div class="task-row-top"><span>' + escapeHtml(t.title || t.id) + '</span><span class="badge">' + escapeHtml(t.status || "planned") + "</span></div></div>").join("");
         }
 
         panel.innerHTML =
           '<div class="inspector-hdr">' +
             '<div style="min-width:0;flex:1;">' +
-              '<div class="card-meta" style="flex-wrap:wrap;">' +
-                forgeIcon(item.forge_type, 12) +
-                "<span>" + escapeHtml(item.repo_name || "") + "</span>" +
-                "<span>·</span>" +
-                renderIdHtml(item) +
-                '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" +
-                (issueHref ? '<a class="btn btn-xs" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>查看原单</span></a>" : "") +
-              "</div>" +
+              '<div class="card-meta">' + forgeIcon(item.forge_type, 12) + "<span>" + escapeHtml(item.repo_name || "") + "</span><span>·</span>" + renderIdHtml(item) + '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" + (issueHref ? '<a class="btn btn-xs" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>原单</span></a>" : "") + "</div>" +
               '<h2 class="inspector-title">' + escapeHtml(item.title || item.issue || "未命名任务") + "</h2>" +
             "</div>" +
-            '<button class="btn btn-icon-only" id="inspector-close-btn" type="button" aria-label="关闭详情">' + icon("x", 15) + "</button>" +
+            '<button class="icon-btn" id="inspector-close-btn" type="button" aria-label="关闭详情">' + icon("x", 15) + "</button>" +
           "</div>" +
           '<div class="inspector-body">' +
             '<div class="meta-grid">' +
-              '<div class="meta-row"><span class="meta-key">分支</span><span class="meta-val" title="' + escapeHtml(item.branch || "") + '">' + escapeHtml(item.branch || "—") + "</span>" +
-                (item.branch ? '<button class="btn btn-xs btn-icon-only" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="已复制分支名" type="button" title="复制分支名">' + icon("copy", 11) + "</button>" : "") +
-              "</div>" +
-              '<div class="meta-row"><span class="meta-key">工作目录</span><span class="meta-val" title="' + escapeHtml(item.worktree || "") + '">' + escapeHtml(item.worktree || "尚未创建") + "</span>" +
-                (item.worktree ? '<button class="btn btn-xs btn-icon-only" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="已复制工作目录路径" type="button" title="复制工作目录路径">' + icon("copy", 11) + "</button>" : "") +
-              "</div>" +
-              (pulse && pulse.last_commit_sha
-                ? '<div class="meta-row"><span class="meta-key">最近提交</span><span class="meta-val" title="' + escapeHtml(pulse.last_commit_subject || "") + '">' + escapeHtml(pulse.last_commit_sha + " · " + (pulse.last_commit_subject || "")) + "</span></div>"
-                : "") +
+              '<div class="meta-row"><span class="meta-key">分支</span><span class="meta-val">' + escapeHtml(item.branch || "—") + "</span>" + (item.branch ? '<button class="btn btn-xs btn-icon-only" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="已复制分支名" type="button">' + icon("copy", 11) + "</button>" : "") + "</div>" +
+              '<div class="meta-row"><span class="meta-key">工作目录</span><span class="meta-val">' + escapeHtml(item.worktree || "尚未创建") + "</span>" + (item.worktree ? '<button class="btn btn-xs btn-icon-only" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="已复制工作目录路径" type="button">' + icon("copy", 11) + "</button>" : "") + "</div>" +
             "</div>" +
-            (pulse ? '<div style="margin-top:11px;">' + renderPulseInline(pulse, true) + "</div>" : "") +
-            (item.change ? '<div style="margin-top:10px;">' + renderChangeInline(item) + "</div>" : "") +
-            (startCmd
-              ? '<div class="cmd-box">' +
-                  '<div class="cmd-box-hdr"><span>快捷接手命令</span><button class="btn btn-xs btn-outline" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="已复制接手命令" type="button">' + icon("copy", 11) + "<span>复制</span></button></div>" +
-                  '<div class="cmd-code">$ ' + escapeHtml(startCmd) + "</div>" +
-                "</div>"
-              : "") +
+            '<div class="handoff-box">' +
+              '<div class="handoff-box-hdr"><span>跨 Agent 接力提示词</span><button class="btn btn-xs btn-primary" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="已复制 Agent 接力词，可直接粘贴给任意 Agent" type="button">' + icon("copy", 11) + "<span>复制接力词</span></button></div>" +
+              '<pre class="handoff-pre">' + escapeHtml(handoffPrompt) + "</pre>" +
+            "</div>" +
+            (startCmd ? '<div class="cmd-box"><div class="cmd-box-hdr"><span>终端快捷命令</span><button class="btn btn-xs" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="已复制接手命令" type="button">' + icon("copy", 11) + "<span>复制</span></button></div><div class=\"cmd-code\">$ " + escapeHtml(startCmd) + "</div></div>" : "") +
             '<div class="tabs">' +
-              '<button class="tab-btn ' + (state.inspectorTab === "tasks" ? "active" : "") + '" data-inspector-tab="tasks" type="button">' + icon("listChecks", 13) + "<span>任务步骤 (" + tasks.length + ")</span></button>" +
-              '<button class="tab-btn ' + (state.inspectorTab === "files" ? "active" : "") + '" data-inspector-tab="files" type="button">' + icon("fileDiff", 13) + "<span>改动文件 (" + ((pulse && pulse.dirty_count) || 0) + ")</span></button>" +
+              '<button class="tab-btn ' + (state.inspectorTab === "tasks" ? "active" : "") + '" data-inspector-tab="tasks" type="button">任务步骤 (' + tasks.length + ")</button>" +
+              '<button class="tab-btn ' + (state.inspectorTab === "files" ? "active" : "") + '" data-inspector-tab="files" type="button">改动文件 (' + ((pulse && pulse.dirty_count) || 0) + ")</button>" +
             "</div>" +
             '<div class="tab-pane">' + tabBody + "</div>" +
           "</div>";
@@ -2075,11 +2243,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         panel.classList.add("open");
         overlay.setAttribute("aria-hidden", "false");
         panel.setAttribute("aria-hidden", "false");
-
-        const newBody = panel.querySelector(".inspector-body");
-        if (newBody && prevScrollTop) {
-          newBody.scrollTop = prevScrollTop;
-        }
       }
 
       function computeRenderSignature(snap) {
@@ -2095,9 +2258,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
           w: snap.warnings,
           sr: state.selectedRepo,
           vm: state.viewMode,
+          sc: state.sidebarCollapsed,
           sq: state.search,
           wo: state.worktreeOnly,
           ao: state.alertsOnly,
+          to: state.todoOnly,
+          sk: state.selectedKey,
+          ct: state.consoleTab,
           ik: state.inspectedKey,
           it: state.inspectorTab
         });
@@ -2107,8 +2274,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const snap = state.snapshot;
         if (!snap) return;
 
-        const scopeTag = document.getElementById("scope-tag");
-        if (scopeTag) scopeTag.textContent = snap.global ? "全局" : "单仓库";
         state.lastClockStr = formatClock(snap.generated_at);
         const updatedTag = document.getElementById("updated-tag");
         if (updatedTag) updatedTag.textContent = state.lastClockStr;
@@ -2119,9 +2284,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
         state.lastSig = sig;
 
+        syncHeaderControls();
+        renderWorkspaceHeader(snap);
+        renderSidebarFilters(snap);
         renderKpis(snap);
-        renderRepoPills(snap);
         renderMain();
+        renderSidebarReposAndWorktrees(snap);
         renderInspector();
 
         const warns = snap.warnings || [];
@@ -2133,7 +2301,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const retainedText = retainedCount > 0 ? "已合入保留目录：" + retainedCount + " 个" : "保留目录均已清理";
         document.getElementById("footer").innerHTML =
           "<span>仓库索引：<code>" + escapeHtml(snap.repos_config_path || "~/.config/idd/repos.json") + "</code></span>" +
-          "<span>" + escapeHtml(retainedText) + " · 快捷键 <code>/</code> 搜索 · <code>r</code> 同步远端 · <code>Esc</code> 关闭详情</span>";
+          "<span>" + escapeHtml(retainedText) + " · 快捷键 <code>[</code> 收起侧栏 · <code>/</code> 搜索 · <code>r</code> 同步远端</span>";
       }
 
       async function fetchSnapshot(forceRefresh) {
@@ -2145,6 +2313,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const res = await fetch(url, { cache: "no-store" });
           if (!res.ok) throw new Error("HTTP " + res.status);
           state.snapshot = await res.json();
+          if (!state.didAutoInspect) {
+            state.didAutoInspect = true;
+            const qInspect = urlParams.get("inspect");
+            if (qInspect) {
+              const found = collectItems(true).find((it) => String(it.issue_number) === qInspect || it._key === qInspect);
+              if (found) {
+                state.selectedKey = found._key;
+                if (state.viewMode !== "cockpit") {
+                  state.inspectedKey = found._key;
+                }
+              }
+            }
+          }
           state.lastClockStr = formatClock(state.snapshot.generated_at);
           updateConnectionBadge(true);
           renderAll(false);
@@ -2174,15 +2355,22 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const act = kpiBtn.getAttribute("data-kpi-action");
           if (act === "toggle-wt") {
             state.worktreeOnly = !state.worktreeOnly;
-            document.getElementById("wt-only-cb").checked = state.worktreeOnly;
+            if (state.worktreeOnly) state.todoOnly = false;
           } else if (act === "toggle-alerts") {
             state.alertsOnly = !state.alertsOnly;
+            if (state.alertsOnly) state.todoOnly = false;
+          } else if (act === "toggle-todo") {
+            state.todoOnly = !state.todoOnly;
+            if (state.todoOnly) {
+              state.worktreeOnly = false;
+              state.alertsOnly = false;
+            }
           } else if (act === "clear-filters") {
             state.selectedRepo = "ALL";
             state.worktreeOnly = false;
             state.alertsOnly = false;
+            state.todoOnly = false;
             state.search = "";
-            document.getElementById("wt-only-cb").checked = false;
             document.getElementById("search-input").value = "";
             document.getElementById("search-wrap").classList.remove("has-value");
           }
@@ -2192,20 +2380,45 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return false;
       }
 
+      document.getElementById("sb-filters").addEventListener("click", handleActionClick);
       document.getElementById("kpis").addEventListener("click", handleActionClick);
 
       document.getElementById("repo-pills").addEventListener("click", (e) => {
-        const btn = e.target.closest("button[data-repo]");
+        const btn = e.target.closest("[data-repo]");
         if (!btn) return;
         state.selectedRepo = btn.getAttribute("data-repo") || "ALL";
+        state.selectedKey = null;
+        renderAll(true);
+      });
+
+      document.getElementById("wt-rail-list").addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-jump-key]");
+        if (!btn) return;
+        const key = btn.getAttribute("data-jump-key");
+        state.selectedKey = key;
+        if (state.viewMode !== "cockpit") {
+          state.inspectedKey = key;
+        }
         renderAll(true);
       });
 
       document.getElementById("main-content").addEventListener("click", (e) => {
         if (handleActionClick(e)) return;
-        const target = e.target.closest("[data-open-key]");
-        if (target) {
-          state.inspectedKey = target.getAttribute("data-open-key");
+        const ctab = e.target.closest("[data-console-tab]");
+        if (ctab) {
+          state.consoleTab = ctab.getAttribute("data-console-tab") || "handoff";
+          renderAll(true);
+          return;
+        }
+        const selRow = e.target.closest("[data-select-key]");
+        if (selRow) {
+          state.selectedKey = selRow.getAttribute("data-select-key");
+          renderAll(true);
+          return;
+        }
+        const openEl = e.target.closest("[data-open-key]");
+        if (openEl) {
+          state.inspectedKey = openEl.getAttribute("data-open-key");
           renderAll(true);
         }
       });
@@ -2229,6 +2442,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
         renderAll(true);
       });
 
+      document.getElementById("sidebar-toggle").addEventListener("click", () => {
+        state.sidebarCollapsed = !state.sidebarCollapsed;
+        localStorage.setItem("idd_sidebar_collapsed", state.sidebarCollapsed ? "1" : "0");
+        applySidebarState();
+        renderAll(true);
+      });
+
       document.getElementById("pause-btn").addEventListener("click", () => {
         state.paused = !state.paused;
         syncHeaderControls();
@@ -2241,31 +2461,31 @@ BOARD_HTML = r"""<!DOCTYPE html>
       });
 
       document.getElementById("theme-btn").addEventListener("click", () => {
-        const cur = document.documentElement.getAttribute("data-theme") || "light";
+        const cur = document.documentElement.getAttribute("data-theme") || "dark";
         const next = cur === "dark" ? "light" : "dark";
         localStorage.setItem("idd_board_theme", next);
         applyTheme(next);
       });
 
-      document.getElementById("wt-only-cb").addEventListener("change", (e) => {
-        state.worktreeOnly = Boolean(e.target.checked);
-        renderAll(true);
-      });
-
-      document.getElementById("alerts-only-btn").addEventListener("click", () => {
-        state.alertsOnly = !state.alertsOnly;
-        renderAll(true);
-      });
-
       const searchInput = document.getElementById("search-input");
       const searchWrap = document.getElementById("search-wrap");
+      searchWrap.addEventListener("click", () => {
+        if (state.sidebarCollapsed) {
+          state.sidebarCollapsed = false;
+          localStorage.setItem("idd_sidebar_collapsed", "0");
+          applySidebarState();
+          renderAll(true);
+          setTimeout(() => searchInput.focus(), 40);
+        }
+      });
       searchInput.addEventListener("input", (e) => {
         state.search = e.target.value || "";
         searchWrap.classList.toggle("has-value", state.search.length > 0);
         renderAll(true);
       });
 
-      document.getElementById("search-clear").addEventListener("click", () => {
+      document.getElementById("search-clear").addEventListener("click", (e) => {
+        e.stopPropagation();
         state.search = "";
         searchInput.value = "";
         searchWrap.classList.remove("has-value");
@@ -2280,6 +2500,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         renderAll(true);
       }
 
+      document.getElementById("view-cockpit").addEventListener("click", () => setViewMode("cockpit"));
       document.getElementById("view-kanban").addEventListener("click", () => setViewMode("kanban"));
       document.getElementById("view-repos").addEventListener("click", () => setViewMode("repos"));
       document.getElementById("view-list").addEventListener("click", () => setViewMode("list"));
@@ -2297,8 +2518,20 @@ BOARD_HTML = r"""<!DOCTYPE html>
           return;
         }
         if (inInput) return;
-        if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (e.key === "[" && !e.metaKey && !e.ctrlKey && !e.altKey) {
           e.preventDefault();
+          state.sidebarCollapsed = !state.sidebarCollapsed;
+          localStorage.setItem("idd_sidebar_collapsed", state.sidebarCollapsed ? "1" : "0");
+          applySidebarState();
+          renderAll(true);
+        } else if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          e.preventDefault();
+          if (state.sidebarCollapsed) {
+            state.sidebarCollapsed = false;
+            localStorage.setItem("idd_sidebar_collapsed", "0");
+            applySidebarState();
+            renderAll(true);
+          }
           searchInput.focus();
           searchInput.select();
         } else if ((e.key === "r" || e.key === "R") && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -2307,8 +2540,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
       });
 
-      const savedTheme = localStorage.getItem("idd_board_theme") || "light";
+      const savedTheme = localStorage.getItem("idd_board_theme") || "dark";
       applyTheme(savedTheme);
+      applySidebarState();
       syncHeaderControls();
       fetchSnapshot(true);
       state.timerId = setInterval(() => {
