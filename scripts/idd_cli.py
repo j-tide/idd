@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 from typing import Any, Iterator
+import unicodedata
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -605,11 +606,312 @@ def _require_clean_worktree(worktree: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Subcommand handlers
+# Subcommand handlers & rich terminal status renderer
 # ---------------------------------------------------------------------------
 
 
-def _render_repo_status_markdown(snap: dict[str, Any]) -> str:
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _display_width(text: str) -> int:
+    """Return terminal column width of `text`, ignoring ANSI SGR escapes and accounting for CJK wide chars."""
+    plain = _ANSI_RE.sub("", text)
+    width = 0
+    for ch in plain:
+        if unicodedata.combining(ch) or unicodedata.category(ch) in ("Mn", "Me", "Cf"):
+            continue
+        width += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return width
+
+
+def _truncate_display(text: str, max_width: int) -> str:
+    """Truncate plain `text` to at most `max_width` terminal columns with an ellipsis."""
+    if max_width <= 0:
+        return ""
+    if _display_width(text) <= max_width:
+        return text
+    if max_width == 1:
+        return "…"
+    out: list[str] = []
+    used = 0
+    limit = max_width - 1
+    for ch in text:
+        cw = 0 if (unicodedata.combining(ch) or unicodedata.category(ch) in ("Mn", "Me", "Cf")) else (
+            2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        )
+        if used + cw > limit:
+            break
+        out.append(ch)
+        used += cw
+    return "".join(out).rstrip() + "…"
+
+
+def _pad_display(text: str, width: int) -> str:
+    """Right-pad `text` (which may contain ANSI codes) to `width` terminal columns."""
+    pad = max(0, width - _display_width(text))
+    return text + (" " * pad)
+
+
+def _status_line_width() -> int:
+    """Determine inner content width for `idd status` layout."""
+    if hasattr(sys.stdout, "isatty") and sys.stdout.isatty():
+        cols = shutil.get_terminal_size((92, 24)).columns
+        return max(72, min(104, cols)) - 4
+    return 84
+
+
+def _join_lr(left: str, right: str, total_width: int, min_gap: int = 2) -> str:
+    """Join `left` and right-aligned `right` within `total_width` columns."""
+    gap = max(min_gap, total_width - _display_width(left) - _display_width(right))
+    return f"{left}{' ' * gap}{right}"
+
+
+def _clean_stage_label(stage: str) -> str:
+    """Strip leading emoji / variation selectors from a stage string."""
+    idx = 0
+    while idx < len(stage):
+        ch = stage[idx]
+        if ch.isspace() or unicodedata.category(ch) in ("So", "Mn", "Cf", "Sk"):
+            idx += 1
+        else:
+            break
+    return stage[idx:].strip() or stage.strip()
+
+
+def _style_stage_badge(stage: str, use_color: bool) -> str:
+    """Render a semantic `[stage]` badge using 16-color ANSI SGR."""
+    raw_label = _clean_stage_label(stage) or "—"
+    label = "待处理" if raw_label == "待认领" else raw_label
+    badge = f"[{label}]"
+    if label in {"修 CI", "受阻"}:
+        return _ansi("1;31", badge, use_color)
+    if label == "待合入" or label.startswith("待提"):
+        return _ansi("1;32", badge, use_color)
+    if label == "CI 运行中":
+        return _ansi("1;33", badge, use_color)
+    if label.startswith("草稿"):
+        return _ansi("35", badge, use_color)
+    if label == "待处理":
+        return _ansi("2", badge, use_color)
+    return _ansi("36", badge, use_color)
+
+
+def _style_forge_badge(forge: str, use_color: bool) -> str:
+    """Render a platform badge (`[GitHub]` / `[GitLab]` / `[Local]`)."""
+    if forge == "github":
+        return _ansi("36", "[GitHub]", use_color)
+    if forge == "gitlab":
+        return _ansi("33", "[GitLab]", use_color)
+    return _ansi("2", "[Local]", use_color)
+
+
+def _render_progress_bar(done: int, total: int, use_color: bool, width: int = 8) -> str:
+    """Render a compact Unicode block progress bar with done/total and percentage."""
+    if total <= 0:
+        return _ansi("2", f"{'░' * width}  待拆解步骤", use_color)
+    pct = round((done / total) * 100)
+    filled = min(width, max(0, round((done / total) * width)))
+    empty = width - filled
+    bar_color = "32" if done == total else "36"
+    bar_filled = _ansi(bar_color, "█" * filled, use_color) if filled else ""
+    bar_empty = _ansi("2", "░" * empty, use_color) if empty else ""
+    return f"{bar_filled}{bar_empty}  {done}/{total} {_ansi('2', f'({pct}%)', use_color)}"
+
+
+def _style_pulse(pulse: dict[str, Any] | None, use_color: bool) -> tuple[str, str, bool]:
+    """Return `(status_dot, formatted_pulse_text, is_stalled)` for a worktree pulse."""
+    if not pulse:
+        return _ansi("2", "○", use_color), _ansi("2", "—", use_color), False
+
+    activity_state = str(pulse.get("activity_state") or "quiet")
+    last_active_ago = str(pulse.get("last_active_ago") or "无记录")
+    dirty_count = int(pulse.get("dirty_count") or 0)
+    insertions = int(pulse.get("insertions") or 0)
+    deletions = int(pulse.get("deletions") or 0)
+    git_op = str(pulse.get("git_op") or "")
+    is_stalled = activity_state == "stalled"
+
+    if activity_state == "active":
+        dot = _ansi("1;32", "●", use_color)
+        time_label = "刚刚活跃" if last_active_ago == "刚刚" else last_active_ago
+        time_txt = _ansi("32", time_label, use_color)
+    elif activity_state == "warm":
+        dot = _ansi("33", "●", use_color)
+        time_txt = _ansi("33", last_active_ago, use_color)
+    elif is_stalled:
+        dot = _ansi("1;33", "▲", use_color)
+        short_ago = last_active_ago[:-1] if last_active_ago.endswith("前") else last_active_ago
+        time_txt = _ansi("1;33", f"{short_ago}无动静", use_color)
+    else:
+        dot = _ansi("2", "○", use_color)
+        time_txt = _ansi("2", last_active_ago, use_color)
+
+    parts = [time_txt]
+    if git_op in ("rebasing", "merging"):
+        parts.append(_ansi("1;35", git_op.upper(), use_color))
+
+    if dirty_count > 0:
+        dirty_txt = f"{dirty_count} 文件"
+        if insertions > 0 or deletions > 0:
+            ins_txt = _ansi("32", f"+{insertions}", use_color)
+            del_txt = _ansi("31", f"-{deletions}", use_color)
+            dirty_txt += f" ({ins_txt}/{del_txt})"
+        parts.append(dirty_txt)
+    else:
+        parts.append(_ansi("2", "工作区干净", use_color))
+
+    sep = _ansi("2", " · ", use_color)
+    return dot, sep.join(parts), is_stalled
+
+
+def _style_ci_badge(change: dict[str, Any], use_color: bool) -> str:
+    """Format CI rollup status and mergeability conflict indicator."""
+    overall = change.get("checks_overall") or "NONE"
+    ci_badges = {
+        "PASS": _ansi("32", "✓ CI 全绿", use_color),
+        "FAIL": _ansi("1;31", "✗ CI 失败", use_color),
+        "PENDING": _ansi("33", "◔ CI 运行中", use_color),
+        "NONE": _ansi("2", "○ 无 CI", use_color),
+    }
+    ci_txt = ci_badges.get(overall, str(overall))
+    mstate = change.get("mergeStateStatus") or ""
+    extra = _ansi("1;31", " (落后/冲突)", use_color) if mstate in {"BEHIND", "DIRTY"} else ""
+    return f"{ci_txt}{extra}"
+
+
+def _style_change(change: dict[str, Any], mr_label: str, mr_prefix: str, use_color: bool) -> str:
+    """Format PR/MR reference, Draft tag, CI status, and mergeability state."""
+    num = change.get("number")
+    ref_raw = f"{mr_label} {mr_prefix}{num}" if num else mr_label
+    ref = _ansi("1", ref_raw, use_color)
+    if change.get("isDraft"):
+        ref += _ansi("35", " (Draft)", use_color)
+    ci_txt = _style_ci_badge(change, use_color)
+    sep = _ansi("2", " · ", use_color)
+    return f"{ref}{sep}{ci_txt}"
+
+
+def _render_kpi_strip(summary: dict[str, Any], *, include_repos: bool, use_color: bool) -> str:
+    """Render a compact single-line telemetry summary strip."""
+    parts: list[str] = []
+    if include_repos:
+        rc = int(summary.get("repo_count") or 0)
+        rc_val = _ansi("1", str(rc), use_color) if rc > 0 else _ansi("2", "0", use_color)
+        parts.append(f"{_ansi('2', '仓库', use_color)} {rc_val}")
+
+    wt = int(summary.get("active_worktrees") or 0)
+    coding = int(summary.get("coding_now_count") or 0)
+    wt_val = _ansi("1", str(wt), use_color) if wt > 0 else _ansi("2", "0", use_color)
+    wt_str = f"{_ansi('2', '已开工', use_color)} {wt_val}"
+    if coding > 0:
+        wt_str += f" {_ansi('32', f'(活跃 {coding})', use_color)}"
+    parts.append(wt_str)
+
+    in_prog = int(summary.get("in_progress_tasks") or 0)
+    in_prog_val = _ansi("1;36", str(in_prog), use_color) if in_prog > 0 else _ansi("2", "0", use_color)
+    parts.append(f"{_ansi('2', '进行中步骤', use_color)} {in_prog_val}")
+
+    ready = int(summary.get("ready_to_land_count") or 0)
+    ready_val = _ansi("1;32", str(ready), use_color) if ready > 0 else _ansi("2", "0", use_color)
+    parts.append(f"{_ansi('2', '待合入', use_color)} {ready_val}")
+
+    anomalies = int(summary.get("stalled_worktrees") or 0) + int(summary.get("ci_failed_count") or 0)
+    anom_val = _ansi("1;31", str(anomalies), use_color) if anomalies > 0 else _ansi("2", "0", use_color)
+    parts.append(f"{_ansi('2', '异常', use_color)} {anom_val}")
+
+    return _ansi("2", "  ·  ", use_color).join(parts)
+
+
+def _task_status_glyph(status: str, use_color: bool) -> str:
+    """Return a colored single-cell status symbol for a TASK item."""
+    mapping = {
+        "in_progress": ("1;36", "◐"),
+        "blocked": ("1;31", "✗"),
+        "planned": ("2", "○"),
+        "deferred": ("33", "◌"),
+        "cancelled": ("2", "⊘"),
+    }
+    code, glyph = mapping.get(status, ("1;33", "?"))
+    return _ansi(code, glyph, use_color)
+
+
+def _render_status_card(
+    *,
+    ident: str,
+    ident_style: str,
+    title: str,
+    stage: str,
+    branch: str,
+    worktree: str,
+    tasks: list[dict[str, Any]],
+    counts: dict[str, int],
+    done: int | None,
+    total: int | None,
+    current_task: str,
+    pulse: dict[str, Any] | None,
+    change: dict[str, Any] | None,
+    mr_label: str,
+    mr_prefix: str,
+    width: int,
+    use_color: bool,
+) -> list[str]:
+    """Render one clean, lightweight Issue or local-worktree block."""
+    dot, pulse_text, is_stalled = _style_pulse(pulse, use_color)
+    stage_badge = _style_stage_badge(stage, use_color)
+    ident_styled = _ansi(ident_style, ident, use_color)
+    left_prefix = f"  {dot} {ident_styled}  "
+    title_budget = max(16, width - _display_width(left_prefix) - _display_width(stage_badge) - 2)
+    single_title = " ".join((title or "未命名任务").split())
+    title_styled = _ansi("1", _truncate_display(single_title, title_budget), use_color)
+
+    lines = [_join_lr(f"{left_prefix}{title_styled}", stage_badge, width + 2)]
+    indent = "    "
+    inner_budget = max(24, width - 2)
+    sep = _ansi("2", "  ·  ", use_color)
+
+    meta_parts: list[str] = []
+    if branch or worktree:
+        br_txt = branch or Path(worktree).name
+        meta_parts.append(_ansi("36", _truncate_display(br_txt, 42), use_color))
+    if change:
+        meta_parts.append(_style_change(change, mr_label, mr_prefix, use_color))
+    if meta_parts:
+        lines.append(f"{indent}{sep.join(meta_parts)}")
+
+    has_tasks_section = bool(tasks or worktree or (total is not None and total > 0))
+    if has_tasks_section:
+        t_total = total if total is not None else (sum(int(v) for v in counts.values()) or len(tasks))
+        t_done = done if done is not None else int(counts.get("done") or 0)
+        bar = _render_progress_bar(t_done, t_total, use_color)
+        if current_task:
+            cur_budget = max(12, inner_budget - _display_width(bar) - 7)
+            cur_trunc = _truncate_display(current_task, cur_budget)
+            progress_val = f"{bar}{sep}{_ansi('36', '▶', use_color)} {cur_trunc}"
+        else:
+            progress_val = bar
+        lines.append(f"{indent}{progress_val}")
+
+    if pulse:
+        pulse_line = f"{_ansi('2', '实时脉搏:', use_color)} {pulse_text}"
+        if pulse.get("last_commit_sha"):
+            sha_raw = str(pulse["last_commit_sha"])
+            subj_raw = " ".join(str(pulse.get("last_commit_subject") or "").split())
+            sha_styled = _ansi("36", sha_raw, use_color)
+            rem = inner_budget - _display_width(pulse_line) - 5 - _display_width(sha_raw) - 1
+            if subj_raw and rem >= 10:
+                commit_part = f"{sha_styled} {_ansi('2', _truncate_display(subj_raw, rem), use_color)}"
+            else:
+                commit_part = sha_styled
+            pulse_line = f"{pulse_line}{sep}{commit_part}"
+        lines.append(f"{indent}{pulse_line}")
+        if is_stalled:
+            lines.append(f"{indent}{_ansi('1;33', '!', use_color)} {_ansi('33', '超过 30 分钟无动静，可能在等待确认或卡住了', use_color)}")
+
+    return lines
+
+
+def _render_repo_status_body(snap: dict[str, Any], *, width: int, use_color: bool) -> list[str]:
+    """Render one repository's active cards, orphan PR/MRs, backlog, and remaining TASK list."""
     rows = snap.get("issues") or []
     local_only_items = snap.get("local_only_items") or []
     orphan_changes = snap.get("orphan_changes") or []
@@ -618,88 +920,210 @@ def _render_repo_status_markdown(snap: dict[str, Any]) -> str:
     mr_label = snap.get("mr_label", "PR/MR")
     mr_prefix = snap.get("mr_prefix", "#")
 
-    lines: list[str] = []
-    if rows:
-        lines.extend([
-            f"| Issue | 标题 | 阶段 | TASK 进度 | Worktree / 分支 | 实时脉搏 | {mr_label} & CI 状态 |",
-            "| --- | --- | --- | --- | --- | --- | --- |",
-        ])
-        for row in rows:
-            wt_label = f"`{Path(row['worktree']).name}` ({row['branch']})" if row.get("worktree") else "—"
-            pulse = row.get("pulse") or {}
-            pulse_text = pulse.get("pulse_summary") or "—"
-            if row.get("current_task"):
-                pulse_text = f"{pulse_text} · ▶ {row['current_task']}" if pulse_text != "—" else f"▶ {row['current_task']}"
-            lines.append(
-                f"| #{row['issue_number']} | {task_status.cell(row['title'])} | {row['stage']} | "
-                f"{row['task_progress']} | {task_status.cell(wt_label)} | {task_status.cell(pulse_text)} | "
-                f"{task_status.cell(row['change_summary'])} |"
-            )
+    active_rows = [r for r in rows if r.get("worktree") or r.get("change") or r.get("tasks")]
+    backlog_rows = [r for r in rows if not (r.get("worktree") or r.get("change") or r.get("tasks"))]
 
-    if local_only_items:
+    lines: list[str] = []
+
+    for idx, row in enumerate(active_rows):
+        if idx > 0:
+            lines.append("")
+        lines.extend(
+            _render_status_card(
+                ident=f"#{row['issue_number']}",
+                ident_style="1;36",
+                title=str(row.get("title") or ""),
+                stage=str(row.get("stage") or ""),
+                branch=str(row.get("branch") or ""),
+                worktree=str(row.get("worktree") or ""),
+                tasks=row.get("tasks") or [],
+                counts=row.get("counts") or {},
+                done=None,
+                total=None,
+                current_task=str(row.get("current_task") or ""),
+                pulse=row.get("pulse"),
+                change=row.get("change"),
+                mr_label=mr_label,
+                mr_prefix=mr_prefix,
+                width=width,
+                use_color=use_color,
+            )
+        )
+
+    for loc in local_only_items:
         if lines:
             lines.append("")
-        lines.append("纯本地工作项（未绑定远端 Issue）：")
-        lines.append("")
-        lines.append(task_status.render({"issues": local_only_items, "warnings": []}))
+        loc_counts = loc.get("counts") or {}
+        loc_stage = "⛔ 受阻" if loc_counts.get("blocked", 0) > 0 else "🟡 本地开发"
+        lines.extend(
+            _render_status_card(
+                ident="[本地]",
+                ident_style="35",
+                title=str(loc.get("issue") or "本地工作项"),
+                stage=loc_stage,
+                branch=str(loc.get("branch") or ""),
+                worktree=str(loc.get("worktree") or ""),
+                tasks=loc.get("tasks") or [],
+                counts=loc_counts,
+                done=int(loc.get("done") or 0),
+                total=int(loc.get("total") or 0),
+                current_task=str(loc.get("current_task") or ""),
+                pulse=loc.get("pulse"),
+                change=None,
+                mr_label=mr_label,
+                mr_prefix=mr_prefix,
+                width=width,
+                use_color=use_color,
+            )
+        )
 
     if orphan_changes:
         if lines:
             lines.append("")
-        lines.append(f"其他未关联本地工作树的 Open {mr_label}：")
+        lines.append(f"  {_ansi('2', f'未关联本地目录的 {mr_label} ({len(orphan_changes)})', use_color)}")
         for ch in orphan_changes:
-            badge = ch.get("change_summary") or monitor.format_change_badge(ch, mr_label, mr_prefix)
-            lines.append(f"- {mr_label} {mr_prefix}{ch['number']} `{ch.get('headRefName', '')}`: {ch.get('title', '')} — {badge}")
+            num_txt = _ansi("1", f"{mr_label} {mr_prefix}{ch['number']}", use_color)
+            if ch.get("isDraft"):
+                num_txt += _ansi("35", " (Draft)", use_color)
+            ch_title = _truncate_display(" ".join(str(ch.get("title") or "").split()), max(16, width - 38))
+            br = ch.get("headRefName") or ""
+            br_part = f"  {_ansi('2', f'({br})', use_color)}" if br else ""
+            ci_part = _style_ci_badge(ch, use_color)
+            lines.append(f"    {_ansi('36', '▸', use_color)} {num_txt}  {ch_title}{br_part}{_ansi('2', '  ·  ', use_color)}{ci_part}")
+
+    if backlog_rows:
+        if lines:
+            lines.append("")
+        lines.append(f"  {_ansi('2', f'待处理 Issue ({len(backlog_rows)})', use_color)}")
+        for row in backlog_rows:
+            num_txt = _ansi("2", f"#{row['issue_number']}", use_color)
+            title_txt = _truncate_display(" ".join(str(row.get("title") or "").split()), max(20, width - 14))
+            lines.append(f"    {_ansi('2', '○', use_color)} {num_txt}  {title_txt}")
 
     remaining = [(item, t) for item in local_entries for t in item.get("tasks", []) if t["status"] != "done"]
     if remaining:
         if lines:
             lines.append("")
-        lines.append("未完成 TASK 明细：")
+        lines.append(f"  {_ansi('2', f'未完成步骤 ({len(remaining)})', use_color)}")
         for item, t in remaining:
-            prefix = f"#{item['issue_number']} " if item.get("issue_number") is not None else ""
-            lines.append(f"- {prefix}{item['issue']}/{t['id']} [{t['status']}] {t['title']}；依赖：{t['depends_on'] or '未记录'}")
+            glyph = _task_status_glyph(t["status"], use_color)
+            issue_prefix = f"#{item['issue_number']} " if item.get("issue_number") is not None else ""
+            ref_txt = _ansi("2", f"{issue_prefix}{item['issue']}/{t['id']}", use_color)
+            clean_title = re.sub(rf"^{re.escape(t['id'])}[：:\s]+", "", str(t.get("title") or "")).strip()
+            title_txt = _truncate_display(clean_title or str(t.get("title") or ""), max(16, width - 36))
+            st_label = t["status"]
+            if st_label == "unknown":
+                st_label += f" ({t.get('raw_status') or '缺失'})"
+            dep = t.get("depends_on") or ""
+            dep_part = _ansi("2", f" · 依赖: {dep}", use_color) if dep and dep.lower() != "none" else ""
+            lines.append(f"    {glyph} {ref_txt}  {title_txt}  {_ansi('2', f'[{st_label}]', use_color)}{dep_part}")
 
     if retained:
         if lines:
             lines.append("")
-        lines.append(f"已合入保留的干净工作树：{len(retained)} 个")
+        lines.append(
+            f"  {_ansi('36', 'ℹ', use_color)}  "
+            f"{_ansi('2', f'已合入保留的干净工作树：{len(retained)} 个（按需运行 idd cleanup 清理）', use_color)}"
+        )
 
     if not lines:
-        lines.append("当前没有活跃的 Issue、本地 Worktree 任务或 Open PR/MR。")
+        lines.append(f"  {_ansi('2', '○  当前没有活跃的 Issue、本地 Worktree 任务或 Open PR/MR。', use_color)}")
 
-    return "\n".join(lines)
+    return lines
 
 
-def _render_global_status_markdown(snapshot: dict[str, Any]) -> str:
+def _render_warnings_block(warnings: list[str], *, use_color: bool) -> list[str]:
+    if not warnings:
+        return []
+    out = ["", f"  {_ansi('1;33', '!', use_color)}  {_ansi('33', '提示 / 记录问题', use_color)}"]
+    for w in warnings:
+        out.append(f"    {_ansi('33', '-', use_color)} {_ansi('2', w, use_color)}")
+    return out
+
+
+def _render_status_footer(width: int, *, use_color: bool) -> list[str]:
+    return [
+        "",
+        f"  {_ansi('2', '─' * width, use_color)}",
+        (
+            f"  {_ansi('36', 'ℹ', use_color)}  "
+            f"{_ansi('2', '网页实时看板: ', use_color)}{_ansi('36', 'idd board', use_color)}"
+            f"{_ansi('2', '  ·  终端盯盘: ', use_color)}{_ansi('36', 'idd watch', use_color)}"
+        ),
+        "",
+    ]
+
+
+def _render_global_status(snapshot: dict[str, Any], *, use_color: bool) -> str:
+    width = _status_line_width()
     s = snapshot.get("summary") or {}
     lines = [
-        f"## 全局 IDD 进度总览（共 {s.get('repo_count', 0)} 个仓库 | 活跃 Worktree {s.get('active_worktrees', 0)} | "
-        f"刚刚活跃 {s.get('coding_now_count', 0)} | 进行中 TASK {s.get('in_progress_tasks', 0)} | "
-        f"疑似卡住 {s.get('stalled_worktrees', 0)}）"
+        "",
+        (
+            f"  {_ansi('1;36', '◆', use_color)} {_ansi('1', 'IDD', use_color)}  "
+            f"{_ansi('36', '全局 IDD 进度总览', use_color)}  "
+            f"{_ansi('2', f'·  v{__version__}', use_color)}"
+        ),
+        f"  {_ansi('2', '─' * width, use_color)}",
+        f"  {_render_kpi_strip(s, include_repos=True, use_color=use_color)}",
     ]
+
     repos = snapshot.get("repos") or []
     if not repos:
         lines.extend([
             "",
-            "暂无已注册仓库。可在任意 Git 项目目录运行 `idd start <issue#>`、`idd status` 或 `idd repos add .` 后自动加入全局监控。",
-            "直观网页看板可运行：`idd board`（或终端实时刷新 `idd watch`）。",
+            f"  {_ansi('2', '○  暂无已注册仓库。可在任意 Git 项目目录运行以下命令自动纳入监控：', use_color)}",
+            f"     {_ansi('36', 'idd start <issue#>', use_color)}  {_ansi('2', '·', use_color)}  "
+            f"{_ansi('36', 'idd status', use_color)}  {_ansi('2', '·', use_color)}  "
+            f"{_ansi('36', 'idd repos add .', use_color)}",
         ])
-        return "\n".join(lines)
+    else:
+        for repo in repos:
+            forge_badge = _style_forge_badge(str(repo.get("forge") or "local"), use_color)
+            pretty_repo_path = _pretty_path(Path(str(repo.get("repo_path") or "")))
+            lines.extend([
+                "",
+                (
+                    f"  {_ansi('1;34', '▸', use_color)} {_ansi('1', str(repo.get('repo_name') or ''), use_color)}  "
+                    f"{forge_badge}  {_ansi('2', pretty_repo_path, use_color)}"
+                ),
+                f"  {_ansi('2', '─' * width, use_color)}",
+                *_render_repo_status_body(repo, width=width, use_color=use_color),
+            ])
 
-    for repo in repos:
-        forge_tag = {"github": "GitHub", "gitlab": "GitLab", "local": "Local"}.get(repo.get("forge", "local"), "Local")
-        lines.extend([
-            "",
-            f"### 📦 {repo['repo_name']} [{forge_tag}] — `{repo['repo_path']}`",
-            "",
-            _render_repo_status_markdown(repo),
-        ])
+    lines.extend(_render_warnings_block(snapshot.get("warnings") or [], use_color=use_color))
+    lines.extend(_render_status_footer(width, use_color=use_color))
+    return "\n".join(lines)
 
-    warnings = snapshot.get("warnings") or []
-    if warnings:
-        lines.extend(["", "提示 / 记录问题："])
-        lines.extend(f"- {w}" for w in warnings)
+
+def _render_single_repo_status(snap: dict[str, Any], *, use_color: bool) -> str:
+    width = _status_line_width()
+    summary = monitor._compute_global_summary(  # noqa: SLF001
+        [snap],
+        snap.get("issues") or [],
+        snap.get("local_only_items") or [],
+        snap.get("orphan_changes") or [],
+    )
+    forge_badge = _style_forge_badge(str(snap.get("forge") or "local"), use_color)
+    pretty_repo_path = _pretty_path(Path(str(snap.get("repo_path") or "")))
+    default_branch = str(snap.get("default_branch") or "main")
+
+    lines = [
+        "",
+        (
+            f"  {_ansi('1;36', '◆', use_color)} {_ansi('1', 'IDD', use_color)}  "
+            f"{_ansi('36', '仓库状态总览', use_color)}  "
+            f"{_ansi('2', '·', use_color)}  {_ansi('1', str(snap.get('repo_name') or ''), use_color)}  "
+            f"{forge_badge}"
+        ),
+        f"  {_ansi('2', f'{pretty_repo_path}  ·  {default_branch}', use_color)}",
+        f"  {_ansi('2', '─' * width, use_color)}",
+        f"  {_render_kpi_strip(summary, include_repos=False, use_color=use_color)}",
+        "",
+        *_render_repo_status_body(snap, width=width, use_color=use_color),
+    ]
+    lines.extend(_render_warnings_block(snap.get("warnings") or [], use_color=use_color))
+    lines.extend(_render_status_footer(width, use_color=use_color))
     return "\n".join(lines)
 
 
@@ -721,7 +1145,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(snapshot, ensure_ascii=False, indent=2))
         else:
-            print(_render_global_status_markdown(snapshot))
+            print(_render_global_status(snapshot, use_color=_should_use_color(sys.stdout)))
         return 0
 
     try:
@@ -739,11 +1163,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(json.dumps(snap, ensure_ascii=False, indent=2))
         return 0
 
-    text = _render_repo_status_markdown(snap)
-    warnings = snap.get("warnings") or []
-    if warnings:
-        text += "\n\n提示 / 记录问题：\n" + "\n".join(f"- {w}" for w in warnings)
-    print(text)
+    print(_render_single_repo_status(snap, use_color=_should_use_color(sys.stdout)))
     return 0
 
 

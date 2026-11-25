@@ -1085,7 +1085,7 @@ def render_watch_frame(
         lines.append(_ansi("1;34", repo_hdr, use_color))
 
         if not wt_rows and not local_items and not orphans:
-            backlog_note = f"（Open Backlog: {len(backlog_rows)} 个未认领）" if backlog_rows else "（暂无进行中工作树）"
+            backlog_note = f"（待处理 Issue: {len(backlog_rows)} 个）" if backlog_rows else "（暂无进行中工作树）"
             lines.append(f"  {backlog_note}")
 
         for row in wt_rows:
@@ -1124,7 +1124,7 @@ def render_watch_frame(
         if backlog_rows:
             preview = ", ".join(f"#{r['issue_number']} {r['title']}" for r in backlog_rows[:4])
             extra = f" 等共 {len(backlog_rows)} 个" if len(backlog_rows) > 4 else ""
-            lines.append(f"  待认领 Issue ({len(backlog_rows)}): {preview}{extra}")
+            lines.append(f"  待处理 Issue ({len(backlog_rows)}): {preview}{extra}")
         if retained:
             lines.append(f"  已合入保留的工作树: {len(retained)} 个（工作区干净）")
 

@@ -13,7 +13,7 @@ import tempfile
 import unittest
 import urllib.request
 
-from test_idd_cli import FAKE_GH_SCRIPT, IDD_BIN
+from test_idd_cli import FAKE_GH_SCRIPT, IDD_BIN, parse_skill_version
 
 
 def _create_repo_harness(
@@ -289,13 +289,32 @@ class TestMonitorAndBoard(unittest.TestCase):
                     self.assertEqual(resp.status, 200)
                     health = json.loads(resp.read().decode("utf-8"))
                     self.assertTrue(health["ok"])
-                    self.assertEqual(health["version"], "0.5.0")
+                    self.assertEqual(health["version"], parse_skill_version())
 
                 with urllib.request.urlopen(f"{base_url}/", timeout=5) as resp:
                     self.assertEqual(resp.status, 200)
                     html = resp.read().decode("utf-8")
                     self.assertIn("IDD 实时开发监控看板", html)
+                    self.assertIn('data-theme="light"', html)
+                    self.assertIn(f"v{parse_skill_version()}", html)
+                    self.assertIn("待处理 Issue", html)
+                    self.assertNotIn("backlog", html.lower())
+                    self.assertNotIn("__IDD_VERSION__", html)
                     self.assertNotIn("cdn.", html.lower())
+                    for element_id in ("view-kanban", "view-repos", "view-list", "inspector-panel"):
+                        self.assertIn(element_id, html)
+                    node_bin = shutil.which("node")
+                    if node_bin:
+                        script_match = re.search(r"<script>(.*)</script>", html, re.S)
+                        self.assertIsNotNone(script_match)
+                        assert script_match is not None
+                        js_check = subprocess.run(
+                            [node_bin, "--check"],
+                            input=script_match.group(1),
+                            text=True,
+                            capture_output=True,
+                        )
+                        self.assertEqual(js_check.returncode, 0, js_check.stderr)
 
                 with urllib.request.urlopen(f"{base_url}/api/snapshot", timeout=5) as resp:
                     snap1 = json.loads(resp.read().decode("utf-8"))
@@ -319,6 +338,82 @@ class TestMonitorAndBoard(unittest.TestCase):
                     proc.stdout.close()
                 if proc.stderr is not None:
                     proc.stderr.close()
+
+    def test_status_terminal_styling_color_controls_and_single_repo_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_home = root / "home"
+            workspace = fake_home / "workspace"
+            cfg = fake_home / ".config" / "idd"
+            empty_dir = root / "outside"
+            empty_dir.mkdir()
+
+            repo, _, state_file, env = _create_repo_harness(workspace / "h", "styled-app", cfg)
+            env["HOME"] = str(fake_home)
+
+            wt = Path(json.loads(self._run(env, repo, "start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+
+            tdir = wt / "TASK/42-export-csv"
+            tdir.mkdir(parents=True)
+            (tdir / "TASK-01-api.md").write_text(
+                "# TASK-01：实现接口\n\n- Issue: #42\n- Status: done\n- Depends on: none\n- Test: pytest\n",
+                encoding="utf-8",
+            )
+            (tdir / "TASK-02-ui.md").write_text(
+                "# TASK-02：美化界面\n\n- Issue: #42\n- Status: in_progress\n- Depends on: TASK-01\n- Test: pytest\n",
+                encoding="utf-8",
+            )
+            (wt / "app.py").write_text("line1 = 1\nline2 = 2\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(wt), "commit", "-m", "feat: 实现接口\n\nTask: 42-export-csv/TASK-01\nRefs: #42"],
+                check=True,
+                capture_output=True,
+            )
+            self._run(env, repo, "pr", "42")
+
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            pr_num = str(next(iter(state["prs"].keys())))
+            state["prs"][pr_num]["statusCheckRollup"] = [
+                {"name": "ci / test", "status": "COMPLETED", "conclusion": "FAILURE"}
+            ]
+            state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            # 1. Single-repo plain non-TTY output
+            single_plain = self._run(env, repo, "status").stdout
+            self.assertNotIn("\x1b[", single_plain)
+            self.assertIn("◆ IDD", single_plain)
+            self.assertIn("仓库状态总览", single_plain)
+            self.assertIn("~/workspace/h/styled-app", single_plain)
+            self.assertIn("实时脉搏", single_plain)
+            self.assertIn("█", single_plain)
+            self.assertIn("░", single_plain)
+            self.assertIn("待处理 Issue", single_plain)
+            self.assertIn("✗ CI 失败", single_plain)
+
+            # 2. Global plain non-TTY output
+            global_plain = self._run(env, empty_dir, "status", "-g").stdout
+            self.assertNotIn("\x1b[", global_plain)
+            self.assertIn("全局 IDD 进度总览", global_plain)
+            self.assertIn("~/workspace/h/styled-app", global_plain)
+
+            # 3. FORCE_COLOR=1 emits ANSI escapes, NO_COLOR=1 suppresses them
+            color_env = dict(env)
+            color_env["FORCE_COLOR"] = "1"
+            color_out = self._run(color_env, repo, "status").stdout
+            self.assertIn("\x1b[", color_out)
+
+            nocolor_env = dict(color_env)
+            nocolor_env["NO_COLOR"] = "1"
+            nocolor_out = self._run(nocolor_env, repo, "status").stdout
+            self.assertNotIn("\x1b[", nocolor_out)
+
+            # 4. --json remains valid pure JSON even under FORCE_COLOR=1
+            json_out = self._run(color_env, repo, "status", "--json").stdout
+            parsed = json.loads(json_out)
+            self.assertEqual(parsed["repo_name"], "styled-app")
 
 
 if __name__ == "__main__":
