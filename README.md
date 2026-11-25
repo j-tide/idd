@@ -4,7 +4,7 @@
 
 **让 Claude Code、Codex 与 Antigravity 共用同一套 Issue 驱动开发流水线**
 
-[![Version](https://img.shields.io/badge/version-v0.5.0-10b981?style=flat-square)](https://github.com/j-tide/idd)
+[![Version](https://img.shields.io/badge/version-v0.5.0-10b981?style=flat-square)](https://github.com/j-tide/idd/releases)
 [![Forges](https://img.shields.io/badge/forges-GitHub%20%C2%B7%20Self--Hosted%20GitLab-fc6d26?style=flat-square)](#)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(stdlib)-8b5cf6?style=flat-square)](#)
 [![Agents](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Antigravity-38bdf8?style=flat-square)](#)
@@ -94,10 +94,20 @@ idd uninstall
 
 ---
 
-## 开发与测试
+## 开发、测试与发版
 
-零外部依赖，使用 Python 3 标准库直接运行全部单元测试：
+零外部依赖，使用 Python 3 标准库直接运行全部单元测试，并以 [SKILL.md](SKILL.md) 中的 `metadata.version` 作为唯一版本源：
 
 ```bash
+# 运行全部单元测试
 python3 -m unittest discover -s tests -v
+
+# 校验 SKILL.md、README.md 徽章与 idd --version 一致性
+python3 scripts/release.py --check
+
+# 发版里程碑：自动递增版本、跑全量测试、提交并打注释 Tag（例如 0.5.0 -> 0.6.0）
+python3 scripts/release.py minor --tag
+git push origin main v0.6.0
 ```
+
+> 推送 `vX.Y.Z` Tag 后，GitHub Actions 会自动校验版本、运行全量测试并创建 GitHub Release；平时用户侧的 `idd upgrade` 与后台 6 小时自动同步仍安全快进跟踪 `origin/main`。

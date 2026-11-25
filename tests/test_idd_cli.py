@@ -12,8 +12,15 @@ import tempfile
 import unittest
 
 
-IDD_BIN = Path(__file__).resolve().parents[1] / "scripts/idd"
-IDD_CLI = Path(__file__).resolve().parents[1] / "scripts/idd_cli.py"
+SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from version import parse_skill_version  # noqa: E402
+
+
+IDD_BIN = SCRIPTS_DIR / "idd"
+IDD_CLI = SCRIPTS_DIR / "idd_cli.py"
 
 
 FAKE_GH_SCRIPT = r"""#!/usr/bin/env python3
@@ -579,7 +586,7 @@ class TestIddCli(unittest.TestCase):
 
     def test_version_flag_and_missing_subcommand(self) -> None:
         res = subprocess.run([sys.executable, str(IDD_BIN), "--version"], capture_output=True, text=True, check=True)
-        self.assertIn("idd 0.5.0", res.stdout)
+        self.assertIn(f"idd {parse_skill_version()}", res.stdout)
         no_args = subprocess.run([sys.executable, str(IDD_BIN)], capture_output=True, text=True, check=False)
         self.assertEqual(no_args.returncode, 2)
 
