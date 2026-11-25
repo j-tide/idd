@@ -35,9 +35,10 @@ from forge import (  # noqa: E402
 import board_ui  # noqa: E402
 import monitor  # noqa: E402
 import task_status  # noqa: E402
+from version import get_version  # noqa: E402
 
 
-__version__ = "0.5.0"
+__version__ = get_version()
 AUTO_UPDATE_INTERVAL_SECONDS = 6 * 3600
 
 ALLOWED_TYPES = ("feat", "fix", "refactor", "perf", "docs", "test", "ci", "chore")
@@ -1639,6 +1640,7 @@ def run_bg_auto_update() -> int:
         return 0
 
     if branch == "main" and not dirty and ahead == 0:
+        old_ver = get_version(skill_dir / "SKILL.md", fallback="")
         merge_proc = subprocess.run(
             ["git", "-C", str(skill_dir), "merge", "--ff-only", "origin/main"],
             capture_output=True,
@@ -1646,6 +1648,7 @@ def run_bg_auto_update() -> int:
         )
         if merge_proc.returncode == 0:
             _ensure_scripts_executable(skill_dir)
+            new_ver = get_version(skill_dir / "SKILL.md", fallback="")
             new_sha = subprocess.run(
                 ["git", "-C", str(skill_dir), "rev-parse", "--short", "HEAD"],
                 capture_output=True,
@@ -1656,7 +1659,10 @@ def run_bg_auto_update() -> int:
                 capture_output=True,
                 text=True,
             ).stdout.strip()
-            notice = f"✨ idd 已自动同步至最新 ({old_sha} → {new_sha}): {subject}"
+            if old_ver and new_ver and old_ver != new_ver:
+                notice = f"✨ idd 已自动同步至最新 (v{old_ver} → v{new_ver}, {old_sha} → {new_sha}): {subject}"
+            else:
+                notice = f"✨ idd 已自动同步至最新 ({old_sha} → {new_sha}): {subject}"
             _save_update_state({"last_checked_at": now, "pending_notice": notice, "behind_count": 0})
             return 0
 
@@ -1710,11 +1716,12 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
 
     run_cmd(["git", "-C", str(skill_dir), "fetch", "origin", "main"])
     branch, dirty, behind, ahead, cur_sha = _inspect_skill_repo_sync(skill_dir)
+    skill_ver = get_version(skill_dir / "SKILL.md", fallback=__version__)
     now = time.time()
 
     if args.check:
         lines = [
-            f"当前版本：idd {__version__}",
+            f"当前版本：idd {skill_ver}",
             f"技能目录：{skill_dir}",
             f"当前状态：{branch or '(detached)'} @ {cur_sha}{' (有未提交改动)' if dirty else ''}",
         ]
@@ -1735,7 +1742,7 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     if behind == 0:
         _ensure_scripts_executable(skill_dir)
         _save_update_state({"last_checked_at": now, "pending_notice": "", "behind_count": 0})
-        print(f"idd 已是最新版本 (v{__version__}, {cur_sha})。")
+        print(f"idd 已是最新版本 (v{skill_ver}, {cur_sha})。")
         return 0
 
     reasons: list[str] = []
@@ -1758,8 +1765,10 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
             "请清理改动或切回干净的 `main` 后重试 `idd upgrade`。"
         )
 
+    old_ver = get_version(skill_dir / "SKILL.md", fallback="")
     run_cmd(["git", "-C", str(skill_dir), "merge", "--ff-only", "origin/main"])
     _ensure_scripts_executable(skill_dir)
+    new_ver = get_version(skill_dir / "SKILL.md", fallback="")
     new_sha = run_cmd(["git", "-C", str(skill_dir), "rev-parse", "--short", "HEAD"]).stdout.strip()
     changelog = run_cmd(
         ["git", "-C", str(skill_dir), "log", "--oneline", f"{cur_sha}..{new_sha}"],
@@ -1767,7 +1776,10 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     ).stdout.strip()
     _save_update_state({"last_checked_at": now, "pending_notice": "", "behind_count": 0})
 
-    lines = [f"已更新 idd：{cur_sha} → {new_sha}"]
+    if old_ver and new_ver and old_ver != new_ver:
+        lines = [f"已更新 idd：v{old_ver} → v{new_ver} ({cur_sha} → {new_sha})"]
+    else:
+        lines = [f"已更新 idd：{cur_sha} → {new_sha}"]
     if changelog:
         lines.append(changelog)
     print("\n".join(lines))
@@ -1846,7 +1858,41 @@ def _check_skill_repo_uninstall_safety(skill_dir: Path) -> list[str]:
     return reasons
 
 
+def _should_use_color(stream: Any) -> bool:
+    """Return True when ANSI SGR styling should be emitted to `stream`."""
+    if os.environ.get("NO_COLOR"):
+        return False
+    force = os.environ.get("FORCE_COLOR", "") or os.environ.get("CLICOLOR_FORCE", "")
+    if force and force != "0":
+        return True
+    if os.environ.get("TERM") == "dumb":
+        return False
+    return bool(hasattr(stream, "isatty") and stream.isatty())
+
+
+def _ansi(code: str, text: str, use_color: bool) -> str:
+    return f"\x1b[{code}m{text}\x1b[0m" if use_color else text
+
+
+def _pretty_path(path: Path) -> str:
+    """Format paths inside $HOME using a `~/` prefix for cleaner display."""
+    raw = str(path)
+    home_raw = str(Path.home()).rstrip("/")
+    home_canon = str(Path.home().resolve(strict=False)).rstrip("/")
+    for candidate in (raw, str(path.resolve(strict=False))):
+        for prefix in (home_raw, home_canon):
+            if not prefix:
+                continue
+            if candidate == prefix:
+                return "~"
+            if candidate.startswith(prefix + "/"):
+                return "~/" + candidate[len(prefix) + 1 :]
+    return raw
+
+
 def cmd_uninstall(args: argparse.Namespace) -> int:
+    use_color = _should_use_color(sys.stdout)
+    use_err_color = _should_use_color(sys.stderr)
     skill_dir = get_skill_repo_dir()
     bin_dir = get_bin_dir()
     config_dir = get_config_dir()
@@ -1869,23 +1915,23 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
                 seen_links.add(argv0_key)
 
     links_to_remove: list[Path] = []
-    warnings: list[str] = []
+    warnings: list[tuple[str, Path]] = []
     for is_bin, link_path in candidates:
         if link_path.is_symlink():
             if _symlink_points_to_idd(link_path, skill_dir, is_bin=is_bin):
                 links_to_remove.append(link_path)
             else:
-                warnings.append(f"跳过无关软链：{link_path}")
+                warnings.append(("跳过无关软链  ", link_path))
         elif link_path.exists():
-            warnings.append(f"跳过非软链路径：{link_path}")
+            warnings.append(("跳过非软链路径", link_path))
 
     dirs_to_remove: list[tuple[str, Path]] = []
-    kept_items: list[str] = []
+    kept_items: list[Path] = []
     if cache_dir.exists() or cache_dir.is_symlink():
         dirs_to_remove.append(("缓存目录", cache_dir))
     if args.keep_config:
         if config_dir.exists() or config_dir.is_symlink():
-            kept_items.append(f"保留配置目录：{config_dir}")
+            kept_items.append(config_dir)
     else:
         if config_dir.exists() or config_dir.is_symlink():
             dirs_to_remove.append(("配置目录", config_dir))
@@ -1899,31 +1945,48 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             raise IddError(f"目录 `{d}` 不像是 idd 技能目录（缺少 SKILL.md / scripts/idd），已中止卸载。")
 
     if not links_to_remove and not dirs_to_remove:
-        for warn in warnings:
-            print(f"- {warn}", file=sys.stderr)
-        for item in kept_items:
-            print(f"- {item}")
-        print("未检测到可卸载的 idd 安装文件。")
+        for label, warn_path in warnings:
+            print(
+                f"  {_ansi('1;33', '!', use_err_color)}  {label}  {_ansi('2', _pretty_path(warn_path), use_err_color)}",
+                file=sys.stderr,
+            )
+        for item_path in kept_items:
+            print(f"  {_ansi('36', '○', use_color)}  {_ansi('2', '保留配置', use_color)}    {_pretty_path(item_path)}")
+        print(f"  {_ansi('36', 'i', use_color)}  未检测到可卸载的 idd 安装文件。")
         return 0
 
     safety_reasons: list[str] = []
     if any(d == skill_dir for _, d in dirs_to_remove) and not skill_dir.is_symlink():
         safety_reasons = _check_skill_repo_uninstall_safety(skill_dir)
 
-    print("将要移除以下 idd 文件：")
+    print()
+    print(
+        f"  {_ansi('1;36', '◆', use_color)} {_ansi('1', 'IDD', use_color)}  "
+        f"{_ansi('36', '卸载', use_color)}  {_ansi('2', '·  Issue-Driven Development', use_color)}"
+    )
+    print(f"  {_ansi('2', '─' * 46, use_color)}")
+    print(f"  {_ansi('2', '待移除清单（不影响业务仓库、分支与 Worktree）：', use_color)}")
+    print()
     for link in links_to_remove:
-        print(f"  - 软链：{link}")
+        print(f"  {_ansi('1;31', '×', use_color)}  软链        {_pretty_path(link)}")
     for label, d in dirs_to_remove:
-        print(f"  - {label}：{d}")
-    for item in kept_items:
-        print(f"- {item}")
-    for warn in warnings:
-        print(f"- {warn}", file=sys.stderr)
+        print(f"  {_ansi('1;31', '×', use_color)}  {label}    {_pretty_path(d)}")
+    for item_path in kept_items:
+        print(f"  {_ansi('36', '○', use_color)}  {_ansi('2', '保留配置', use_color)}    {_pretty_path(item_path)}")
+    for label, warn_path in warnings:
+        print(
+            f"  {_ansi('1;33', '!', use_err_color)}  {label}  {_ansi('2', _pretty_path(warn_path), use_err_color)}",
+            file=sys.stderr,
+        )
 
     if args.dry_run:
         if safety_reasons and not args.force:
-            print(f"提示：技能仓库存在本地状态（{'、'.join(safety_reasons)}），实际卸载需先清理或传入 `--force`。")
-        print("[dry-run] 仅预览，未删除任何文件。")
+            reason_text = "、".join(safety_reasons)
+            print(
+                f"\n  {_ansi('1;33', '!', use_color)}  "
+                f"{_ansi('33', f'技能仓库存在本地状态（{reason_text}），实际卸载需先清理或传入 `--force`。', use_color)}"
+            )
+        print(f"\n  {_ansi('36', 'i', use_color)}  [dry-run] 仅预览，未删除任何文件。\n")
         return 0
 
     if safety_reasons and not args.force:
@@ -1936,12 +1999,12 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         if not sys.stdin.isatty():
             raise IddError("当前为非交互环境，请传入 `-y` / `--yes` 确认卸载，或先用 `--dry-run` 预览。")
         try:
-            answer = input("确认完全卸载 idd？[y/N] ").strip().lower()
+            answer = input(f"\n  {_ansi('1;33', '?', use_color)}  确认完全卸载 idd？[y/N] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
-            print("\n已取消卸载。")
+            print(f"\n  {_ansi('2', 'i  已取消卸载。', use_color)}")
             return 1
         if answer not in {"y", "yes"}:
-            print("已取消卸载。")
+            print(f"  {_ansi('2', 'i  已取消卸载。', use_color)}")
             return 1
 
     cwd_inside_skill = False
@@ -1960,9 +2023,10 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         elif d.exists():
             shutil.rmtree(d)
 
-    print(f"已完成 idd 卸载（共移除 {len(links_to_remove)} 条软链、{len(dirs_to_remove)} 个目录）。")
+    summary = f"（共移除 {len(links_to_remove)} 条软链、{len(dirs_to_remove)} 个目录）"
+    print(f"\n  {_ansi('1;32', '✓', use_color)}  {_ansi('1', '已完成 idd 卸载', use_color)} {_ansi('2', summary, use_color)}\n")
     if cwd_inside_skill:
-        print("提示：当前终端所在目录已被移除，请执行 `cd ~` 返回主目录。")
+        print(f"  {_ansi('36', 'i', use_color)}  当前终端所在目录已被移除，请执行 `cd ~` 返回主目录。\n")
     return 0
 
 

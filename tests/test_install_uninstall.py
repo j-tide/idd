@@ -20,6 +20,7 @@ SCRIPT_FILES = (
     "scripts/monitor.py",
     "scripts/board_ui.py",
     "scripts/task_status.py",
+    "scripts/version.py",
 )
 
 
@@ -388,6 +389,74 @@ class TestInstallAndUninstall(unittest.TestCase):
             self.assertFalse((home_dir / ".local" / "bin" / "idd").is_symlink())
             self.assertFalse(config_dir.exists())
             self.assertFalse(cache_dir.exists())
+
+    def test_install_and_uninstall_color_and_pretty_path_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            origin, _ = _create_bare_idd_origin(tmp_path)
+            home_dir = tmp_path / "home"
+            home_dir.mkdir()
+
+            # 1. Default non-TTY install emits clean plain text with `~/` paths
+            plain_env = _isolated_env(home_dir)
+            plain_env["IDD_REPO_URL"] = origin.as_uri()
+            res_plain = subprocess.run(["sh", str(INSTALL_SH)], env=plain_env, capture_output=True, text=True)
+            self.assertEqual(res_plain.returncode, 0, res_plain.stderr + res_plain.stdout)
+            self.assertNotIn("\x1b[", res_plain.stdout)
+            self.assertNotIn("\x1b[", res_plain.stderr)
+            self.assertIn("◆ IDD", res_plain.stdout)
+            self.assertIn("~/.agents/skills/idd", res_plain.stdout)
+            self.assertIn("~/.local/bin/idd", res_plain.stdout)
+
+            # 2. FORCE_COLOR=1 emits ANSI escapes
+            color_env = dict(plain_env)
+            color_env["FORCE_COLOR"] = "1"
+            res_color = subprocess.run(["sh", str(INSTALL_SH)], env=color_env, capture_output=True, text=True)
+            self.assertEqual(res_color.returncode, 0, res_color.stderr + res_color.stdout)
+            self.assertIn("\x1b[", res_color.stdout)
+
+            # 3. NO_COLOR=1 overrides FORCE_COLOR=1
+            nocolor_env = dict(color_env)
+            nocolor_env["NO_COLOR"] = "1"
+            res_nocolor = subprocess.run(["sh", str(INSTALL_SH)], env=nocolor_env, capture_output=True, text=True)
+            self.assertEqual(res_nocolor.returncode, 0, res_nocolor.stderr + res_nocolor.stdout)
+            self.assertNotIn("\x1b[", res_nocolor.stdout)
+
+            # 4. Same rules for `idd uninstall --dry-run`
+            bin_idd = home_dir / ".local" / "bin" / "idd"
+            un_plain_env = _isolated_env(home_dir)
+            un_plain_env["IDD_NO_AUTO_UPDATE"] = "1"
+            un_plain = subprocess.run(
+                [str(bin_idd), "uninstall", "--dry-run"],
+                env=un_plain_env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(un_plain.returncode, 0, un_plain.stderr + un_plain.stdout)
+            self.assertNotIn("\x1b[", un_plain.stdout)
+            self.assertIn("~/.agents/skills/idd", un_plain.stdout)
+
+            un_color_env = dict(un_plain_env)
+            un_color_env["FORCE_COLOR"] = "1"
+            un_color = subprocess.run(
+                [str(bin_idd), "uninstall", "--dry-run"],
+                env=un_color_env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(un_color.returncode, 0, un_color.stderr + un_color.stdout)
+            self.assertIn("\x1b[", un_color.stdout)
+
+            un_nocolor_env = dict(un_color_env)
+            un_nocolor_env["NO_COLOR"] = "1"
+            un_nocolor = subprocess.run(
+                [str(bin_idd), "uninstall", "--dry-run"],
+                env=un_nocolor_env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(un_nocolor.returncode, 0, un_nocolor.stderr + un_nocolor.stdout)
+            self.assertNotIn("\x1b[", un_nocolor.stdout)
 
 
 if __name__ == "__main__":
