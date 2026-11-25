@@ -299,11 +299,12 @@ class TestMonitorAndBoard(unittest.TestCase):
                     self.assertIn(f"v{parse_skill_version()}", html)
                     self.assertIn("待处理 Issue", html)
                     self.assertIn("跨 Agent 接力提示词", html)
+                    self.assertIn("Cross-Agent Handoff Prompt", html)
                     self.assertIn("buildHandoffPrompt", html)
                     self.assertNotIn("backlog", html.lower())
                     self.assertNotIn("__IDD_VERSION__", html)
                     self.assertNotIn("cdn.", html.lower())
-                    for element_id in ("view-cockpit", "view-kanban", "view-repos", "view-list", "inspector-panel"):
+                    for element_id in ("view-cockpit", "view-kanban", "view-repos", "view-list", "inspector-panel", "lang-btn"):
                         self.assertIn(element_id, html)
                     node_bin = shutil.which("node")
                     if node_bin:

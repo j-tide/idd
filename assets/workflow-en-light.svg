@@ -63,7 +63,7 @@
   <text x="562" y="34" text-anchor="middle" fill="#047857" font-size="10" font-weight="600" class="mono">feat: #115</text>
   <circle cx="644" cy="48" r="5" fill="#ffffff" stroke="#0284c7" stroke-width="2.2"/>
   <text x="644" y="34" text-anchor="middle" fill="#0369a1" font-size="10" font-weight="600" class="mono">fix: #51</text>
-  <text x="480" y="69" text-anchor="middle" fill="#64748b" font-size="9.8" class="sans">Linear main · Squash merge · 0 TASK/ residue</text>
+  <text x="284" y="70" fill="#64748b" font-size="9.8" class="sans">Linear main · Squash merge · 0 TASK/ residue</text>
 
   <!-- Landing Arrow from Worktrees to main -->
   <path d="M 608 100 C 608 82, 562 88, 562 57" fill="none" stroke="#059669" stroke-width="1.7" marker-end="url(#arr-green-l)"/>

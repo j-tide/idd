@@ -424,8 +424,17 @@ BOARD_HTML = r"""<!DOCTYPE html>
       gap: 6px;
       width: 100%;
     }
+    .sb-footer .sb-item {
+      width: auto;
+      flex: 1;
+      min-width: 0;
+    }
     body.sidebar-collapsed .sb-footer {
       justify-content: center;
+    }
+    body.sidebar-collapsed .sb-footer .sb-item {
+      width: 38px;
+      flex: 0 0 auto;
     }
 
     /* Main Workspace Column */
@@ -665,24 +674,32 @@ BOARD_HTML = r"""<!DOCTYPE html>
     }
     .bento-title-row {
       display: flex;
-      align-items: baseline;
+      align-items: center;
       gap: 10px;
       min-width: 0;
+      flex: 1;
     }
     .bento-title {
       font-size: 13.5px;
       font-weight: 600;
       color: var(--text);
+      white-space: nowrap;
+      flex-shrink: 0;
     }
     .bento-sub {
       font-size: 12px;
       color: var(--text-faint);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
     }
     .bento-actions {
       display: flex;
       align-items: center;
       gap: 6px;
       flex-wrap: wrap;
+      flex-shrink: 0;
     }
 
     /* Services-Style Worktree Rows */
@@ -804,6 +821,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
     .console-tabs {
       display: inline-flex;
+      flex-shrink: 0;
       padding: 2px;
       gap: 2px;
       background: var(--bg-well);
@@ -1159,14 +1177,15 @@ BOARD_HTML = r"""<!DOCTYPE html>
       </div>
 
       <div class="sb-divider"></div>
-      <div class="sb-section-hdr hide-collapsed"><span>仓库</span><span id="sb-repo-cnt" class="num">0</span></div>
+      <div class="sb-section-hdr hide-collapsed"><span id="sb-hdr-repos">仓库</span><span id="sb-repo-cnt" class="num">0</span></div>
       <div id="repo-pills" class="sb-list"></div>
 
-      <div class="sb-section-hdr hide-collapsed" style="margin-top:4px;"><span>并行目录</span><span id="sb-wt-cnt" class="num">0</span></div>
+      <div class="sb-section-hdr hide-collapsed" style="margin-top:4px;"><span id="sb-hdr-wts">并行目录</span><span id="sb-wt-cnt" class="num">0</span></div>
       <div id="wt-rail-list" class="sb-list"></div>
 
       <div class="sb-footer">
         <button id="theme-btn" class="sb-item" type="button" title="切换深浅色主题"></button>
+        <button id="lang-btn" class="btn btn-xs hide-collapsed" type="button" title="Switch language / 切换语言">EN</button>
         <span class="sb-meta hide-collapsed">v__IDD_VERSION__</span>
       </div>
     </aside>
@@ -1254,11 +1273,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
       }
 
       const urlParams = new URLSearchParams(window.location.search);
+      const queryLang = urlParams.get("lang");
+      const initialLang = queryLang === "en" ? "en" : (queryLang === "zh" ? "zh" : (localStorage.getItem("idd_board_lang") === "en" ? "en" : "zh"));
       const state = {
         snapshot: null,
         selectedRepo: "ALL",
         viewMode: localStorage.getItem("idd_board_view") || "cockpit",
         sidebarCollapsed: urlParams.get("collapsed") === "1" || localStorage.getItem("idd_sidebar_collapsed") === "1",
+        lang: initialLang,
         search: "",
         worktreeOnly: false,
         alertsOnly: false,
@@ -1271,9 +1293,17 @@ BOARD_HTML = r"""<!DOCTYPE html>
         inspectorTab: "tasks",
         timerId: null,
         fetching: false,
-        lastClockStr: "同步中...",
+        lastClockStr: initialLang === "en" ? "Syncing..." : "同步中...",
         lastSig: ""
       };
+
+      function isEn() {
+        return state.lang === "en";
+      }
+
+      function tr(zh, en) {
+        return isEn() ? en : zh;
+      }
 
       if (!["cockpit", "kanban", "repos", "list"].includes(state.viewMode)) {
         state.viewMode = "cockpit";
@@ -1297,7 +1327,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       function formatClock(ts) {
         if (!ts) return "—";
         const d = new Date(ts * 1000);
-        return d.toLocaleTimeString("zh-CN", { hour12: false });
+        return d.toLocaleTimeString(isEn() ? "en-GB" : "zh-CN", { hour12: false });
       }
 
       function showToast(msg, kind) {
@@ -1336,7 +1366,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             btnEl.classList.add("copied");
             btnEl.innerHTML = btnEl.classList.contains("btn-icon-only")
               ? icon("check", 12)
-              : icon("check", 11) + "<span>已复制</span>";
+              : icon("check", 11) + "<span>" + tr("已复制", "Copied") + "</span>";
             clearTimeout(Number(btnEl.dataset.timerId || 0));
             const tid = setTimeout(() => {
               btnEl.classList.remove("copied");
@@ -1344,10 +1374,51 @@ BOARD_HTML = r"""<!DOCTYPE html>
             }, 1400);
             btnEl.dataset.timerId = String(tid);
           }
-          showToast(toastMsg || "已复制到剪贴板");
+          showToast(toastMsg || tr("已复制到剪贴板", "Copied to clipboard"));
         } catch (err) {
-          showToast("复制失败: " + err.message, "err");
+          showToast(tr("复制失败: ", "Copy failed: ") + err.message, "err");
         }
+      }
+
+      function applyLang() {
+        const en = isEn();
+        document.documentElement.setAttribute("lang", en ? "en" : "zh-CN");
+        document.title = en ? "IDD Live Worktree & Handoff Board" : "IDD 实时开发监控看板";
+        const sb = document.querySelector("aside.sidebar");
+        if (sb) sb.setAttribute("aria-label", tr("工作区侧栏", "Workspace sidebar"));
+        const si = document.getElementById("search-input");
+        if (si) si.placeholder = tr("搜索 #编号、目录、分支", "Search #id, dir, branch");
+        const sc = document.getElementById("search-clear");
+        if (sc) sc.setAttribute("aria-label", tr("清空搜索", "Clear search"));
+        const tl = document.querySelector(".sb-tiles");
+        if (tl) tl.setAttribute("aria-label", tr("视图切换", "View switcher"));
+        const viewTitles = {
+          "view-cockpit": tr("驾驶舱视图（工作树 + 接力台）", "Cockpit view (worktrees + handoff)"),
+          "view-kanban": tr("四列看板视图", "Kanban columns view"),
+          "view-repos": tr("按仓库分组视图", "Grouped by repository view"),
+          "view-list": tr("紧凑列表视图", "Compact list view")
+        };
+        for (const [id, title] of Object.entries(viewTitles)) {
+          const el = document.getElementById(id);
+          if (el) el.title = title;
+        }
+        const rHdr = document.getElementById("sb-hdr-repos");
+        if (rHdr) rHdr.textContent = tr("仓库", "Repositories");
+        const wHdr = document.getElementById("sb-hdr-wts");
+        if (wHdr) wHdr.textContent = tr("并行目录", "Worktrees");
+        const tb = document.getElementById("theme-btn");
+        if (tb) tb.title = tr("切换深浅色主题", "Toggle light/dark theme");
+        const lb = document.getElementById("lang-btn");
+        if (lb) {
+          lb.textContent = en ? "中文" : "EN";
+          lb.title = en ? "切换到中文" : "Switch to English";
+        }
+        const stg = document.getElementById("sidebar-toggle");
+        if (stg) stg.title = tr("收起 / 展开侧栏 ([)", "Toggle sidebar ([)");
+        const sy = document.getElementById("sync-btn");
+        if (sy) sy.title = tr("快捷键 r", "Shortcut r");
+        const ip = document.getElementById("inspector-panel");
+        if (ip) ip.setAttribute("aria-label", tr("任务详情抽屉", "Task details drawer"));
       }
 
       function applyTheme(theme) {
@@ -1355,7 +1426,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const btn = document.getElementById("theme-btn");
         if (btn) {
           const ic = theme === "dark" ? icon("sun", 14) : icon("moon", 14);
-          const lbl = theme === "dark" ? "浅色模式" : "深色模式";
+          const lbl = theme === "dark" ? tr("浅色模式", "Light") : tr("深色模式", "Dark");
           btn.innerHTML = '<span class="sb-item-left">' + ic + '<span class="hide-collapsed">' + lbl + "</span></span>";
         }
       }
@@ -1368,13 +1439,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const pauseBtn = document.getElementById("pause-btn");
         if (pauseBtn) {
           pauseBtn.innerHTML = state.paused
-            ? icon("play", 12) + "<span>继续</span>"
-            : icon("pause", 12) + "<span>暂停</span>";
+            ? icon("play", 12) + "<span>" + tr("继续", "Resume") + "</span>"
+            : icon("pause", 12) + "<span>" + tr("暂停", "Pause") + "</span>";
         }
         const syncBtn = document.getElementById("sync-btn");
         if (syncBtn) {
           syncBtn.classList.toggle("spin", state.fetching);
-          syncBtn.innerHTML = icon("refresh", 12) + "<span>" + (state.fetching ? "同步中" : "同步远端") + "</span>";
+          syncBtn.innerHTML = icon("refresh", 12) + "<span>" + (state.fetching ? tr("同步中", "Syncing") : tr("同步远端", "Sync Forge")) + "</span>";
         }
 
         const s = (state.snapshot && state.snapshot.summary) || {};
@@ -1396,36 +1467,51 @@ BOARD_HTML = r"""<!DOCTYPE html>
       function updateConnectionBadge(ok, errorMsg) {
         const tag = document.getElementById("conn-tag");
         if (!tag) return;
-        const clock = escapeHtml(state.lastClockStr || "同步中...");
+        const clock = escapeHtml(state.lastClockStr || tr("同步中...", "Syncing..."));
         if (!ok) {
           tag.className = "live-pill is-err";
-          tag.innerHTML = icon("alertTriangle", 12) + "<span>" + escapeHtml(errorMsg || "连接中断") + '</span><span id="updated-tag" style="display:none;">' + clock + "</span>";
+          tag.innerHTML = icon("alertTriangle", 12) + "<span>" + escapeHtml(errorMsg || tr("连接中断", "Disconnected")) + '</span><span id="updated-tag" style="display:none;">' + clock + "</span>";
           return;
         }
         if (state.paused) {
           tag.className = "live-pill";
-          tag.innerHTML = icon("pause", 11) + '<span>已暂停</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
+          tag.innerHTML = icon("pause", 11) + "<span>" + tr("已暂停", "Paused") + '</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
           return;
         }
         tag.className = "live-pill is-live";
-        tag.innerHTML = '<span class="dot-pulse"></span><span>实时</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
+        tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("实时", "Live") + '</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
       }
 
       function parseStage(rawStage) {
         const cleaned = String(rawStage || "").replace(/^[\s\u{1F300}-\u{1FAFF}\u2600-\u27BF\uFE0F]+/u, "").trim();
-        const label = cleaned === "待认领" ? "待处理" : (cleaned || "—");
-        if (label === "修 CI" || label === "受阻") return { label, tone: "tone-danger", dot: "fail" };
-        if (label === "待合入" || label.startsWith("待提")) return { label, tone: "tone-success", dot: "active" };
-        if (label === "CI 运行中") return { label, tone: "tone-warning", dot: "warm" };
-        if (label.startsWith("草稿")) return { label, tone: "tone-violet", dot: "quiet" };
-        if (label === "待处理") return { label, tone: "tone-muted", dot: "quiet" };
-        return { label, tone: "tone-info", dot: "active" };
+        const canonical = cleaned === "待认领" ? "待处理" : (cleaned || "—");
+        const enMap = {
+          "待处理": "Queued",
+          "开发中": "In Progress",
+          "本地开发": "Local",
+          "修 CI": "Fix CI",
+          "受阻": "Blocked",
+          "待合入": "Ready to Land",
+          "CI 运行中": "CI Running"
+        };
+        let label = canonical;
+        if (isEn()) {
+          if (enMap[canonical]) label = enMap[canonical];
+          else if (canonical.startsWith("草稿")) label = "Draft";
+          else if (canonical.startsWith("待提")) label = "Ready for PR";
+        }
+        if (canonical === "修 CI" || canonical === "受阻") return { key: canonical, label, tone: "tone-danger", dot: "fail" };
+        if (canonical === "待合入" || canonical.startsWith("待提")) return { key: canonical, label, tone: "tone-success", dot: "active" };
+        if (canonical === "CI 运行中") return { key: canonical, label, tone: "tone-warning", dot: "warm" };
+        if (canonical.startsWith("草稿")) return { key: canonical, label, tone: "tone-violet", dot: "quiet" };
+        if (canonical === "待处理") return { key: canonical, label, tone: "tone-muted", dot: "quiet" };
+        return { key: canonical, label, tone: "tone-info", dot: "active" };
       }
 
       function isItemAlert(item) {
         const pulse = item.pulse || null;
         const isStalled = pulse && pulse.activity_state === "stalled";
-        const st = parseStage(item.stage).label;
+        const st = parseStage(item.stage).key;
         const isFail = st === "修 CI" || st === "受阻" || (item.change && item.change.checks_overall === "FAIL");
         return Boolean(isStalled || isFail);
       }
@@ -1512,13 +1598,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
       function itemDotClass(item) {
         const stInfo = parseStage(item.stage);
-        if (stInfo.label === "修 CI" || stInfo.label === "受阻" || (item.change && item.change.checks_overall === "FAIL")) {
+        if (stInfo.key === "修 CI" || stInfo.key === "受阻" || (item.change && item.change.checks_overall === "FAIL")) {
           return "fail";
         }
         const p = item.pulse || null;
         if (p && p.activity_state === "active") return "active";
         if (p && (p.activity_state === "warm" || p.activity_state === "stalled")) return "warm";
-        if (stInfo.label === "待合入") return "active";
+        if (stInfo.key === "待合入") return "active";
         return "quiet";
       }
 
@@ -1526,7 +1612,39 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const stInfo = parseStage(item.stage);
         const { total, done } = getProgressNumbers(item);
         const targetArg = item.issue_number != null ? String(item.issue_number) : (item.issue || item.issue_dir || "");
-        const title = item.title || item.issue || "未命名任务";
+        const title = item.title || item.issue || tr("未命名任务", "Untitled task");
+        if (isEn()) {
+          const header = item.issue_number != null
+            ? ("Please take over Issue #" + item.issue_number + " (" + title + "):")
+            : ('Please take over local task "' + title + '":');
+          const lines = [header];
+          if (item.repo_name) lines.push("- Repo: " + item.repo_name);
+          if (item.worktree) {
+            lines.push("- Worktree: " + item.worktree);
+            lines.push("- Branch: " + (item.branch || "—"));
+            if (stInfo.key === "修 CI" || (item.change && item.change.checks_overall === "FAIL")) {
+              const ch = item.change || {};
+              const mrLabel = item.mr_label || (item.forge_type === "gitlab" ? "MR" : "PR");
+              const mrPrefix = item.mr_prefix || (item.forge_type === "gitlab" ? "!" : "#");
+              const chRef = ch.number != null ? (mrLabel + " " + mrPrefix + ch.number) : mrLabel;
+              lines.push("- Status: CI failed on " + chRef + " (" + done + "/" + total + " TASK completed)");
+              lines.push("Enter this worktree directory, inspect failing checks via `idd ci " + targetArg + " --logs` per the idd skill, fix the issues, and push an updated commit.");
+            } else if (stInfo.key === "待合入") {
+              lines.push("- Status: " + done + "/" + total + " TASK completed, PR/MR CI is green and ready to land");
+              lines.push("Enter this worktree directory, verify the diff, and run `idd land " + targetArg + "` for a linear Squash merge into main.");
+            } else {
+              const progTxt = total > 0
+                ? (done + "/" + total + " TASK completed" + (item.current_task ? " (current: " + item.current_task + ")" : ""))
+                : "Isolated worktree ready; TASK/ breakdown pending";
+              lines.push("- Progress: " + progTxt);
+              lines.push("Enter this worktree directory directly, read the TASK/ ledger and uncommitted changes per the idd skill, and continue implementation and tests seamlessly.");
+            }
+          } else {
+            lines.push("- Repo path: " + (item.repo_path || item.repo_name || ""));
+            lines.push("Run `idd start " + targetArg + "` in this repo per the idd skill to create an isolated worktree, then break down TASK/ steps, implement, and verify.");
+          }
+          return lines.join("\n");
+        }
         const header = item.issue_number != null
           ? ("请接手 Issue #" + item.issue_number + "（" + title + "）")
           : ("请接手本地任务「" + title + "」");
@@ -1537,14 +1655,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (item.worktree) {
           lines.push("- 工作目录：" + item.worktree);
           lines.push("- 分支：" + (item.branch || "—"));
-          if (stInfo.label === "修 CI" || (item.change && item.change.checks_overall === "FAIL")) {
+          if (stInfo.key === "修 CI" || (item.change && item.change.checks_overall === "FAIL")) {
             const ch = item.change || {};
             const mrLabel = item.mr_label || (item.forge_type === "gitlab" ? "MR" : "PR");
             const mrPrefix = item.mr_prefix || (item.forge_type === "gitlab" ? "!" : "#");
             const chRef = ch.number != null ? (mrLabel + " " + mrPrefix + ch.number) : mrLabel;
             lines.push("- 状态：" + chRef + " 的 CI 检查失败，已完成 " + done + "/" + total + " 个 TASK");
             lines.push("请直接进入该工作目录，按 idd 规范运行 `idd ci " + targetArg + " --logs` 排查修复失败项并更新提交。");
-          } else if (stInfo.label === "待合入") {
+          } else if (stInfo.key === "待合入") {
             lines.push("- 状态：已完成 " + done + "/" + total + " 个 TASK，PR/MR CI 已全绿待合入");
             lines.push("请进入该工作目录确认后，运行 `idd land " + targetArg + "` 线性 Squash 合入 main。");
           } else {
@@ -1572,7 +1690,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const lbl = (item.mr_label || "PR") + " " + (item.mr_prefix || "#") + item.number;
           return '<span class="id-link">' + escapeHtml(lbl) + "</span>";
         }
-        return '<span class="badge tone-violet">本地</span>';
+        return '<span class="badge tone-violet">' + tr("本地", "Local") + "</span>";
       }
 
       function renderChangeInline(item) {
@@ -1584,9 +1702,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const prLabel = mrLabel + (num !== "" ? " " + mrPrefix + num : "");
         const overall = ch.checks_overall || "NONE";
         const toneMap = {
-          PASS: { cls: "tone-success", text: prLabel + " · CI 全绿" },
-          FAIL: { cls: "tone-danger", text: prLabel + " · CI 失败" },
-          PENDING: { cls: "tone-warning", text: prLabel + " · CI 运行中" },
+          PASS: { cls: "tone-success", text: prLabel + " · " + tr("CI 全绿", "CI PASS") },
+          FAIL: { cls: "tone-danger", text: prLabel + " · " + tr("CI 失败", "CI FAIL") },
+          PENDING: { cls: "tone-warning", text: prLabel + " · " + tr("CI 运行中", "CI Running") },
           NONE: { cls: "tone-muted", text: prLabel }
         };
         const cfg = toneMap[overall] || toneMap.NONE;
@@ -1597,22 +1715,37 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return '<span class="badge ' + cfg.cls + '">' + escapeHtml(cfg.text) + "</span>";
       }
 
+      function localizeAgo(ago) {
+        if (!ago) return "";
+        if (!isEn()) return ago === "刚刚" ? "刚刚活跃" : ago;
+        if (ago === "刚刚") return "Active now";
+        const mSec = ago.match(/^(\d+)\s*秒前$/);
+        if (mSec) return mSec[1] + "s ago";
+        const mMin = ago.match(/^(\d+)\s*分钟前$/);
+        if (mMin) return mMin[1] + "m ago";
+        const mHr = ago.match(/^(\d+)\s*小时前$/);
+        if (mHr) return mHr[1] + "h ago";
+        const mDay = ago.match(/^(\d+)\s*天前$/);
+        if (mDay) return mDay[1] + "d ago";
+        return ago;
+      }
+
       function renderPulseSummary(pulse) {
         if (!pulse) return "";
         const parts = [];
         const ago = pulse.last_active_ago || "";
-        if (ago) parts.push(ago === "刚刚" ? "刚刚活跃" : ago);
+        if (ago) parts.push(localizeAgo(ago));
         const dirty = Number(pulse.dirty_count || 0);
         const ins = Number(pulse.insertions || 0);
         const dels = Number(pulse.deletions || 0);
         if (dirty > 0) {
-          let d = dirty + " 文件";
+          let d = isEn() ? (dirty + (dirty === 1 ? " file" : " files")) : (dirty + " 文件");
           if (ins > 0 || dels > 0) {
             d += ' <span class="diff-ins">+' + ins + '</span> <span class="diff-del">-' + dels + "</span>";
           }
           parts.push(d);
         } else {
-          parts.push("干净");
+          parts.push(tr("干净", "Clean"));
         }
         return parts.join(" · ");
       }
@@ -1643,7 +1776,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             id: "filter-wt-btn",
             act: "toggle-wt",
             ic: "sparkle",
-            label: "活跃工作树",
+            label: tr("活跃工作树", "Active Worktrees"),
             meta: activeWt + " live",
             metaCls: activeWt > 0 ? "live" : "",
             active: state.worktreeOnly,
@@ -1653,8 +1786,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
             id: "filter-alert-btn",
             act: "toggle-alerts",
             ic: "alertTriangle",
-            label: "异常提醒",
-            meta: anomalies > 0 ? (anomalies + " 异常") : "正常",
+            label: tr("异常提醒", "Alerts"),
+            meta: anomalies > 0 ? (isEn() ? (anomalies + (anomalies === 1 ? " alert" : " alerts")) : (anomalies + " 异常")) : tr("正常", "OK"),
             metaCls: anomalies > 0 ? "danger" : "",
             active: state.alertsOnly,
             dot: anomalies > 0 ? "show danger" : ""
@@ -1663,7 +1796,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             id: "filter-todo-btn",
             act: "toggle-todo",
             ic: "circle",
-            label: "待处理 Issue",
+            label: tr("待处理 Issue", "Open Issues"),
             meta: String(todoCount),
             metaCls: "",
             active: state.todoOnly,
@@ -1688,11 +1821,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const repoCntEl = document.getElementById("sb-repo-cnt");
         if (repoCntEl) repoCntEl.textContent = String(repos.length);
 
+        const allReposLabel = tr("全部仓库", "All Repositories");
         const repoHtml = [
-          '<button class="sb-item ' + (state.selectedRepo === "ALL" ? "active" : "") + '" data-repo="ALL" type="button" title="全部仓库 (' + totalWt + '/' + allItems.length + ')">' +
+          '<button class="sb-item ' + (state.selectedRepo === "ALL" ? "active" : "") + '" data-repo="ALL" type="button" title="' + escapeHtml(allReposLabel + " (" + totalWt + "/" + allItems.length + ")") + '">' +
             '<span class="sb-item-left">' +
               '<span class="sb-repo-badge is-all">' + icon("layers", 12) + "</span>" +
-              '<span class="hide-collapsed">全部仓库</span>' +
+              '<span class="hide-collapsed">' + escapeHtml(allReposLabel) + "</span>" +
             "</span>" +
             '<span class="sb-meta hide-collapsed">' + totalWt + "/" + allItems.length + "</span>" +
           "</button>"
@@ -1752,9 +1886,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
           if (logoEl) logoEl.innerHTML = forgeIcon(activeRepo.forge, 16);
           if (scopeEl) scopeEl.textContent = activeRepo.forge ? activeRepo.forge.toUpperCase() : "REPO";
         } else {
-          if (titleEl) titleEl.textContent = "全局工作区";
+          if (titleEl) titleEl.textContent = tr("全局工作区", "Global Workspace");
           if (logoEl) logoEl.innerHTML = icon("branch", 15);
-          if (scopeEl) scopeEl.textContent = snap.global ? "全局" : "单仓库";
+          if (scopeEl) scopeEl.textContent = snap.global ? tr("全局", "Global") : tr("单仓库", "Single Repo");
         }
       }
 
@@ -1804,11 +1938,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
           {
             action: "toggle-wt",
             ic: "refresh",
-            label: "活跃工作树",
+            label: tr("活跃工作树", "Active Worktrees"),
             val: String(activeWt),
             unit: "live",
             bar: renderSegBar(activeWt, 8, wtTones),
-            sub: (codingNow > 0 ? ("刚刚活跃 " + codingNow) : "本地隔离目录") + " · " + dirtyWt + " 处未提交改动",
+            sub: (codingNow > 0 ? tr("刚刚活跃 " + codingNow, codingNow + " active now") : tr("本地隔离目录", "Isolated worktrees")) + " · " + (isEn() ? (dirtyWt + " uncommitted") : (dirtyWt + " 处未提交改动")),
             subCls: codingNow > 0 ? "live" : "",
             filtered: state.worktreeOnly,
             warn: false
@@ -1816,11 +1950,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
           {
             action: "",
             ic: "layers",
-            label: "任务步骤进度",
+            label: tr("任务步骤进度", "Task Progress"),
             val: String(pct),
             unit: "%",
             bar: renderSegBar(taskFilled, 8, null),
-            sub: "进行中步骤 " + inProg + " · 已完成 " + doneSteps + "/" + totalSteps + " TASK",
+            sub: isEn() ? (inProg + " in progress · " + doneSteps + "/" + totalSteps + " TASK done") : ("进行中步骤 " + inProg + " · 已完成 " + doneSteps + "/" + totalSteps + " TASK"),
             subCls: "",
             filtered: false,
             warn: false
@@ -1828,11 +1962,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
           {
             action: "toggle-alerts",
             ic: "pr",
-            label: "PR / MR 与合入",
+            label: tr("PR / MR 与合入", "PR / MR & Land"),
             val: String(readyCount),
-            unit: "待合入",
+            unit: tr("待合入", "ready"),
             bar: renderSegBar(openChanges, 8, prTones),
-            sub: "Open " + openChanges + " · CI 失败 " + ciFailed + " · 卡住 " + stalled,
+            sub: isEn() ? ("Open " + openChanges + " · CI failed " + ciFailed + " · Stalled " + stalled) : ("Open " + openChanges + " · CI 失败 " + ciFailed + " · 卡住 " + stalled),
             subCls: (ciFailed + stalled) > 0 ? "warn" : "",
             filtered: state.alertsOnly,
             warn: (ciFailed + stalled) > 0
@@ -1863,8 +1997,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (!item) {
           return (
             '<section class="bento-card">' +
-              '<div class="bento-hdr"><div class="bento-title-row"><span class="bento-title">跨 Agent 接力提示词</span><span class="bento-sub">请在上方选择一个并行工作树或 Issue</span></div></div>' +
-              '<div class="console-well">暂无选中项。</div>' +
+              '<div class="bento-hdr"><div class="bento-title-row"><span class="bento-title">' + tr("跨 Agent 接力提示词", "Cross-Agent Handoff Prompt") + '</span><span class="bento-sub">' + tr("请在上方选择一个并行工作树或 Issue", "Select an active worktree or Issue above") + "</span></div></div>" +
+              '<div class="console-well">' + tr("暂无选中项。", "No item selected.") + "</div>" +
             "</section>"
           );
         }
@@ -1876,12 +2010,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const targetArg = item.issue_number != null ? String(item.issue_number) : (item.issue || item.issue_dir || "");
         const startCmd = targetArg && item.repo_path ? ("cd " + item.repo_path + " && idd start " + targetArg) : "";
         const issueHref = safeUrl(item.url);
-        const idLabel = item.issue_number != null ? ("#" + item.issue_number) : "本地";
+        const idLabel = item.issue_number != null ? ("#" + item.issue_number) : tr("本地", "Local");
 
         let wellHtml = "";
         if (state.consoleTab === "files") {
           if (changedFiles.length === 0) {
-            wellHtml = '<div style="color:var(--text-faint);">工作区干净，暂无未提交改动。</div>';
+            wellHtml = '<div style="color:var(--text-faint);">' + tr("工作区干净，暂无未提交改动。", "Clean working tree; no uncommitted changes.") + "</div>";
           } else {
             wellHtml = changedFiles.map((f) => {
               const code = String(f.code || "M").trim();
@@ -1892,7 +2026,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         } else {
           const metaLines = [
             '<div class="log-line"><span class="log-k">repo</span><span class="log-v">' + escapeHtml(item.repo_name || "—") + (item.branch ? '  ·  <span style="color:var(--accent)">' + escapeHtml(item.branch) + "</span>" : "") + "</span></div>",
-            '<div class="log-line"><span class="log-k">worktree</span><span class="log-v">' + escapeHtml(item.worktree || "尚未创建（点击右侧复制开工命令）") + "</span></div>"
+            '<div class="log-line"><span class="log-k">worktree</span><span class="log-v">' + escapeHtml(item.worktree || tr("尚未创建（点击右侧复制开工命令）", "Not created yet (copy CLI Cmd on the right)")) + "</span></div>"
           ];
           if (pulse && pulse.last_commit_sha) {
             metaLines.push('<div class="log-line"><span class="log-k">commit</span><span class="log-v">' + escapeHtml(pulse.last_commit_sha + "  " + (pulse.last_commit_subject || "")) + "</span></div>");
@@ -1914,19 +2048,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
           '<section class="bento-card">' +
             '<div class="bento-hdr">' +
               '<div class="bento-title-row">' +
-                '<span class="bento-title">跨 Agent 接力提示词</span>' +
+                '<span class="bento-title">' + tr("跨 Agent 接力提示词", "Agent Handoff") + "</span>" +
                 '<span class="bento-sub">' + escapeHtml(idLabel + " · " + (item.title || item.issue || "")) + "</span>" +
                 '<div class="console-tabs">' +
-                  '<button class="console-tab ' + (state.consoleTab === "handoff" ? "active" : "") + '" data-console-tab="handoff" type="button">接力与步骤 (' + tasks.length + ")</button>" +
-                  '<button class="console-tab ' + (state.consoleTab === "files" ? "active" : "") + '" data-console-tab="files" type="button">改动文件 (' + ((pulse && pulse.dirty_count) || 0) + ")</button>" +
+                  '<button class="console-tab ' + (state.consoleTab === "handoff" ? "active" : "") + '" data-console-tab="handoff" type="button">' + tr("接力与步骤", "Handoff") + " (" + tasks.length + ")</button>" +
+                  '<button class="console-tab ' + (state.consoleTab === "files" ? "active" : "") + '" data-console-tab="files" type="button">' + tr("改动文件", "Files") + " (" + ((pulse && pulse.dirty_count) || 0) + ")</button>" +
                 "</div>" +
               "</div>" +
               '<div class="bento-actions">' +
-                '<button class="btn btn-sm btn-primary" data-copy-val="' + escapeHtml(prompt) + '" data-copy-msg="已复制 Agent 接力词，可直接粘贴给任意 Agent" type="button">' + icon("copy", 12) + "<span>复制接力词</span></button>" +
-                (item.worktree ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="已复制工作目录路径" type="button">' + icon("folder", 12) + "<span>复制目录</span></button>" : "") +
-                (item.branch ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="已复制分支名" type="button">' + icon("branch", 12) + "<span>复制分支</span></button>" : "") +
-                (startCmd ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="已复制终端命令" type="button">' + icon("terminal", 12) + "<span>终端命令</span></button>" : "") +
-                (issueHref ? '<a class="btn btn-sm" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 12) + "<span>原单</span></a>" : "") +
+                '<button class="btn btn-sm btn-primary" data-copy-val="' + escapeHtml(prompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" type="button">' + icon("copy", 12) + "<span>" + tr("复制接力词", "Copy Handoff") + "</span></button>" +
+                (item.worktree ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" type="button">' + icon("folder", 12) + "<span>" + tr("复制目录", "Copy Dir") + "</span></button>" : "") +
+                (item.branch ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" type="button">' + icon("branch", 12) + "<span>" + tr("复制分支", "Copy Branch") + "</span></button>" : "") +
+                (startCmd ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="' + tr("已复制终端命令", "Copied CLI command") + '" type="button">' + icon("terminal", 12) + "<span>" + tr("终端命令", "CLI Cmd") + "</span></button>" : "") +
+                (issueHref ? '<a class="btn btn-sm" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 12) + "<span>" + tr("原单", "Issue") + "</span></a>" : "") +
               "</div>" +
             "</div>" +
             '<div class="console-well">' + wellHtml + "</div>" +
@@ -1966,18 +2100,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 '<div class="wt-row-main">' +
                   '<div class="wt-row-top">' +
                     renderIdHtml(item) +
-                    '<span class="wt-row-title">' + escapeHtml(item.title || item.issue || "未命名任务") + "</span>" +
+                    '<span class="wt-row-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</span>" +
                     '<span class="badge tone-muted">' + escapeHtml(item.repo_name || "") + "</span>" +
                     progBadge +
                     chBadge +
                   "</div>" +
-                  '<div class="wt-row-sub">' + (subParts.length ? subParts.join("<span>·</span>") : "<span>尚未创建工作目录</span>") + "</div>" +
+                  '<div class="wt-row-sub">' + (subParts.length ? subParts.join("<span>·</span>") : "<span>" + tr("尚未创建工作目录", "Worktree not created yet") + "</span>") + "</div>" +
                 "</div>" +
               "</div>" +
               '<div class="wt-row-actions" data-stop-open="1">' +
-                '<button class="btn btn-xs ' + (isSel ? "btn-primary" : "") + '" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="已复制 Agent 接力词，可直接粘贴给任意 Agent" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>接力词</span></button>" +
-                (item.worktree ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="已复制工作目录路径" data-stop-open="1" type="button">' + icon("folder", 11) + "<span>目录</span></button>" : "") +
-                (item.branch ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="已复制分支名" data-stop-open="1" type="button">' + icon("branch", 11) + "<span>分支</span></button>" : "") +
+                '<button class="btn btn-xs ' + (isSel ? "btn-primary" : "") + '" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button>" +
+                (item.worktree ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" data-stop-open="1" type="button">' + icon("folder", 11) + "<span>" + tr("目录", "Dir") + "</span></button>" : "") +
+                (item.branch ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" data-stop-open="1" type="button">' + icon("branch", 11) + "<span>" + tr("分支", "Branch") + "</span></button>" : "") +
               "</div>" +
             "</div>"
           );
@@ -1985,7 +2119,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
         const todoPill = todoItems.length > 0
           ? '<button class="btn btn-xs ' + (state.todoOnly ? "btn-primary" : "") + '" data-kpi-action="toggle-todo" type="button">' +
-              icon("circle", 11) + "<span>待处理 Issue (" + todoItems.length + ")</span>" +
+              icon("circle", 11) + "<span>" + tr("待处理 Issue", "Open Issues") + " (" + todoItems.length + ")</span>" +
             "</button>"
           : "";
 
@@ -1993,13 +2127,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
           '<section class="bento-card" style="margin-bottom:12px;">' +
             '<div class="bento-hdr">' +
               '<div class="bento-title-row">' +
-                '<span class="bento-title">' + (state.todoOnly ? "待处理 Issue" : "并行工作树") + "</span>" +
+                '<span class="bento-title">' + (state.todoOnly ? tr("待处理 Issue", "Open Issues") : tr("并行工作树", "Parallel Worktrees")) + "</span>" +
                 '<span class="bento-sub num">' + displayRows.length + (state.todoOnly ? " items" : " running") + "</span>" +
               "</div>" +
               '<div class="bento-actions">' + todoPill + "</div>" +
             "</div>" +
             '<div class="wt-list">' +
-              (displayRows.length ? displayRows.map(renderWtRow).join("") : '<div class="col-empty">当前筛选条件下暂无并行工作树</div>') +
+              (displayRows.length ? displayRows.map(renderWtRow).join("") : '<div class="col-empty">' + tr("当前筛选条件下暂无并行工作树", "No worktrees match the current filter") + "</div>") +
             "</div>" +
           "</section>" +
           renderCockpitConsole(selected)
@@ -2011,10 +2145,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (item._kind === "orphan") {
           return item.checks_overall === "FAIL" || item.checks_overall === "PENDING" || item.isDraft ? "review" : "ready";
         }
-        const label = parseStage(item.stage).label;
-        if (label === "待处理" || label === "待认领") return "todo";
-        if (label === "待合入") return "ready";
-        if (label === "修 CI" || label === "CI 运行中" || label.startsWith("草稿")) return "review";
+        const key = parseStage(item.stage).key;
+        if (key === "待处理" || key === "待认领") return "todo";
+        if (key === "待合入") return "ready";
+        if (key === "修 CI" || key === "CI 运行中" || key.startsWith("草稿")) return "review";
         return "developing";
       }
 
@@ -2026,10 +2160,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const isSelected = state.inspectedKey === item._key;
         const ctxParts = [];
         if (item.branch) {
-          ctxParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="已复制分支名" data-stop-open="1">' + icon("branch", 11) + "<span>" + escapeHtml(item.branch) + "</span></button>");
+          ctxParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" data-stop-open="1">' + icon("branch", 11) + "<span>" + escapeHtml(item.branch) + "</span></button>");
         }
         if (item.worktree) {
-          ctxParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="已复制工作目录路径" data-stop-open="1">' + icon("folder", 11) + "<span>" + escapeHtml(shortWorktreePath(item.worktree)) + "</span></button>");
+          ctxParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" data-stop-open="1">' + icon("folder", 11) + "<span>" + escapeHtml(shortWorktreePath(item.worktree)) + "</span></button>");
         }
         if (item.current_task) {
           ctxParts.push('<div class="card-task">' + icon("chevronRight", 12) + "<span>" + escapeHtml(item.current_task) + "</span></div>");
@@ -2048,9 +2182,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
               '<div class="card-meta">' + (options.showRepo ? ("<span>" + escapeHtml(item.repo_name || "") + "</span><span>·</span>") : "") + renderIdHtml(item) + "</div>" +
               '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" +
             "</div>" +
-            '<div class="card-title">' + escapeHtml(item.title || item.issue || "未命名任务") + "</div>" +
+            '<div class="card-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</div>" +
             (ctxParts.length ? '<div class="card-context">' + ctxParts.join("") + "</div>" : "") +
-            '<div class="card-foot"><span>' + (pulseHtml || " ") + '</span><button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="已复制 Agent 接力词，可直接粘贴给任意 Agent" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>接力词</span></button></div>" +
+            '<div class="card-foot"><span>' + (pulseHtml || " ") + '</span><button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></div>" +
           "</article>"
         );
       }
@@ -2063,24 +2197,24 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const isSelected = state.inspectedKey === item._key;
           const locParts = [];
           if (item.branch) {
-            locParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="已复制分支名" data-stop-open="1">' + icon("branch", 11) + "<span>" + escapeHtml(item.branch) + "</span></button>");
+            locParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" data-stop-open="1">' + icon("branch", 11) + "<span>" + escapeHtml(item.branch) + "</span></button>");
           }
           if (item.worktree) {
-            locParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="已复制工作目录路径" data-stop-open="1">' + icon("folder", 11) + "<span>" + escapeHtml(shortWorktreePath(item.worktree)) + "</span></button>");
+            locParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" data-stop-open="1">' + icon("folder", 11) + "<span>" + escapeHtml(shortWorktreePath(item.worktree)) + "</span></button>");
           }
           const progHtml = total > 0
             ? '<div style="display:flex;align-items:center;gap:8px;min-width:110px;"><div class="progress-track"><div class="progress-fill" style="width:' + pct + '%"></div></div><span class="prog-num">' + done + "/" + total + "</span></div>"
             : '<span style="color:var(--text-faint);">—</span>';
           return (
             '<tr class="' + (isSelected ? "is-selected" : "") + '" data-open-key="' + escapeHtml(item._key) + '">' +
-              "<td><div style=\"display:flex;align-items:center;gap:8px;\">" + renderIdHtml(item) + "<span>" + escapeHtml(item.title || item.issue || "未命名任务") + "</span></div></td>" +
+              "<td><div style=\"display:flex;align-items:center;gap:8px;\">" + renderIdHtml(item) + "<span>" + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</span></div></td>" +
               "<td>" + escapeHtml(item.repo_name || "") + "</td>" +
               '<td><span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span></td>" +
               "<td>" + (locParts.length ? '<div style="display:flex;flex-direction:column;gap:4px;max-width:240px;">' + locParts.join("") + "</div>" : "—") + "</td>" +
               "<td>" + progHtml + "</td>" +
               "<td>" + (renderPulseSummary(item.pulse) || "—") + "</td>" +
               "<td>" + (renderChangeInline(item) || "—") + "</td>" +
-              '<td><button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="已复制 Agent 接力词，可直接粘贴给任意 Agent" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>接力词</span></button></td>" +
+              '<td><button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></td>" +
             "</tr>"
           );
         }).join("");
@@ -2088,7 +2222,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return (
           '<div class="list-wrap">' +
             '<table class="list-table">' +
-              "<thead><tr><th>Issue / 标题</th><th>仓库</th><th>状态</th><th>分支 / 工作目录</th><th>步骤进度</th><th>实时动态</th><th>PR/MR &amp; CI</th><th>操作</th></tr></thead>" +
+              "<thead><tr><th>" + tr("Issue / 标题", "Issue / Title") + "</th><th>" + tr("仓库", "Repo") + "</th><th>" + tr("状态", "Stage") + "</th><th>" + tr("分支 / 工作目录", "Branch / Worktree") + "</th><th>" + tr("步骤进度", "Progress") + "</th><th>" + tr("实时动态", "Pulse") + "</th><th>PR/MR &amp; CI</th><th>" + tr("操作", "Action") + "</th></tr></thead>" +
               "<tbody>" + rowsHtml + "</tbody>" +
             "</table>" +
           "</div>"
@@ -2104,8 +2238,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (repos.length === 0) {
           container.innerHTML =
             '<div class="empty-state">' +
-              '<h3 style="margin:0 0 6px;font-size:14.5px;color:var(--text);">暂无已纳管的 Git 仓库</h3>' +
-              '<p style="margin:0;font-size:12.5px;">在任意项目目录执行以下任一命令后，仓库会自动同步到这里：</p>' +
+              '<h3 style="margin:0 0 6px;font-size:14.5px;color:var(--text);">' + tr("暂无已纳管的 Git 仓库", "No monitored Git repositories yet") + "</h3>" +
+              '<p style="margin:0;font-size:12.5px;">' + tr("在任意项目目录执行以下任一命令后，仓库会自动同步到这里：", "Run any of these commands inside a project directory to register it here:") + "</p>" +
               '<div class="empty-cmds"><code class="empty-cmd">idd start &lt;issue#&gt;</code><code class="empty-cmd">idd status</code><code class="empty-cmd">idd repos add .</code></div>' +
             "</div>";
           return;
@@ -2115,9 +2249,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (items.length === 0) {
           container.innerHTML =
             '<div class="empty-state">' +
-              '<h3 style="margin:0 0 6px;font-size:14.5px;color:var(--text);">当前筛选条件下没有内容</h3>' +
-              '<p style="margin:0 0 12px;font-size:12.5px;">可以切换仓库、清空搜索词或重置筛选。</p>' +
-              '<button class="btn" type="button" data-kpi-action="clear-filters">' + icon("refresh", 12) + "<span>重置筛选</span></button>" +
+              '<h3 style="margin:0 0 6px;font-size:14.5px;color:var(--text);">' + tr("当前筛选条件下没有内容", "No matching items") + "</h3>" +
+              '<p style="margin:0 0 12px;font-size:12.5px;">' + tr("可以切换仓库、清空搜索词或重置筛选。", "Try switching repositories, clearing search, or resetting filters.") + "</p>" +
+              '<button class="btn" type="button" data-kpi-action="clear-filters">' + icon("refresh", 12) + "<span>" + tr("重置筛选", "Reset Filters") + "</span></button>" +
             "</div>";
           return;
         }
@@ -2130,10 +2264,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const showRepoOnCard = state.selectedRepo === "ALL" && repos.length > 1;
         if (state.viewMode === "kanban") {
           const buckets = {
-            todo: { id: "todo", title: "待处理 Issue", dot: "quiet", items: [] },
-            developing: { id: "developing", title: "开发中", dot: "active", items: [] },
-            review: { id: "review", title: "PR / 修 CI", dot: "warm", items: [] },
-            ready: { id: "ready", title: "待合入", dot: "active", items: [] }
+            todo: { id: "todo", title: tr("待处理 Issue", "Open Issues"), dot: "quiet", items: [] },
+            developing: { id: "developing", title: tr("开发中", "In Progress"), dot: "active", items: [] },
+            review: { id: "review", title: tr("PR / 修 CI", "PR / Fix CI"), dot: "warm", items: [] },
+            ready: { id: "ready", title: tr("待合入", "Ready to Land"), dot: "active", items: [] }
           };
           for (const item of items) {
             buckets[cardBucket(item)].items.push(item);
@@ -2141,7 +2275,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           container.innerHTML = '<div class="kanban">' + Object.values(buckets).map((col) =>
             '<section class="column">' +
               '<div class="col-hdr"><span class="col-title"><span class="status-dot ' + col.dot + '"></span><span>' + escapeHtml(col.title) + '</span></span><span class="col-count">' + col.items.length + "</span></div>" +
-              '<div class="card-stack">' + (col.items.length ? col.items.map((it) => renderCard(it, { showRepo: showRepoOnCard })).join("") : '<div class="col-empty">暂无</div>') + "</div>" +
+              '<div class="card-stack">' + (col.items.length ? col.items.map((it) => renderCard(it, { showRepo: showRepoOnCard })).join("") : '<div class="col-empty">' + tr("暂无", "Empty") + "</div>") + "</div>" +
             "</section>"
           ).join("") + "</div>";
         } else if (state.viewMode === "repos") {
@@ -2157,7 +2291,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             '<section class="repo-section">' +
               '<div class="repo-hdr">' +
                 '<div><div style="display:flex;align-items:center;gap:8px;">' + forgeIcon(grp.forge, 14) + "<strong>" + escapeHtml(grp.name) + '</strong><span class="badge">' + escapeHtml(grp.forge.toUpperCase()) + '</span></div><div class="mono" style="font-size:11px;color:var(--text-faint);margin-top:2px;">' + escapeHtml(grp.path) + "</div></div>" +
-                '<span class="col-count">' + grp.items.length + " 项</span>" +
+                '<span class="col-count">' + grp.items.length + tr(" 项", " items") + "</span>" +
               "</div>" +
               '<div class="repo-grid">' + grp.items.map((it) => renderCard(it, { showRepo: false })).join("") + "</div>" +
             "</section>"
@@ -2201,7 +2335,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         let tabBody = "";
         if (state.inspectorTab === "files") {
           tabBody = changedFiles.length === 0
-            ? '<div class="col-empty">当前工作区干净，暂无未提交改动</div>'
+            ? '<div class="col-empty">' + tr("当前工作区干净，暂无未提交改动", "Clean working tree; no uncommitted changes") + "</div>"
             : '<div class="file-list">' + changedFiles.map((f) => {
                 const code = String(f.code || "M").trim();
                 const cls = code === "??" ? "untracked" : (code.includes("D") ? "deleted" : "");
@@ -2209,32 +2343,32 @@ BOARD_HTML = r"""<!DOCTYPE html>
               }).join("") + "</div>";
         } else {
           tabBody = tasks.length === 0
-            ? '<div class="col-empty">' + (item.worktree ? "已建工作目录，尚未拆解任务步骤" : "暂无本地任务步骤") + "</div>"
-            : '<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--text-faint);margin-bottom:5px;" class="num"><span>总体进度</span><span>' + done + " / " + total + " (" + pct + '%)</span></div><div class="progress-track"><div class="progress-fill" style="width:' + pct + '%"></div></div></div>' +
+            ? '<div class="col-empty">' + (item.worktree ? tr("已建工作目录，尚未拆解任务步骤", "Worktree ready; TASK/ steps pending") : tr("暂无本地任务步骤", "No local TASK steps yet")) + "</div>"
+            : '<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--text-faint);margin-bottom:5px;" class="num"><span>' + tr("总体进度", "Progress") + "</span><span>" + done + " / " + total + " (" + pct + '%)</span></div><div class="progress-track"><div class="progress-fill" style="width:' + pct + '%"></div></div></div>' +
               tasks.map((t) => '<div class="task-row"><div class="task-row-top"><span>' + escapeHtml(t.title || t.id) + '</span><span class="badge">' + escapeHtml(t.status || "planned") + "</span></div></div>").join("");
         }
 
         panel.innerHTML =
           '<div class="inspector-hdr">' +
             '<div style="min-width:0;flex:1;">' +
-              '<div class="card-meta">' + forgeIcon(item.forge_type, 12) + "<span>" + escapeHtml(item.repo_name || "") + "</span><span>·</span>" + renderIdHtml(item) + '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" + (issueHref ? '<a class="btn btn-xs" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>原单</span></a>" : "") + "</div>" +
-              '<h2 class="inspector-title">' + escapeHtml(item.title || item.issue || "未命名任务") + "</h2>" +
+              '<div class="card-meta">' + forgeIcon(item.forge_type, 12) + "<span>" + escapeHtml(item.repo_name || "") + "</span><span>·</span>" + renderIdHtml(item) + '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" + (issueHref ? '<a class="btn btn-xs" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>" + tr("原单", "Issue") + "</span></a>" : "") + "</div>" +
+              '<h2 class="inspector-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</h2>" +
             "</div>" +
-            '<button class="icon-btn" id="inspector-close-btn" type="button" aria-label="关闭详情">' + icon("x", 15) + "</button>" +
+            '<button class="icon-btn" id="inspector-close-btn" type="button" aria-label="' + tr("关闭详情", "Close details") + '">' + icon("x", 15) + "</button>" +
           "</div>" +
           '<div class="inspector-body">' +
             '<div class="meta-grid">' +
-              '<div class="meta-row"><span class="meta-key">分支</span><span class="meta-val">' + escapeHtml(item.branch || "—") + "</span>" + (item.branch ? '<button class="btn btn-xs btn-icon-only" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="已复制分支名" type="button">' + icon("copy", 11) + "</button>" : "") + "</div>" +
-              '<div class="meta-row"><span class="meta-key">工作目录</span><span class="meta-val">' + escapeHtml(item.worktree || "尚未创建") + "</span>" + (item.worktree ? '<button class="btn btn-xs btn-icon-only" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="已复制工作目录路径" type="button">' + icon("copy", 11) + "</button>" : "") + "</div>" +
+              '<div class="meta-row"><span class="meta-key">' + tr("分支", "Branch") + '</span><span class="meta-val">' + escapeHtml(item.branch || "—") + "</span>" + (item.branch ? '<button class="btn btn-xs btn-icon-only" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" type="button">' + icon("copy", 11) + "</button>" : "") + "</div>" +
+              '<div class="meta-row"><span class="meta-key">' + tr("工作目录", "Worktree") + '</span><span class="meta-val">' + escapeHtml(item.worktree || tr("尚未创建", "Not created")) + "</span>" + (item.worktree ? '<button class="btn btn-xs btn-icon-only" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" type="button">' + icon("copy", 11) + "</button>" : "") + "</div>" +
             "</div>" +
             '<div class="handoff-box">' +
-              '<div class="handoff-box-hdr"><span>跨 Agent 接力提示词</span><button class="btn btn-xs btn-primary" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="已复制 Agent 接力词，可直接粘贴给任意 Agent" type="button">' + icon("copy", 11) + "<span>复制接力词</span></button></div>" +
+              '<div class="handoff-box-hdr"><span>' + tr("跨 Agent 接力提示词", "Cross-Agent Handoff Prompt") + '</span><button class="btn btn-xs btn-primary" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" type="button">' + icon("copy", 11) + "<span>" + tr("复制接力词", "Copy Handoff") + "</span></button></div>" +
               '<pre class="handoff-pre">' + escapeHtml(handoffPrompt) + "</pre>" +
             "</div>" +
-            (startCmd ? '<div class="cmd-box"><div class="cmd-box-hdr"><span>终端快捷命令</span><button class="btn btn-xs" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="已复制接手命令" type="button">' + icon("copy", 11) + "<span>复制</span></button></div><div class=\"cmd-code\">$ " + escapeHtml(startCmd) + "</div></div>" : "") +
+            (startCmd ? '<div class="cmd-box"><div class="cmd-box-hdr"><span>' + tr("终端快捷命令", "Quick CLI Command") + '</span><button class="btn btn-xs" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="' + tr("已复制接手命令", "Copied command") + '" type="button">' + icon("copy", 11) + "<span>" + tr("复制", "Copy") + '</span></button></div><div class="cmd-code">$ ' + escapeHtml(startCmd) + "</div></div>" : "") +
             '<div class="tabs">' +
-              '<button class="tab-btn ' + (state.inspectorTab === "tasks" ? "active" : "") + '" data-inspector-tab="tasks" type="button">任务步骤 (' + tasks.length + ")</button>" +
-              '<button class="tab-btn ' + (state.inspectorTab === "files" ? "active" : "") + '" data-inspector-tab="files" type="button">改动文件 (' + ((pulse && pulse.dirty_count) || 0) + ")</button>" +
+              '<button class="tab-btn ' + (state.inspectorTab === "tasks" ? "active" : "") + '" data-inspector-tab="tasks" type="button">' + tr("任务步骤", "Steps") + " (" + tasks.length + ")</button>" +
+              '<button class="tab-btn ' + (state.inspectorTab === "files" ? "active" : "") + '" data-inspector-tab="files" type="button">' + tr("改动文件", "Files") + " (" + ((pulse && pulse.dirty_count) || 0) + ")</button>" +
             "</div>" +
             '<div class="tab-pane">' + tabBody + "</div>" +
           "</div>";
@@ -2259,6 +2393,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           sr: state.selectedRepo,
           vm: state.viewMode,
           sc: state.sidebarCollapsed,
+          lg: state.lang,
           sq: state.search,
           wo: state.worktreeOnly,
           ao: state.alertsOnly,
@@ -2294,14 +2429,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
         const warns = snap.warnings || [];
         document.getElementById("warnings-wrap").innerHTML = warns.length
-          ? '<div class="warnings-box">' + icon("alertTriangle", 14) + "<div><strong>提示：</strong>" + warns.map((w) => escapeHtml(w)).join(" ｜ ") + "</div></div>"
+          ? '<div class="warnings-box">' + icon("alertTriangle", 14) + "<div><strong>" + tr("提示：", "Notice: ") + "</strong>" + warns.map((w) => escapeHtml(w)).join(" ｜ ") + "</div></div>"
           : "";
 
         const retainedCount = (snap.repos || []).reduce((acc, r) => acc + (r.retained_idle_worktrees || []).length, 0);
-        const retainedText = retainedCount > 0 ? "已合入保留目录：" + retainedCount + " 个" : "保留目录均已清理";
+        const retainedText = retainedCount > 0
+          ? tr("已合入保留目录：" + retainedCount + " 个", retainedCount + " retained merged worktree(s)")
+          : tr("保留目录均已清理", "No retained merged worktrees");
         document.getElementById("footer").innerHTML =
-          "<span>仓库索引：<code>" + escapeHtml(snap.repos_config_path || "~/.config/idd/repos.json") + "</code></span>" +
-          "<span>" + escapeHtml(retainedText) + " · 快捷键 <code>[</code> 收起侧栏 · <code>/</code> 搜索 · <code>r</code> 同步远端</span>";
+          "<span>" + tr("仓库索引：", "Repo index: ") + "<code>" + escapeHtml(snap.repos_config_path || "~/.config/idd/repos.json") + "</code></span>" +
+          "<span>" + escapeHtml(retainedText) + " · " + tr("快捷键 <code>[</code> 收起侧栏 · <code>/</code> 搜索 · <code>r</code> 同步远端", "Shortcuts: <code>[</code> sidebar · <code>/</code> search · <code>r</code> sync") + "</span>";
       }
 
       async function fetchSnapshot(forceRefresh) {
@@ -2330,10 +2467,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
           updateConnectionBadge(true);
           renderAll(false);
           if (forceRefresh) {
-            showToast("已同步最新状态");
+            showToast(tr("已同步最新状态", "Synced latest state"));
           }
         } catch (err) {
-          updateConnectionBadge(false, "连接异常: " + err.message);
+          updateConnectionBadge(false, tr("连接异常: ", "Sync error: ") + err.message);
         } finally {
           state.fetching = false;
           syncHeaderControls();
@@ -2467,6 +2604,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
         applyTheme(next);
       });
 
+      document.getElementById("lang-btn").addEventListener("click", () => {
+        state.lang = isEn() ? "zh" : "en";
+        localStorage.setItem("idd_board_lang", state.lang);
+        applyLang();
+        applyTheme(document.documentElement.getAttribute("data-theme") || "dark");
+        syncHeaderControls();
+        updateConnectionBadge(true);
+        renderAll(true);
+      });
+
       const searchInput = document.getElementById("search-input");
       const searchWrap = document.getElementById("search-wrap");
       searchWrap.addEventListener("click", () => {
@@ -2541,6 +2688,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       });
 
       const savedTheme = localStorage.getItem("idd_board_theme") || "dark";
+      applyLang();
       applyTheme(savedTheme);
       applySidebarState();
       syncHeaderControls();

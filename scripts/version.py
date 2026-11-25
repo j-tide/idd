@@ -10,8 +10,8 @@ import re
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL_MD_PATH = REPO_ROOT / "SKILL.md"
 README_MD_PATH = REPO_ROOT / "README.md"
-README_ZH_PATH = REPO_ROOT / "README.zh-CN.md"
-README_FILENAMES = ("README.md", "README.zh-CN.md")
+README_EN_PATH = REPO_ROOT / "README.en.md"
+README_FILENAMES = ("README.md", "README.en.md")
 FALLBACK_VERSION = "0.0.0-dev"
 
 SEMVER_RE = re.compile(
@@ -159,11 +159,12 @@ def get_version(skill_md: Path = SKILL_MD_PATH, *, fallback: str = FALLBACK_VERS
 
 
 def get_readme_paths(repo_root: Path = REPO_ROOT) -> list[Path]:
-    """Return `README.md` plus `README.zh-CN.md` when present under `repo_root`."""
+    """Return `README.md` plus existing localized READMEs (`README.en.md` / `README.zh-CN.md`)."""
     paths = [repo_root / "README.md"]
-    zh_path = repo_root / "README.zh-CN.md"
-    if zh_path.is_file():
-        paths.append(zh_path)
+    for name in ("README.en.md", "README.zh-CN.md"):
+        candidate = repo_root / name
+        if candidate.is_file():
+            paths.append(candidate)
     return paths
 
 
