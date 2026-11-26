@@ -6,7 +6,7 @@
 
 **简体中文** · [English](README.en.md)
 
-[![Version](https://img.shields.io/badge/version-v0.0.1-10b981?style=flat-square)](https://github.com/j-tide/idd/releases)
+[![Version](https://img.shields.io/badge/version-v0.0.2-10b981?style=flat-square)](https://github.com/j-tide/idd/releases)
 [![Forges](https://img.shields.io/badge/forges-GitHub%20%C2%B7%20Self--Hosted%20GitLab-fc6d26?style=flat-square)](#)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(stdlib)-8b5cf6?style=flat-square)](#)
 [![Agents](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Antigravity-38bdf8?style=flat-square)](#)
