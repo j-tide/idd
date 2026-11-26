@@ -320,6 +320,9 @@ class TestMonitorAndBoard(unittest.TestCase):
                     self.assertIn("Cross-Agent Handoff Prompt", html)
                     self.assertIn("打开 Issue", html)
                     self.assertIn("Open Issue", html)
+                    self.assertIn("resolvePrimaryLink", html)
+                    self.assertIn("renderPrimaryLinkBtn", html)
+                    self.assertNotIn("renderOpenIssueBtn", html)
                     self.assertIn("wt-tasks-strip", html)
                     self.assertIn("auth_alerts", html)
                     self.assertIn("forge_syncing", html)
@@ -1383,6 +1386,166 @@ class TestMonitorAndBoard(unittest.TestCase):
                 if not gl_closed:
                     gl_server.shutdown()
                     gl_server.server_close()
+
+    def test_board_primary_link_switches_to_pr_or_mr_when_change_exists(self) -> None:
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to evaluate board_ui.py helper functions")
+
+        script_match = re.search(r"<script>(.*)</script>", board_ui.BOARD_HTML, re.S)
+        self.assertIsNotNone(script_match)
+        assert script_match is not None
+        js_src = script_match.group(1)
+
+        def _extract_js_fn(name: str) -> str:
+            marker = f"function {name}("
+            start = js_src.index(marker)
+            brace_start = js_src.index("{", start)
+            depth = 0
+            for idx in range(brace_start, len(js_src)):
+                ch = js_src[idx]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return js_src[start : idx + 1]
+            raise AssertionError(f"Unclosed JS function: {name}")
+
+        harness_js = "\n".join(
+            [
+                "const state = { lang: 'zh' };",
+                "const ICONS = { externalLink: '<path />' };",
+                *(
+                    _extract_js_fn(fn_name)
+                    for fn_name in (
+                        "isEn",
+                        "tr",
+                        "escapeHtml",
+                        "safeUrl",
+                        "icon",
+                        "renderIdHtml",
+                        "resolvePrimaryLink",
+                        "renderPrimaryLinkBtn",
+                    )
+                ),
+                r"""
+                const assert = require('assert');
+
+                const ghNoPr = {
+                  _kind: 'issue',
+                  issue_number: 21,
+                  url: 'https://github.com/o/r/issues/21',
+                  forge_type: 'github',
+                  change: null
+                };
+                const ghWithPr = {
+                  _kind: 'issue',
+                  issue_number: 21,
+                  stage: '🔵 待合入',
+                  url: 'https://github.com/o/r/issues/21',
+                  forge_type: 'github',
+                  change: { number: 22, url: 'https://github.com/o/r/pull/22', checks_overall: 'PASS' }
+                };
+                const glWithMr = {
+                  _kind: 'issue',
+                  issue_number: 9,
+                  stage: '🔵 待合入',
+                  url: 'https://gitlab.example.com/g/p/-/issues/9',
+                  forge_type: 'gitlab',
+                  change: { number: 7, url: 'https://gitlab.example.com/g/p/-/merge_requests/7', checks_overall: 'PASS' }
+                };
+                const orphanGh = {
+                  _kind: 'orphan',
+                  number: 30,
+                  url: 'https://github.com/o/r/pull/30',
+                  forge_type: 'github',
+                  mr_label: 'PR',
+                  change: { number: 30, url: 'https://github.com/o/r/pull/30' }
+                };
+                const orphanGlFallback = {
+                  _kind: 'orphan',
+                  number: 12,
+                  url: 'https://gitlab.example.com/g/p/-/merge_requests/12',
+                  forge_type: 'gitlab',
+                  mr_label: 'MR'
+                };
+                const unsafeChange = {
+                  _kind: 'issue',
+                  issue_number: 5,
+                  url: 'https://github.com/o/r/issues/5',
+                  forge_type: 'github',
+                  change: { number: 6, url: 'javascript:alert(1)' }
+                };
+                const emptyChangeUrl = {
+                  _kind: 'issue',
+                  issue_number: 6,
+                  url: 'https://github.com/o/r/issues/6',
+                  forge_type: 'github',
+                  change: { number: 8, url: '' }
+                };
+                const localOnly = {
+                  _kind: 'local',
+                  issue: 'scratch-task',
+                  forge_type: 'local'
+                };
+
+                // Chinese mode
+                state.lang = 'zh';
+                const btnNoPrZh = renderPrimaryLinkBtn(ghNoPr, 'btn-xs');
+                assert(btnNoPrZh.includes('href="https://github.com/o/r/issues/21"'));
+                assert(btnNoPrZh.includes('<span>打开 Issue</span>'));
+                assert(btnNoPrZh.includes('data-stop-open="1"'));
+
+                const btnGhPrZh = renderPrimaryLinkBtn(ghWithPr, 'btn-xs');
+                assert(btnGhPrZh.includes('href="https://github.com/o/r/pull/22"'));
+                assert(btnGhPrZh.includes('<span>打开 PR</span>'));
+                assert(!btnGhPrZh.includes('打开 Issue'));
+                const idHtml = renderIdHtml(ghWithPr);
+                assert(idHtml.includes('href="https://github.com/o/r/issues/21"'));
+                assert(idHtml.includes('>#21</a>'));
+
+                const btnGlMrZh = renderPrimaryLinkBtn(glWithMr, 'btn-xs');
+                assert(btnGlMrZh.includes('href="https://gitlab.example.com/g/p/-/merge_requests/7"'));
+                assert(btnGlMrZh.includes('<span>打开 MR</span>'));
+
+                const btnOrphGhZh = renderPrimaryLinkBtn(orphanGh, 'btn-xs');
+                assert(btnOrphGhZh.includes('href="https://github.com/o/r/pull/30"'));
+                assert(btnOrphGhZh.includes('<span>打开 PR</span>'));
+
+                const btnOrphGlZh = renderPrimaryLinkBtn(orphanGlFallback, 'btn-xs');
+                assert(btnOrphGlZh.includes('href="https://gitlab.example.com/g/p/-/merge_requests/12"'));
+                assert(btnOrphGlZh.includes('<span>打开 MR</span>'));
+
+                assert(renderPrimaryLinkBtn(unsafeChange, 'btn-xs').includes('href="https://github.com/o/r/issues/5"'));
+                assert(renderPrimaryLinkBtn(unsafeChange, 'btn-xs').includes('<span>打开 Issue</span>'));
+                assert(renderPrimaryLinkBtn(emptyChangeUrl, 'btn-xs').includes('href="https://github.com/o/r/issues/6"'));
+                assert.strictEqual(renderPrimaryLinkBtn(localOnly, 'btn-xs'), '');
+
+                const consoleBtn = renderPrimaryLinkBtn(ghWithPr, 'btn-sm', { iconSize: 12, stopOpen: false });
+                assert(consoleBtn.includes('class="btn btn-sm"'));
+                assert(consoleBtn.includes('width="12"'));
+                assert(!consoleBtn.includes('data-stop-open'));
+
+                // English mode
+                state.lang = 'en';
+                assert(renderPrimaryLinkBtn(ghNoPr, 'btn-xs').includes('<span>Open Issue</span>'));
+                assert(renderPrimaryLinkBtn(ghWithPr, 'btn-xs').includes('<span>Open PR</span>'));
+                assert(renderPrimaryLinkBtn(glWithMr, 'btn-xs').includes('<span>Open MR</span>'));
+                assert(renderPrimaryLinkBtn(orphanGlFallback, 'btn-xs').includes('<span>Open MR</span>'));
+                console.log('JS_PRIMARY_LINK_OK');
+                """,
+            ]
+        )
+
+        proc = subprocess.run(
+            [node_bin, "-e", harness_js],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        self.assertIn("JS_PRIMARY_LINK_OK", proc.stdout)
 
 
 if __name__ == "__main__":
