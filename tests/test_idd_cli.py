@@ -941,14 +941,17 @@ class TestIddCli(unittest.TestCase):
             "  + [ ] 缩进加号项\n"
             "  1. [ ] 有序列表项\n"
             "### 子验收条件\n"
-            "- [ ] 子标题下的验收项\n\n"
+            "- [ ] 子标题下的验收项\n"
+            "- [ ] 保底刷新 `<!-- idd:progress:start -->` 进度块\n\n"
             "```markdown\n"
             "## 验收标准\n"
+            "<!-- idd:progress:start -->\n"
             "- [ ] 代码块里的示例不能改\n"
             "```\n\n"
             "~~~\n"
             "- [ ] 波浪线代码块不能改\n"
             "~~~\n\n"
+            "- [ ] 代码块之后同节验收项\n\n"
             "## 后续计划\n\n"
             "- [ ] 下一期优化项\n\n"
             "## Acceptance Criteria\n\n"
@@ -960,7 +963,7 @@ class TestIddCli(unittest.TestCase):
             "<!-- idd:progress:end -->\n"
         )
         updated, count = idd_cli.check_acceptance_criteria(sample)
-        self.assertEqual(count, 6)
+        self.assertEqual(count, 8)
         self.assertIn("- [ ] 非验收复选框", updated)
         self.assertIn("- [x] 支持 UTF-8 BOM", updated)
         self.assertIn("- [x] 已完成的一项", updated)
@@ -968,8 +971,10 @@ class TestIddCli(unittest.TestCase):
         self.assertIn("  + [x] 缩进加号项", updated)
         self.assertIn("  1. [x] 有序列表项", updated)
         self.assertIn("- [x] 子标题下的验收项", updated)
+        self.assertIn("- [x] 保底刷新 `<!-- idd:progress:start -->` 进度块", updated)
         self.assertIn("- [ ] 代码块里的示例不能改", updated)
         self.assertIn("- [ ] 波浪线代码块不能改", updated)
+        self.assertIn("- [x] 代码块之后同节验收项", updated)
         self.assertIn("- [ ] 下一期优化项", updated)
         self.assertIn("- [x] English item", updated)
         self.assertIn("- [X] Uppercase already checked", updated)
@@ -1208,6 +1213,104 @@ class TestIddCli(unittest.TestCase):
             )
             self.assertEqual(created_json["repo_init_hint"]["command"], "idd repo-init --apply")
             self.assertIn("allow_merge_commit=true（建议 false）", created_json["repo_init_hint"]["mismatches"])
+
+    def test_merge_progress_block_ignores_inline_and_fenced_markers(self) -> None:
+        original = (
+            "## 范围\n\n"
+            "- 保底刷新 `<!-- idd:progress:start -->` 与 `<!-- idd:progress:end -->` 进度块。\n\n"
+            "```markdown\n"
+            "<!-- idd:progress:start -->\n"
+            "## 示例进度\n"
+            "- [ ] 示例任务\n"
+            "<!-- idd:progress:end -->\n"
+            "```\n\n"
+            "## 非目标\n\n"
+            "- 不改其他内容。\n\n"
+            "## 验收标准\n\n"
+            "- [ ] 验收项 A\n"
+        )
+        block_v1 = (
+            "<!-- idd:progress:start -->\n"
+            "## 执行进度（IDD 自动同步）\n"
+            "- [ ] TASK-01：初始化\n"
+            "<!-- idd:progress:end -->"
+        )
+        merged_v1 = idd_cli.merge_progress_block(original, block_v1)
+        self.assertIn("## 非目标", merged_v1)
+        self.assertIn("- [ ] 验收项 A", merged_v1)
+        self.assertIn("- [ ] 示例任务", merged_v1)
+        self.assertIn("- [ ] TASK-01：初始化", merged_v1)
+        self.assertEqual(merged_v1.count("<!-- idd:progress:start -->"), 3)
+
+        block_v2 = (
+            "<!-- idd:progress:start -->\n"
+            "## 执行进度（IDD 自动同步）\n"
+            "- [x] TASK-01：初始化\n"
+            "<!-- idd:progress:end -->"
+        )
+        merged_v2 = idd_cli.merge_progress_block(merged_v1, block_v2)
+        self.assertIn("## 非目标", merged_v2)
+        self.assertIn("- [ ] 验收项 A", merged_v2)
+        self.assertIn("- [ ] 示例任务", merged_v2)
+        self.assertIn("- [x] TASK-01：初始化", merged_v2)
+        self.assertNotIn("- [ ] TASK-01：初始化", merged_v2)
+
+        # Orphan standalone start marker before a real standalone progress block must not wipe prose
+        with_orphan = (
+            "## 备注\n\n"
+            "<!-- idd:progress:start -->\n"
+            "保留这段说明。\n\n"
+            f"{block_v1}\n"
+        )
+        merged_orphan = idd_cli.merge_progress_block(with_orphan, block_v2)
+        self.assertIn("保留这段说明。", merged_orphan)
+        self.assertIn("- [x] TASK-01：初始化", merged_orphan)
+        self.assertNotIn("- [ ] TASK-01：初始化", merged_orphan)
+
+    def test_sync_and_land_preserve_body_with_inline_progress_markers(self) -> None:
+        issue_body = (
+            "## 范围\n\n"
+            "- 合入后保底刷新 `<!-- idd:progress:start -->` 进度块。\n\n"
+            "## 非目标\n\n"
+            "- 不改网页手工合入流程。\n\n"
+            "## 验收标准\n\n"
+            "- [ ] 保留正文各节并勾选验收框\n"
+            "- [ ] 刷新 `<!-- idd:progress:start -->` 进度条\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            h.state["issues"]["42"]["body"] = issue_body
+            h.save_state()
+
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+
+            self._write_task(wt, "42-export-csv", 1, "修复进度块匹配", "in_progress")
+            h.run_idd("sync", "42")
+            body_sync1 = h.load_state()["issues"]["42"]["body"]
+            self.assertIn("## 非目标", body_sync1)
+            self.assertIn("- [ ] 保留正文各节并勾选验收框", body_sync1)
+            self.assertIn("- [ ] TASK-01：修复进度块匹配 *(in_progress)*", body_sync1)
+
+            self._write_task(wt, "42-export-csv", 1, "修复进度块匹配", "done")
+            (wt / "fix.py").write_text("fixed = True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "fix: 修复进度块匹配"], check=True, capture_output=True)
+            h.run_idd("sync", "42")
+            body_sync2 = h.load_state()["issues"]["42"]["body"]
+            self.assertIn("## 非目标", body_sync2)
+            self.assertIn("- [ ] 保留正文各节并勾选验收框", body_sync2)
+            self.assertIn("- [x] TASK-01：修复进度块匹配", body_sync2)
+
+            h.run_idd("pr", "42")
+            land_out = h.run_idd("land", "42").stdout
+            self.assertIn("已自动勾选 Issue #42 验收标准（2 项）", land_out)
+            final_body = h.load_state()["issues"]["42"]["body"]
+            self.assertIn("## 非目标", final_body)
+            self.assertIn("- [x] 保留正文各节并勾选验收框", final_body)
+            self.assertIn("- [x] 刷新 `<!-- idd:progress:start -->` 进度条", final_body)
+            self.assertIn("- [x] TASK-01：修复进度块匹配", final_body)
 
 
 if __name__ == "__main__":

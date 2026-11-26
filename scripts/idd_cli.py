@@ -73,8 +73,8 @@ FORBIDDEN_PREFIXES = {
 PROGRESS_START = "<!-- idd:progress:start -->"
 PROGRESS_END = "<!-- idd:progress:end -->"
 PROGRESS_RE = re.compile(
-    re.escape(PROGRESS_START) + r".*?" + re.escape(PROGRESS_END),
-    re.DOTALL,
+    r"^[ \t]*" + re.escape(PROGRESS_START) + r"[ \t]*$.*?^[ \t]*" + re.escape(PROGRESS_END) + r"[ \t]*$",
+    re.DOTALL | re.MULTILINE,
 )
 
 
@@ -611,10 +611,60 @@ def build_progress_block(tasks: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+_FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+_FENCE_CLOSE_RE = re.compile(r"^\s*(`{3,}|~{3,})\s*$")
+
+
+def _update_fence_state(
+    line_no_eol: str,
+    fence_char: str | None,
+    fence_len: int,
+) -> tuple[bool, str | None, int]:
+    """Track Markdown fenced code blocks; return (is_fence_line, next_char, next_len)."""
+    if fence_char is not None:
+        close_m = _FENCE_CLOSE_RE.match(line_no_eol)
+        if close_m and close_m.group(1)[0] == fence_char and len(close_m.group(1)) >= fence_len:
+            return True, None, 0
+        return True, fence_char, fence_len
+
+    open_m = _FENCE_OPEN_RE.match(line_no_eol)
+    if open_m:
+        seq = open_m.group(1)
+        rest = open_m.group(2)
+        # CommonMark: backtick info strings cannot contain backticks.
+        if not (seq[0] == "`" and "`" in rest):
+            return True, seq[0], len(seq)
+    return False, None, 0
+
+
+def _find_progress_block_span(body: str) -> tuple[int, int] | None:
+    """Locate standalone non-fenced IDD progress block character span in `body`."""
+    if not body:
+        return None
+    offset = 0
+    start_offset: int | None = None
+    fence_char: str | None = None
+    fence_len = 0
+
+    for raw_line in body.splitlines(keepends=True):
+        line_no_eol = raw_line.rstrip("\r\n")
+        in_fence, fence_char, fence_len = _update_fence_state(line_no_eol, fence_char, fence_len)
+        if not in_fence:
+            stripped = line_no_eol.strip()
+            if stripped == PROGRESS_START:
+                start_offset = offset
+            elif start_offset is not None and stripped == PROGRESS_END:
+                return start_offset, offset + len(line_no_eol)
+        offset += len(raw_line)
+    return None
+
+
 def merge_progress_block(original_body: str, block: str) -> str:
     """Replace existing IDD progress block in Issue body, or append it cleanly."""
-    if PROGRESS_START in original_body and PROGRESS_END in original_body:
-        updated = PROGRESS_RE.sub(lambda _: block, original_body, count=1)
+    span = _find_progress_block_span(original_body)
+    if span is not None:
+        start, end = span
+        updated = original_body[:start] + block + original_body[end:]
         return updated.rstrip() + "\n"
     stripped = original_body.rstrip()
     if not stripped:
@@ -628,8 +678,6 @@ _ACCEPTANCE_PREFIX_RE = re.compile(
 _ACCEPTANCE_ZH_START_RE = re.compile(r"^验收(?:$|[\s:：(\[（\-—·])")
 _ACCEPTANCE_EN_START_RE = re.compile(r"^acceptance(?:$|[\s:：(\[\-])")
 _ATX_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
-_FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
-_FENCE_CLOSE_RE = re.compile(r"^\s*(`{3,}|~{3,})\s*$")
 _UNCHECKED_TASK_RE = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+\[) (\](?:\s+.*|\s*))$")
 
 
@@ -663,37 +711,22 @@ def check_acceptance_criteria(body: str) -> tuple[str, int]:
         line_no_eol = raw_line.rstrip("\r\n")
         eol = raw_line[len(line_no_eol):]
 
-        if PROGRESS_START in line_no_eol:
-            active_level = None
-            if PROGRESS_END not in line_no_eol:
-                in_progress_block = True
-            out_lines.append(raw_line)
-            continue
-
         if in_progress_block:
-            if PROGRESS_END in line_no_eol:
+            if line_no_eol.strip() == PROGRESS_END:
                 in_progress_block = False
             out_lines.append(raw_line)
             continue
 
-        if fence_char is not None:
-            close_m = _FENCE_CLOSE_RE.match(line_no_eol)
-            if close_m and close_m.group(1)[0] == fence_char and len(close_m.group(1)) >= fence_len:
-                fence_char = None
-                fence_len = 0
+        in_fence, fence_char, fence_len = _update_fence_state(line_no_eol, fence_char, fence_len)
+        if in_fence:
             out_lines.append(raw_line)
             continue
 
-        open_m = _FENCE_OPEN_RE.match(line_no_eol)
-        if open_m:
-            seq = open_m.group(1)
-            rest = open_m.group(2)
-            # CommonMark: backtick info strings cannot contain backticks.
-            if not (seq[0] == "`" and "`" in rest):
-                fence_char = seq[0]
-                fence_len = len(seq)
-                out_lines.append(raw_line)
-                continue
+        if line_no_eol.strip() == PROGRESS_START:
+            active_level = None
+            in_progress_block = True
+            out_lines.append(raw_line)
+            continue
 
         heading_m = _ATX_HEADING_RE.match(line_no_eol)
         if heading_m:
@@ -2209,7 +2242,7 @@ def cmd_land(args: argparse.Namespace) -> int:
             checked_count = 0
             if not args.no_check_acceptance:
                 updated_body, checked_count = check_acceptance_criteria(orig_body)
-            if landed_tasks and PROGRESS_START in updated_body and PROGRESS_END in updated_body:
+            if landed_tasks and _find_progress_block_span(updated_body) is not None:
                 updated_body = merge_progress_block(updated_body, build_progress_block(landed_tasks))
             if updated_body != orig_body:
                 forge.update_issue_body(issue_num, updated_body)
