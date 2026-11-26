@@ -1,7 +1,7 @@
 # TASK-02：补充看板重构布局测试并完成全量回归
 
 - Issue: #47
-- Status: planned
+- Status: done
 - Depends on: TASK-01
 - Test: `tests/test_monitor_and_board.py` 与 `python3 -m unittest discover -s tests -v`
 
@@ -13,8 +13,8 @@
 
 ## 验收标准
 
-- [ ] 新增测试覆盖侧栏精简、4 视图保留、可清理工作树分层与智能阶段命令逻辑。
-- [ ] `python3 -m unittest discover -s tests -v` 全量通过且无跳过或放宽断言。
+- [x] 新增测试覆盖侧栏精简、4 视图保留、可清理工作树分层与智能阶段命令逻辑。
+- [x] `python3 -m unittest discover -s tests -v` 全量通过且无跳过或放宽断言。
 
 ## 实现注意事项
 
@@ -27,8 +27,8 @@
 
 ## 执行结果
 
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已补充 `test_board_redesigned_layout_removes_worktree_rail_and_surfaces_cleanable_worktrees` 并完成全量 85 项测试回归，全部通过。
 
 ### 当前阻塞
 
@@ -36,4 +36,6 @@
 
 ### 验证记录
 
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-26 | `python3 -m unittest discover -s tests -v` | passed (85 passed) | `tests/test_monitor_and_board.py` |

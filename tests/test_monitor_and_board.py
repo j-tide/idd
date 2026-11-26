@@ -1959,6 +1959,233 @@ class TestMonitorAndBoard(unittest.TestCase):
             self.assertEqual(ui_proc.returncode, 0, ui_proc.stderr or ui_proc.stdout)
             self.assertIn("JS_TOP_ALERT_BOX_OK", ui_proc.stdout)
 
+    def test_board_redesigned_layout_removes_worktree_rail_and_surfaces_cleanable_worktrees(self) -> None:
+        html_doc = board_ui.BOARD_HTML
+        for removed_token in ("wt-rail-list", "sb-hdr-wts", "sb-filters", "并行目录"):
+            self.assertNotIn(removed_token, html_doc)
+        for view_id in ("view-cockpit", "view-kanban", "view-repos", "view-list"):
+            self.assertIn(view_id, html_doc)
+        for layout_token in ("workbench-grid", "console-sticky", "telemetry-strip", "toggle-cleanup", "cleanup-drawer"):
+            self.assertIn(layout_token, html_doc)
+
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to evaluate board_ui.py layout helpers")
+
+        script_match = re.search(r"<script>\s*([\s\S]*?)\s*</script>", html_doc)
+        self.assertIsNotNone(script_match)
+        assert script_match is not None
+        js_src = script_match.group(1)
+
+        def _extract_js_fn(name: str) -> str:
+            marker = f"function {name}("
+            start = js_src.index(marker)
+            brace_start = js_src.index("{", start)
+            depth = 0
+            for idx in range(brace_start, len(js_src)):
+                ch = js_src[idx]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return js_src[start : idx + 1]
+            raise AssertionError(f"Unclosed JS function: {name}")
+
+        fn_names = (
+            "isEn",
+            "tr",
+            "escapeHtml",
+            "safeUrl",
+            "icon",
+            "forgeIcon",
+            "forgeLabel",
+            "parseStage",
+            "isItemAlert",
+            "collectItems",
+            "matchesFilters",
+            "getProgressNumbers",
+            "shortWorktreePath",
+            "shortDirSlug",
+            "itemDotClass",
+            "collectRetainedWorktrees",
+            "getStageQuickCli",
+            "buildHandoffPrompt",
+            "resolveRepoMeta",
+            "renderRepoChip",
+            "renderIdHtml",
+            "renderChangeInline",
+            "localizeAgo",
+            "renderPulseSummary",
+            "renderSegBar",
+            "renderKpis",
+            "taskStatusMeta",
+            "renderTaskChips",
+            "resolvePrimaryLink",
+            "renderPrimaryLinkBtn",
+            "cardBucket",
+            "renderCockpitConsole",
+            "renderCockpitView",
+        )
+        harness = "\n".join(
+            [
+                """
+                const els = {
+                  kpis: { innerHTML: '' }
+                };
+                const document = { getElementById: (id) => els[id] || null };
+                const ICONS = {
+                  github: '<gh/>', gitlab: '<gl/>', terminal: '<tm/>', externalLink: '<ext/>',
+                  copy: '<cp/>', folder: '<fd/>', branch: '<br/>', trash: '<tr/>',
+                  chevronRight: '<cr/>', chevronDown: '<cd/>'
+                };
+                const state = {
+                  lang: 'zh',
+                  selectedRepo: 'ALL',
+                  search: '',
+                  worktreeOnly: false,
+                  alertsOnly: false,
+                  todoOnly: false,
+                  cleanupOnly: false,
+                  cleanupDrawerOpen: false,
+                  selectedKey: null,
+                  consoleTab: 'tasks',
+                  snapshot: {
+                    repos: [
+                      {
+                        repo_path: '/repos/demo',
+                        repo_name: 'demo',
+                        repo_url: 'https://github.com/o/demo',
+                        forge: 'github',
+                        retained_idle_worktrees: [
+                          {
+                            worktree: '/repos/demo-worktrees/33-ui',
+                            name: '33-ui',
+                            branch: 'feat/33-ui',
+                            issue_number: 33,
+                            last_active_ago: '2 天前',
+                            last_commit_sha: '5f11a98'
+                          }
+                        ]
+                      }
+                    ],
+                    issues: [
+                      {
+                        repo_path: '/repos/demo',
+                        repo_name: 'demo',
+                        repo_url: 'https://github.com/o/demo',
+                        forge_type: 'github',
+                        issue_number: 44,
+                        title: 'fix(board): fix ci',
+                        stage: '🔴 修 CI',
+                        worktree: '/repos/demo-worktrees/44-fix',
+                        branch: 'fix/44-fix',
+                        url: 'https://github.com/o/demo/issues/44',
+                        change: { number: 46, url: 'https://github.com/o/demo/pull/46', checks_overall: 'FAIL' },
+                        tasks: [{ id: 'TASK-01', title: 'step1', status: 'done' }],
+                        counts: { done: 1, in_progress: 0, blocked: 0, planned: 0 },
+                        pulse: { dirty_count: 1, insertions: 5, deletions: 2, last_active_ago: '刚刚', changed_files: [{ code: 'M', path: 'a.py' }] }
+                      },
+                      {
+                        repo_path: '/repos/demo',
+                        repo_name: 'demo',
+                        repo_url: 'https://github.com/o/demo',
+                        forge_type: 'github',
+                        issue_number: 41,
+                        title: 'feat: ready',
+                        stage: '🔵 待合入',
+                        worktree: '/repos/demo-worktrees/41-ready',
+                        branch: 'feat/41-ready',
+                        url: 'https://github.com/o/demo/issues/41',
+                        change: { number: 45, url: 'https://github.com/o/demo/pull/45', checks_overall: 'PASS' },
+                        tasks: [{ id: 'TASK-01', title: 'step1', status: 'done' }],
+                        counts: { done: 1, in_progress: 0, blocked: 0, planned: 0 }
+                      },
+                      {
+                        repo_path: '/repos/demo',
+                        repo_name: 'demo',
+                        repo_url: 'https://github.com/o/demo',
+                        forge_type: 'github',
+                        issue_number: 42,
+                        title: 'feat: coding',
+                        stage: '🟡 开发中',
+                        worktree: '/repos/demo-worktrees/42-coding',
+                        branch: 'feat/42-coding',
+                        url: 'https://github.com/o/demo/issues/42',
+                        tasks: [{ id: 'TASK-01', title: 'step1', status: 'in_progress' }],
+                        counts: { done: 0, in_progress: 1, blocked: 0, planned: 0 }
+                      },
+                      {
+                        repo_path: '/repos/demo',
+                        repo_name: 'demo',
+                        repo_url: 'https://github.com/o/demo',
+                        forge_type: 'github',
+                        issue_number: 47,
+                        title: 'feat: queued',
+                        stage: '⚪ 待处理',
+                        worktree: '',
+                        branch: '',
+                        url: 'https://github.com/o/demo/issues/47',
+                        tasks: [],
+                        counts: {}
+                      }
+                    ],
+                    local_only_items: [],
+                    orphan_changes: []
+                  }
+                };
+                """,
+                *(_extract_js_fn(n) for n in fn_names),
+                """
+                const assert = require('assert');
+
+                // 1. Retained worktree aggregated into telemetry strip & collapsed drawer by default
+                const retained = collectRetainedWorktrees(state.snapshot, false);
+                assert.strictEqual(retained.length, 1);
+                assert.strictEqual(retained[0]._kind, 'retained');
+                assert.strictEqual(retained[0].title, '33-ui');
+
+                renderKpis(state.snapshot);
+                assert(els.kpis.innerHTML.includes('data-kpi-action="toggle-cleanup"'));
+                assert(els.kpis.innerHTML.includes('可清理目录</span><span class="pill-cnt">1</span>'));
+
+                const items = collectItems(false);
+                const htmlCollapsed = renderCockpitView(items);
+                assert(htmlCollapsed.includes('class="workbench-grid"'));
+                assert(htmlCollapsed.includes('class="bento-card console-sticky"'));
+                assert(htmlCollapsed.includes('data-toggle-cleanup-drawer="1"'));
+                assert(!htmlCollapsed.includes('class="cleanup-body"'));
+
+                // 2. Expanding drawer reveals retained directory
+                state.cleanupDrawerOpen = true;
+                const htmlExpanded = renderCockpitView(items);
+                assert(htmlExpanded.includes('class="cleanup-body"'));
+                assert(htmlExpanded.includes('33-ui'));
+
+                // 3. cleanupOnly mode filters to cleanable worktrees and shows idd cleanup prompt
+                state.cleanupOnly = true;
+                state.selectedKey = null;
+                const htmlCleanupOnly = renderCockpitView(retained);
+                assert(htmlCleanupOnly.includes('可清理的已合入工作树'));
+                assert(htmlCleanupOnly.includes('idd cleanup'));
+                assert(buildHandoffPrompt(retained[0]).includes('idd cleanup'));
+
+                // 4. Smart stage quick CLI commands across all 5 stages
+                const byNum = new Map(items.map((x) => [x.issue_number, x]));
+                assert.strictEqual(getStageQuickCli(byNum.get(47)).cmd, 'cd /repos/demo && idd start 47');
+                assert.strictEqual(getStageQuickCli(byNum.get(44)).cmd, 'cd /repos/demo-worktrees/44-fix && idd ci 44 --logs');
+                assert.strictEqual(getStageQuickCli(byNum.get(41)).cmd, 'cd /repos/demo-worktrees/41-ready && idd land 41');
+                assert.strictEqual(getStageQuickCli(byNum.get(42)).cmd, 'cd /repos/demo-worktrees/42-coding && idd sync 42');
+                assert.strictEqual(getStageQuickCli(retained[0]).cmd, 'cd /repos/demo && idd cleanup');
+
+                console.log('JS_REDESIGNED_LAYOUT_OK');
+                """,
+            ]
+        )
+        proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        self.assertIn("JS_REDESIGNED_LAYOUT_OK", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
