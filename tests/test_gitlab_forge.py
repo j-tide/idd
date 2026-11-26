@@ -648,6 +648,16 @@ class TestGitLabForge(unittest.TestCase):
                 self.assertTrue((repo / "csv_export.py").is_file())
                 self.assertTrue((repo / "OTHER.md").is_file())
                 self.assertFalse((repo / "TASK/1-export-csv").exists())
+                self.assertIn("### TASK-01 实现 CSV 导出", state.mrs[10]["description"])
+                self.assertIn("- **Test:** `pytest test_csv.py` — 2 passed", state.mrs[10]["description"])
+                gl_squash_msg = subprocess.check_output(
+                    ["git", "-C", str(repo), "log", "-1", "--format=%B", "main"],
+                    text=True,
+                )
+                self.assertIn("TASK-01: 实现 CSV 导出", gl_squash_msg)
+                self.assertIn("Test: pytest test_csv.py — 2 passed", gl_squash_msg)
+                self.assertNotIn("### ", gl_squash_msg)
+                self.assertNotIn("**Test:**", gl_squash_msg)
 
                 # 9. `idd cleanup` removes worktree while keeping both local & origin branches
                 cleanup_res = run_idd("cleanup")

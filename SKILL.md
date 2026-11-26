@@ -147,7 +147,7 @@ python3 "$HOME/.agents/skills/idd/scripts/task_status.py" --root . --open-only
 
 开发提交和主线 Squash 提交都使用单行标题 `<type>: <中文改动>`（`<type>` 同分支前缀：`feat`、`fix`、`refactor`、`perf`、`docs`、`test`、`ci`、`chore`），冒号后直接写「哪个对象发生了什么变化」。
 
-开发提交模板：
+开发提交模板（支持写多行 `Test:` 累加）：
 
 ```text
 <type>: <本任务的具体变化>
@@ -159,7 +159,7 @@ Refs: #<Issue编号>
 Test: <实际执行的验证命令> — <结果，例如 12 passed>
 ```
 
-主线需求提交 / PR / MR 汇总正文模板（`idd pr` / `idd mr` 与 `idd land` 自动按此结构汇总）：
+PR / MR 汇总正文模板（`idd pr` / `idd mr` 自动生成结构化 Markdown；多项测试会拆行展示，冗长命令自动提炼简短标签并在文末 `<details><summary>完整验证命令</summary>` 折叠保留原命令）：
 
 ```markdown
 Closes #<Issue编号>
@@ -168,11 +168,23 @@ Closes #<Issue编号>
 
 <可选的详细说明（来自开发提交正文）>
 
-- **Test:** `<本任务实际执行的验证命令>` — <结果>
+- **Test:** `<简短命令或命令标签>` — <结果>
 
 ### TASK-02 <本任务的具体变化>
 
-- **Test:** `<本任务实际执行的验证命令>` — <结果>
+**Test:**
+
+- `<检查项 A>` — <结果>
+- `<检查项 B>` — <结果>
+```
+
+主线 Squash Commit 正文模板（`idd land` 在合入时自动生成零 Markdown 符号的干净纯文本，确保 GitHub / GitLab Commit 页面与 `git log` 无 `###`、`**` 或反引号外露）：
+
+```text
+Closes #<Issue编号>
+
+TASK-01: <本任务的具体变化>
+Test: <简短命令或命令标签> — <结果>
 ```
 
 ---
@@ -207,7 +219,7 @@ Closes #<Issue编号>
    ```
    `idd land` 会自动完成：
    - 核对工作树与分支。GitLab 先确认项目启用了快进合并和强制 Squash。随后 `git fetch` 并自动 rebase 到最新 `origin/main`；
-   - 在删除 `TASK/<issue>/` 前，先将完整 `Closes #<id>` 与所有 `TASK-XX` / `Test:` 写入 PR/MR 描述与 Squash Commit 正文；
+   - 在删除 `TASK/<issue>/` 前，先生成结构化 Markdown 写入 PR/MR 描述，并生成零 Markdown 纯文本写入 Squash Commit 正文（均含 `Closes #<id>` 与所有 `TASK-XX` / `Test:`）；
    - 执行 `git rm -rf TASK/<issue>` 并提交清理（若 `evidence/` 含附件且未传 `--force-clean-evidence` 会安全暂停提示）；
    - 以**单条 Squash 提交**直线合入 `main`（GitHub 走 Squash Merge；GitLab 走 Squash + Fast-Forward，自动关闭 Issue 并**默认保留远端与本地需求分支**）；
    - GitLab 合入后根据 MR 结果和远端目标分支确认只新增一条提交。自动合入仍在等待时报告待确认状态；

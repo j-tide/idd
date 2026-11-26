@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -458,7 +459,7 @@ def _parse_task_markdown_details(path: Path) -> dict[str, str]:
     return info
 
 
-def _collect_commit_task_records(worktree: Path, issue_dir: str, base_ref: str) -> list[dict[str, str]]:
+def _collect_commit_task_records(worktree: Path, issue_dir: str, base_ref: str) -> list[dict[str, Any]]:
     """Read git commits since merge-base and extract Task/Test metadata."""
     check_ref = run_cmd(["git", "-C", str(worktree), "rev-parse", "--verify", base_ref], check=False)
     if check_ref.returncode != 0:
@@ -475,7 +476,7 @@ def _collect_commit_task_records(worktree: Path, issue_dir: str, base_ref: str) 
     if log_proc.returncode != 0:
         return []
 
-    records: list[dict[str, str]] = []
+    records: list[dict[str, Any]] = []
     for raw_entry in log_proc.stdout.split("\x1e"):
         entry = raw_entry.strip("\n")
         if not entry.strip():
@@ -491,7 +492,7 @@ def _collect_commit_task_records(worktree: Path, issue_dir: str, base_ref: str) 
             commit_type, change_desc = type_match.group(1), type_match.group(2).strip()
 
         task_id = ""
-        test_line = ""
+        test_lines: list[str] = []
         extra_lines: list[str] = []
         for raw_line in body.splitlines():
             line = raw_line.strip()
@@ -501,7 +502,9 @@ def _collect_commit_task_records(worktree: Path, issue_dir: str, base_ref: str) 
                 if m and (issue_dir in val or val.startswith("TASK-")):
                     task_id = m.group(1)
             elif line.startswith("Test:"):
-                test_line = line[len("Test:"):].strip()
+                val = line[len("Test:"):].strip()
+                if val:
+                    test_lines.append(val)
             elif line.startswith(("Refs:", "Closes:", "Fixes:", "Co-authored-by:", "Signed-off-by:")):
                 continue
             elif line:
@@ -518,7 +521,8 @@ def _collect_commit_task_records(worktree: Path, issue_dir: str, base_ref: str) 
                 "subject": subject,
                 "change": change_desc,
                 "task_id": task_id,
-                "test": test_line,
+                "test": "; ".join(test_lines),
+                "tests": test_lines,
                 "extra": "\n".join(extra_lines).strip(),
             }
         )
@@ -527,12 +531,7 @@ def _collect_commit_task_records(worktree: Path, issue_dir: str, base_ref: str) 
 
 def _wrap_inline_code(text: str) -> str:
     """Wrap command text in a safe CommonMark inline code span."""
-    cleaned = text.strip()
-    if not cleaned:
-        return ""
-    unwrapped = re.fullmatch(r"`([^`]+)`", cleaned)
-    if unwrapped:
-        cleaned = unwrapped.group(1).strip()
+    cleaned = _unwrap_inline_code(text)
     if not cleaned:
         return ""
     runs = re.findall(r"`+", cleaned)
@@ -543,30 +542,450 @@ def _wrap_inline_code(text: str) -> str:
     return f"{fence}{cleaned}{fence}"
 
 
-def _format_test_summary_line(test_text: str) -> str:
-    """Format a Test summary bullet item with inline-coded command(s)."""
-    cleaned = test_text.strip()
+def _unwrap_inline_code(text: str) -> str:
+    """Strip matching outer CommonMark inline code backticks if present."""
+    cleaned = text.strip()
+    match = re.fullmatch(r"(`+)(.+?)\1", cleaned, flags=re.DOTALL)
+    if match:
+        inner = match.group(2).strip()
+        if inner:
+            return inner
+    return cleaned
+
+
+_COMPLETED_CHECK_END_RE = re.compile(
+    r"(?:\b(?:passed|failed|skipped|errors?|ok|pass|fail)|(?:通过|失败|跳过|无错误))$",
+    re.IGNORECASE,
+)
+_TRAILING_STATUS_RE = re.compile(
+    r"^(.+?)\s+(passed|failed|skipped|ok|通过|失败)$",
+    re.IGNORECASE,
+)
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
+
+_UV_VALUE_FLAGS = {
+    "--extra",
+    "--with",
+    "--group",
+    "--python",
+    "--directory",
+    "--project",
+    "-p",
+    "-C",
+    "--package",
+    "--only-group",
+}
+_UV_BOOL_FLAGS = {
+    "--offline",
+    "--locked",
+    "--frozen",
+    "--no-sync",
+    "--dev",
+    "--no-dev",
+    "--isolated",
+    "--quiet",
+    "-q",
+    "--all-extras",
+    "--no-editable",
+}
+_PYTEST_VALUE_FLAGS = {
+    "-o",
+    "-k",
+    "-m",
+    "-c",
+    "-n",
+    "-W",
+    "-r",
+    "--tb",
+    "--maxfail",
+    "--rootdir",
+    "--junitxml",
+    "--cov",
+    "--cov-report",
+    "--ignore",
+    "--deselect",
+    "--color",
+    "--durations",
+    "--capture",
+    "--log-level",
+    "--asyncio-mode",
+    "--confcutdir",
+}
+_PYTEST_BOOL_FLAGS = {
+    "-q",
+    "--quiet",
+    "-v",
+    "--verbose",
+    "-vv",
+    "-vvv",
+    "-x",
+    "--exitfirst",
+    "-s",
+    "-l",
+    "--showlocals",
+    "--lf",
+    "--last-failed",
+    "--ff",
+    "--failed-first",
+    "--nf",
+    "--new-first",
+    "--no-header",
+    "--no-summary",
+    "--no-cov",
+    "--strict-markers",
+    "--strict-config",
+    "--full-trace",
+}
+_JS_VALUE_FLAGS = {
+    "--maxWorkers",
+    "--filter",
+    "--reporter",
+    "--testNamePattern",
+    "--testPathPattern",
+    "-t",
+    "--config",
+    "-c",
+    "-C",
+    "--dir",
+    "--prefix",
+}
+_JS_BOOL_FLAGS = {
+    "--run",
+    "--watch",
+    "--silent",
+    "--if-present",
+    "--",
+    "-w",
+    "-s",
+    "--passWithNoTests",
+    "--coverage",
+}
+
+
+def _looks_like_completed_check(text: str) -> bool:
+    """Return True if a semicolon-separated fragment already ends with a check verdict."""
+    return bool(_COMPLETED_CHECK_END_RE.search(text.strip()))
+
+
+def _split_test_segments(cleaned: str) -> list[str]:
+    """Split multi-check Test strings on `; ` while preserving compound shell commands."""
+    parts = [p.strip() for p in re.split(r";\s+", cleaned) if p.strip()]
+    if len(parts) <= 1:
+        return parts
+
+    segments: list[str] = []
+    buf: list[str] = []
+    idx = 0
+    while idx < len(parts):
+        part = parts[idx]
+        if " — " in part:
+            buf.append(part)
+            segments.append("; ".join(buf))
+            buf.clear()
+        elif not buf and _looks_like_completed_check(part):
+            segments.append(part)
+        elif not buf and not any(" — " in later or _looks_like_completed_check(later) for later in parts[idx:]):
+            segments.append("; ".join(parts[idx:]))
+            break
+        elif not buf and not any(" — " in later for later in parts[idx + 1:]):
+            segments.append(part)
+        else:
+            buf.append(part)
+        idx += 1
+    if buf:
+        segments.append("; ".join(buf))
+    return segments
+
+
+def _is_file_target(target: str) -> bool:
+    base = target.rstrip("/").rsplit("/", 1)[-1]
+    return "." in base and not target.endswith("/")
+
+
+def _format_targets_label(prefix: str, targets: list[str]) -> str:
+    if not targets:
+        return prefix
+    if len(targets) == 1:
+        return f"{prefix} {targets[0]}"
+    if len(targets) == 2:
+        joined = f"{prefix} {targets[0]} {targets[1]}"
+        if len(joined) <= 65:
+            return joined
+    unit = "测试文件" if all(_is_file_target(t) for t in targets) else "测试目标"
+    return f"{prefix} ({len(targets)} 个{unit})"
+
+
+def _collect_positional_targets(
+    args: list[str],
+    *,
+    value_flags: set[str],
+    bool_flags: set[str],
+    skip_r_prefix: bool = False,
+) -> list[str]:
+    targets: list[str] = []
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in bool_flags:
+            i += 1
+            continue
+        if tok in value_flags:
+            i += 2
+            continue
+        if skip_r_prefix and tok.startswith("-r") and len(tok) > 2:
+            i += 1
+            continue
+        if tok.startswith("-"):
+            i += 1
+            continue
+        targets.append(tok)
+        i += 1
+    return targets
+
+
+def _summarize_single_part(raw_cmd: str) -> str:
+    """Shorten a single shell command (no `&&`) into a concise runner label."""
+    cleaned = raw_cmd.strip()
     if not cleaned:
-        return "- **Test:** 未记录"
+        return ""
+    try:
+        tokens = shlex.split(cleaned)
+    except ValueError:
+        tokens = cleaned.split()
+    if not tokens:
+        return cleaned
 
-    def _fmt_segment(seg: str) -> str:
-        if " — " not in seg:
-            return seg.strip()
-        cmd, result = seg.split(" — ", 1)
-        cmd_s = cmd.strip()
-        res_s = result.strip()
-        if not cmd_s:
-            return res_s or seg.strip()
-        return f"{_wrap_inline_code(cmd_s)} — {res_s}" if res_s else _wrap_inline_code(cmd_s)
+    while tokens and _ENV_ASSIGN_RE.match(tokens[0]):
+        tokens.pop(0)
 
-    segments = [s.strip() for s in cleaned.split("; ") if s.strip()]
-    if len(segments) > 1 and all(" — " in seg for seg in segments):
-        formatted = "; ".join(_fmt_segment(seg) for seg in segments)
-    elif " — " in cleaned:
-        formatted = _fmt_segment(cleaned)
-    else:
-        formatted = cleaned
-    return f"- **Test:** {formatted}"
+    changed = True
+    while changed and tokens:
+        changed = False
+        head = tokens[0]
+        head_base = Path(head).name
+        if head_base == "uv" and len(tokens) >= 2 and tokens[1] == "run":
+            tokens = tokens[2:]
+            while tokens:
+                tok = tokens[0]
+                if tok in _UV_BOOL_FLAGS or any(tok.startswith(f"{f}=") for f in _UV_VALUE_FLAGS):
+                    tokens.pop(0)
+                elif tok in _UV_VALUE_FLAGS and len(tokens) >= 2:
+                    tokens = tokens[2:]
+                else:
+                    break
+            changed = True
+        elif head_base in ("poetry", "pipenv", "pdm", "hatch") and len(tokens) >= 2 and tokens[1] == "run":
+            tokens = tokens[2:]
+            changed = True
+        elif head_base in ("corepack", "npx", "pnpx", "bunx"):
+            tokens = tokens[1:]
+            changed = True
+        elif head_base in ("python", "python3", "py") and len(tokens) >= 3 and tokens[1] == "-m":
+            tokens = tokens[2:]
+            changed = True
+
+    if not tokens:
+        return cleaned
+
+    cmd = Path(tokens[0]).name
+    rest = tokens[1:]
+
+    if cmd == "pytest":
+        targets = _collect_positional_targets(
+            rest,
+            value_flags=_PYTEST_VALUE_FLAGS,
+            bool_flags=_PYTEST_BOOL_FLAGS,
+            skip_r_prefix=True,
+        )
+        return _format_targets_label("pytest", targets)
+
+    if cmd == "unittest":
+        if rest and rest[0] == "discover":
+            start_dir = ""
+            i = 1
+            while i < len(rest):
+                tok = rest[i]
+                if tok in ("-s", "--start-directory") and i + 1 < len(rest):
+                    start_dir = rest[i + 1]
+                    i += 2
+                elif tok.startswith("--start-directory="):
+                    start_dir = tok.split("=", 1)[1]
+                    i += 1
+                elif tok in ("-p", "--pattern", "-t", "--top-level-directory") and i + 1 < len(rest):
+                    i += 2
+                else:
+                    i += 1
+            return f"unittest {start_dir}" if start_dir else "unittest discover"
+        targets = _collect_positional_targets(
+            rest,
+            value_flags={"-k"},
+            bool_flags={"-v", "--verbose", "-q", "--quiet", "-f", "--failfast", "-b", "--buffer", "-c", "--catch"},
+        )
+        return _format_targets_label("unittest", targets)
+
+    if cmd in ("pnpm", "npm", "yarn", "bun"):
+        idx = 0
+        script = ""
+        while idx < len(rest):
+            tok = rest[idx]
+            if tok == "run" or tok in ("-s", "--silent", "--if-present", "-w", "--workspace-root"):
+                idx += 1
+            elif tok in ("-C", "--dir", "--prefix", "--filter"):
+                idx += 2
+            elif tok.startswith("-"):
+                idx += 1
+            else:
+                script = tok
+                idx += 1
+                break
+        if script:
+            targets = _collect_positional_targets(
+                rest[idx:],
+                value_flags=_JS_VALUE_FLAGS,
+                bool_flags=_JS_BOOL_FLAGS,
+            )
+            return _format_targets_label(f"{cmd} {script}", targets)
+
+    if cmd in ("vitest", "jest", "mocha"):
+        args = rest[1:] if (cmd == "vitest" and rest and rest[0] == "run") else rest
+        targets = _collect_positional_targets(
+            args,
+            value_flags=_JS_VALUE_FLAGS,
+            bool_flags=_JS_BOOL_FLAGS,
+        )
+        return _format_targets_label(cmd, targets)
+
+    if cmd == "go" and rest and rest[0] == "test":
+        targets = _collect_positional_targets(
+            rest[1:],
+            value_flags={"-run", "-skip", "-count", "-timeout", "-tags", "-coverprofile"},
+            bool_flags={"-v", "-race", "-cover", "-short", "-json"},
+        )
+        return _format_targets_label("go test", targets)
+
+    if cmd == "cargo" and rest and rest[0] == "test":
+        targets = _collect_positional_targets(
+            rest[1:],
+            value_flags={"-p", "--package", "--test", "--bin", "--features"},
+            bool_flags={"--workspace", "--all-targets", "--lib", "--quiet", "-q", "--nocapture", "--"},
+        )
+        return _format_targets_label("cargo test", targets)
+
+    if tokens != cleaned.split() and len(tokens) == 1:
+        return tokens[0]
+    if len(cleaned) > 80 and len(tokens) >= 4:
+        trailing_files: list[str] = []
+        for tok in reversed(tokens):
+            if _is_file_target(tok):
+                trailing_files.append(tok)
+            else:
+                break
+        if len(trailing_files) >= 3:
+            prefix_tokens = tokens[: len(tokens) - len(trailing_files)]
+            return f"{' '.join(prefix_tokens)} ({len(trailing_files)} 个文件)"
+    return cleaned
+
+
+def _summarize_single_command(raw_cmd: str) -> str:
+    """Produce a concise display label for a validation command."""
+    cleaned = raw_cmd.strip()
+    if not cleaned:
+        return ""
+    if " && " in cleaned:
+        parts = [p.strip() for p in cleaned.split(" && ") if p.strip()]
+        if len(parts) > 1:
+            return " && ".join(_summarize_single_part(p) for p in parts)
+    return _summarize_single_part(cleaned)
+
+
+def _parse_test_entries(test_text: str) -> list[dict[str, Any]]:
+    """Parse Test summary text into structured entries with optional simplified labels."""
+    cleaned = test_text.strip()
+    if not cleaned or cleaned in ("未记录", "未在提交中记录"):
+        return [{"raw_cmd": "", "label": "", "result": cleaned or "未记录", "simplified": False}]
+
+    entries: list[dict[str, Any]] = []
+    for seg in _split_test_segments(cleaned):
+        if " — " in seg:
+            raw_cmd_part, res_part = seg.split(" — ", 1)
+            raw_cmd = _unwrap_inline_code(raw_cmd_part)
+            label = _summarize_single_command(raw_cmd) if raw_cmd else ""
+            simplified = bool(raw_cmd and label and label != raw_cmd)
+            entries.append(
+                {
+                    "raw_cmd": raw_cmd,
+                    "label": label,
+                    "result": res_part.strip(),
+                    "simplified": simplified,
+                }
+            )
+            continue
+
+        trailing = _TRAILING_STATUS_RE.match(seg)
+        if trailing:
+            prefix = _unwrap_inline_code(trailing.group(1))
+            status = trailing.group(2)
+            if (
+                prefix
+                and re.search(r"[A-Za-z_./:-]", prefix)
+                and prefix.lower() not in {"all", "tests", "all tests"}
+                and not re.fullmatch(r"\d+(?:\s+\w+)?", prefix)
+            ):
+                label = _summarize_single_command(prefix)
+                simplified = bool(label and label != prefix)
+                entries.append(
+                    {
+                        "raw_cmd": prefix if simplified else "",
+                        "label": label,
+                        "result": status,
+                        "simplified": simplified,
+                    }
+                )
+                continue
+
+        entries.append({"raw_cmd": "", "label": "", "result": seg, "simplified": False})
+    return entries
+
+
+def _format_entry_markdown(entry: dict[str, Any]) -> str:
+    label = str(entry.get("label", ""))
+    result = str(entry.get("result", ""))
+    if label and result:
+        return f"{_wrap_inline_code(label)} — {result}"
+    if label:
+        return _wrap_inline_code(label)
+    return result
+
+
+def _format_entry_plain(entry: dict[str, Any]) -> str:
+    label = str(entry.get("label", ""))
+    result = str(entry.get("result", ""))
+    if label and result:
+        return f"{label} — {result}"
+    return label or result
+
+
+def _format_test_summary_line(test_text: str) -> str:
+    """Format a Markdown Test summary block with split checks and concise labels."""
+    entries = _parse_test_entries(test_text)
+    if len(entries) <= 1:
+        item = _format_entry_markdown(entries[0])
+        return f"- **Test:** {item}"
+    lines = ["**Test:**", ""]
+    for entry in entries:
+        lines.append(f"- {_format_entry_markdown(entry)}")
+    return "\n".join(lines)
+
+
+def _format_test_summary_plain(test_text: str) -> str:
+    """Format a zero-Markdown plain-text Test block for Squash Commit messages."""
+    entries = _parse_test_entries(test_text)
+    if len(entries) <= 1:
+        return f"Test: {_format_entry_plain(entries[0])}"
+    lines = ["Test:"]
+    for entry in entries:
+        lines.append(f"- {_format_entry_plain(entry)}")
+    return "\n".join(lines)
 
 
 def _format_conventional_title(default_type: str, raw_title: str) -> str:
@@ -582,15 +1001,15 @@ def _format_conventional_title(default_type: str, raw_title: str) -> str:
     return f"{default_type}: {cleaned}"
 
 
-def build_issue_summary(
+def build_issue_summaries(
     worktree: Path,
     issue_dir: str,
     issue_number: int | None,
     base_ref: str,
     issue_title: str | None = None,
     branch: str = "",
-) -> tuple[str, str]:
-    """Generate (suggested_title, markdown_body) from TASK files and branch commits."""
+) -> tuple[str, str, str]:
+    """Generate (suggested_title, pr_markdown_body, commit_plain_body) from TASKs and commits."""
     task_dir = worktree / "TASK" / issue_dir
     tasks: list[dict[str, Any]] = []
     if task_dir.is_dir():
@@ -601,7 +1020,7 @@ def build_issue_summary(
                 tasks.append(parsed)
 
     commits = _collect_commit_task_records(worktree, issue_dir, base_ref)
-    commit_by_task: dict[str, dict[str, str]] = {}
+    commit_by_task: dict[str, dict[str, Any]] = {}
     for rec in commits:
         if rec["task_id"]:
             commit_by_task[rec["task_id"]] = rec
@@ -610,7 +1029,32 @@ def build_issue_summary(
     dominant_type = commit_types[0] if commit_types else "feat"
 
     first_change = ""
-    blocks: list[str] = []
+    md_blocks: list[str] = []
+    plain_blocks: list[str] = []
+    detailed_commands: list[tuple[str, str]] = []
+    seen_commands: set[tuple[str, str]] = set()
+
+    def _append_task_block(tid: str, change: str, extra: str, test_text: str) -> None:
+        md_parts = [f"### {tid} {change}"]
+        if extra:
+            md_parts.append(extra)
+        md_parts.append(_format_test_summary_line(test_text))
+        md_blocks.append("\n\n".join(md_parts))
+
+        plain_test = _format_test_summary_plain(test_text)
+        if extra:
+            plain_blocks.append(f"{tid}: {change}\n\n{extra}\n\n{plain_test}")
+        else:
+            plain_blocks.append(f"{tid}: {change}\n{plain_test}")
+
+        for entry in _parse_test_entries(test_text):
+            raw_cmd = str(entry.get("raw_cmd", ""))
+            if entry.get("simplified") and raw_cmd:
+                pair = (tid, raw_cmd)
+                if pair not in seen_commands:
+                    seen_commands.add(pair)
+                    detailed_commands.append(pair)
+
     if tasks:
         for task in tasks:
             tid = task["id"]
@@ -626,12 +1070,7 @@ def build_issue_summary(
                 or (f"{details['command']} — {details['outcome']}" if details.get("command") else "")
                 or (f"{task['test']} — {details['outcome'] or task['status']}" if task.get("test") else "未记录")
             )
-            block_parts = [f"### {tid} {change}"]
-            extra = commit_rec.get("extra", "")
-            if extra:
-                block_parts.append(extra)
-            block_parts.append(_format_test_summary_line(test_text))
-            blocks.append("\n\n".join(block_parts))
+            _append_task_block(tid, change, str(commit_rec.get("extra", "")), test_text)
     elif commits:
         for idx, rec in enumerate(commits, start=1):
             if rec["subject"].startswith("chore: 清理已汇总的任务记录"):
@@ -640,11 +1079,7 @@ def build_issue_summary(
             change = rec["change"]
             if not first_change:
                 first_change = change
-            block_parts = [f"### {tid} {change}"]
-            if rec["extra"]:
-                block_parts.append(rec["extra"])
-            block_parts.append(_format_test_summary_line(rec["test"] or "未在提交中记录"))
-            blocks.append("\n\n".join(block_parts))
+            _append_task_block(tid, change, str(rec["extra"]), rec["test"] or "未在提交中记录")
 
     if issue_title:
         suggested_title = _format_conventional_title(dominant_type, issue_title)
@@ -660,10 +1095,49 @@ def build_issue_summary(
         suggested_title = f"{suggested_title} (#{issue_number})"
 
     header_lines = [f"Closes #{issue_number}"] if issue_number is not None else [f"Branch: {branch or issue_dir}"]
-    body_parts = ["\n".join(header_lines)]
-    if blocks:
-        body_parts.extend(blocks)
-    return suggested_title, "\n\n".join(body_parts) + "\n"
+    header = "\n".join(header_lines)
+
+    pr_parts = [header]
+    if md_blocks:
+        pr_parts.extend(md_blocks)
+    if detailed_commands:
+        detail_lines = ["<details>", "<summary>完整验证命令</summary>", ""]
+        for tid, raw_cmd in detailed_commands:
+            detail_lines.append(f"- **{tid}:** {_wrap_inline_code(raw_cmd)}")
+        detail_lines.extend(["", "</details>"])
+        pr_parts.append("\n".join(detail_lines))
+
+    commit_parts = [header]
+    if plain_blocks:
+        commit_parts.extend(plain_blocks)
+
+    return suggested_title, "\n\n".join(pr_parts) + "\n", "\n\n".join(commit_parts) + "\n"
+
+
+def build_issue_summary(
+    worktree: Path,
+    issue_dir: str,
+    issue_number: int | None,
+    base_ref: str,
+    issue_title: str | None = None,
+    branch: str = "",
+    *,
+    fmt: str = "markdown",
+) -> tuple[str, str]:
+    """Generate (suggested_title, body) in either 'markdown' (PR/MR) or 'plain' (commit) format."""
+    title, pr_body, commit_body = build_issue_summaries(
+        worktree,
+        issue_dir,
+        issue_number,
+        base_ref,
+        issue_title=issue_title,
+        branch=branch,
+    )
+    if fmt == "markdown":
+        return title, pr_body
+    if fmt == "plain":
+        return title, commit_body
+    raise ValueError(f"Unsupported summary format: {fmt}")
 
 
 def build_progress_block(tasks: list[dict[str, Any]]) -> str:
@@ -2640,7 +3114,7 @@ def _execute_land(
     if issue_num is not None and issue_data and not no_check_acceptance:
         _, pending_acceptance_count = check_acceptance_criteria(issue_data.get("body", ""))
 
-    suggested_title, summary = build_issue_summary(
+    suggested_title, pr_summary, commit_summary = build_issue_summaries(
         wt_path,
         issue_dir or branch,
         issue_num,
@@ -2696,7 +3170,7 @@ def _execute_land(
             f"合入后勾选 Issue 验收标准: {acceptance_preview}",
             f"Squash 提交标题: {final_title}",
             "Squash 提交正文:",
-            summary.rstrip(),
+            commit_summary.rstrip(),
             f"合入方式: Squash 直线合入{merge_mode_note}",
             f"分支策略: 默认保留本地与远端需求分支 `{branch}`",
             f"工作树策略: {'合入后移除本地工作树（--rm-worktree）' if (rm_worktree and not auto) else '默认保留本地工作树（如需释放空间可手动执行 idd cleanup）'}",
@@ -2710,7 +3184,7 @@ def _execute_land(
     remote_head = remote_proc.stdout.strip() if remote_proc.returncode == 0 else ""
     if local_head != remote_head:
         run_cmd(["git", "-C", str(wt_path), "push", "--force-with-lease", "origin", "HEAD"])
-    forge.update_change(change_num, final_title, summary)
+    forge.update_change(change_num, final_title, pr_summary)
 
     # Step F: Wait for remote headRefOid sync, verify CI on new SHA, and Squash Merge with SHA lock
     fresh_change = _wait_for_change_head_sync(forge, change_num, local_head, change)
@@ -2758,7 +3232,7 @@ def _execute_land(
         forge,
         change_num,
         final_title,
-        summary,
+        commit_summary,
         auto=auto,
         expected_sha=local_head,
     )
