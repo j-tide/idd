@@ -31,7 +31,7 @@ metadata:
 | `idd sync [issue#] [--no-push] [--dry-run]` | 将当前 Worktree 的 `TASK` 勾选进度同步回 Issue 正文（渲染原生进度条），并自动推送当前开发分支到远端 |
 | `idd pr [issue# \| slug] [--auto-merge \| --no-auto-merge]` / `idd mr ...` | 基于 `TASK` 与提交记录生成结构化描述（含 `Closes #<id>`）并创建/更新 PR 或 MR；若 `auto_merge` 生效则自动等待 CI 结算并直线合入 |
 | `idd ci [issue# \| pr# \| !mr#] [--watch] [--logs] [--json]` | 查看 PR / MR 的 CI 状态并拉取失败 Job/Run 日志 |
-| `idd land [issue# \| slug] [--keep-tasks] [--rm-worktree] [--auto] [--wait-ci] [--no-check-acceptance] [--dry-run]` | 自动 Rebase、汇总正文、清理 `TASK/<issue>/`、Squash 直线合入并自动勾选 Issue 验收标准（默认保留分支与工作树） |
+| `idd land [issue# \| slug] [--keep-tasks] [--force-unfinished-tasks] [--rm-worktree] [--auto] [--wait-ci] [--no-check-acceptance] [--dry-run]` | 自动 Rebase、汇总正文、清理 `TASK/<issue>/`、Squash 直线合入并自动勾选 Issue 验收标准（默认保留分支与工作树） |
 | `idd cleanup [--dry-run]` | 按需移除已合入且 HEAD 一致的干净工作树目录（保留所有分支） |
 | `idd repo-init [--apply]` | 检查或配置 GitHub / GitLab 为线性 Squash 合入策略（保留分支） |
 | `idd config [auto-merge on\|off\|inherit] [-g\|--global] [--json]` | 查看或切换全局/单仓库 PR/MR 自动准入与自动合入开关（默认关闭） |
@@ -192,7 +192,7 @@ Closes #<Issue编号>
 4. **验收状态与自动准入边界**：
    - 开关关闭时：PR / MR 创建且本地检查/CI 状态明晰后，向用户报告「PR/MR 待验收」等待确认（或按用户本轮明确授权执行 `idd land`）。
    - 开关开启时：**不再停下来等待用户口头确认**；CI 全绿（`PASS`）或仓库未配置远端 CI（`NONE`）且本地测试已通过时，`idd pr` 会自动串行执行 `idd land`（清理 `TASK/`、Squash 直线合入、勾选 Issue 验收框并快进 `main`）。
-   - **安全暂停红线**（开关开启时遇到以下任一情况一律暂停交由人工处理）：`--draft` PR/MR、CI 经 2 轮修复仍失败或等待超时（退出码 `3`）、Rebase 冲突（退出码 `2`）、`TASK/<issue>/evidence/` 含附件（退出码 `2`）。
+   - **安全暂停红线**（开关开启时遇到以下任一情况一律暂停交由人工处理）：`--draft` PR/MR、CI 经 2 轮修复仍失败或等待超时（退出码 `3`）、Rebase 冲突（退出码 `2`）、`TASK/<issue>/` 含未完成任务（退出码 `2`）、`TASK/<issue>/evidence/` 含附件（退出码 `2`）。
 
 ---
 

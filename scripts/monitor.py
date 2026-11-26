@@ -1201,22 +1201,69 @@ class ForgeSnapshotCache:
 # ---------------------------------------------------------------------------
 
 
-def format_change_badge(change: dict[str, Any], mr_label: str, mr_prefix: str) -> str:
+def format_change_badge(
+    change: dict[str, Any],
+    mr_label: str,
+    mr_prefix: str,
+    *,
+    local_unsynced: bool = False,
+) -> str:
     """Format compact PR/MR + CI status string."""
     num = change.get("number")
     prefix = f"{mr_label} {mr_prefix}{num}" if num else mr_label
     if change.get("isDraft"):
         prefix += " (Draft)"
     overall = change.get("checks_overall") or "NONE"
-    badges = {
-        "PASS": "✅ CI 全绿",
-        "FAIL": "❌ CI 失败",
-        "PENDING": "⏳ CI 运行中",
-        "NONE": "⚪ 无 CI",
-    }
+    if local_unsynced:
+        badges = {
+            "PASS": "🟡 CI 全绿 (待同步)",
+            "FAIL": "❌ CI 失败 (待同步)",
+            "PENDING": "⏳ CI 运行中 (待同步)",
+            "NONE": "⚪ 无 CI (待同步)",
+        }
+    else:
+        badges = {
+            "PASS": "✅ CI 全绿",
+            "FAIL": "❌ CI 失败",
+            "PENDING": "⏳ CI 运行中",
+            "NONE": "⚪ 无 CI",
+        }
     state = change.get("mergeStateStatus") or ""
     extra = " (落后/冲突)" if state in {"BEHIND", "DIRTY"} else ""
     return f"{prefix} · {badges.get(overall, overall)}{extra}"
+
+
+UNFINISHED_TASK_STATUSES = ("planned", "in_progress", "unknown")
+
+
+def _task_progress_flags(item: dict[str, Any] | None) -> tuple[bool, bool]:
+    """Return `(has_blocked, has_unfinished_tasks)` from a local worktree item."""
+    if not item:
+        return False, False
+    counts = item.get("counts") or {}
+    has_blocked = int(counts.get("blocked") or 0) > 0
+    unfinished_cnt = sum(int(counts.get(st) or 0) for st in UNFINISHED_TASK_STATUSES)
+    if unfinished_cnt == 0 and not any(int(counts.get(s) or 0) > 0 for s in task_status.STATUSES):
+        total = int(item.get("total") or 0)
+        done = int(item.get("done") or 0)
+        unfinished_cnt = max(0, total - done)
+    return has_blocked, unfinished_cnt > 0
+
+
+def _has_local_dirty_changes(item: dict[str, Any] | None) -> bool:
+    """Return True when the local worktree has uncommitted files or an active git op."""
+    if not item:
+        return False
+    pulse = item.get("pulse") or {}
+    return bool(int(pulse.get("dirty_count") or 0) > 0 or str(pulse.get("git_op") or "").strip())
+
+
+def _has_local_unsynced_changes(item: dict[str, Any] | None) -> bool:
+    """Return True when the local worktree has uncommitted files, unpushed commits, or an active git op."""
+    if not item:
+        return False
+    pulse = item.get("pulse") or {}
+    return bool(_has_local_dirty_changes(item) or int(pulse.get("unpushed_commits") or 0) > 0)
 
 
 def _pick_current_task(tasks: list[dict[str, Any]]) -> tuple[str, str]:
@@ -1257,10 +1304,19 @@ def _build_status_row(
     wt_path = item.get("worktree", "") if item else ""
     branch = item.get("branch", "") if item else (change.get("headRefName", "") if change else "")
 
-    if change:
+    has_blocked, has_unfinished_tasks = _task_progress_flags(item)
+    has_local_dirty = _has_local_dirty_changes(item)
+    has_local_unsynced = _has_local_unsynced_changes(item)
+    change_stale = bool(change and has_local_unsynced)
+
+    if has_blocked:
+        stage = "⛔ 受阻"
+    elif change and (change.get("checks_overall") or "NONE") == "FAIL":
+        stage = "🛠️ 修 CI"
+    elif change:
         overall = change.get("checks_overall") or "NONE"
-        if overall == "FAIL":
-            stage = "🛠️ 修 CI"
+        if has_unfinished_tasks or has_local_unsynced:
+            stage = "🟡 开发中"
         elif overall == "PENDING":
             stage = "⏳ CI 运行中"
         elif change.get("isDraft"):
@@ -1268,17 +1324,20 @@ def _build_status_row(
         else:
             stage = "🔵 待合入"
     elif item:
-        counts = item["counts"]
-        if counts.get("blocked", 0) > 0:
-            stage = "⛔ 受阻"
-        elif item["total"] > 0 and item["done"] == item["total"]:
+        total = int(item.get("total") or 0)
+        done = int(item.get("done") or 0)
+        if total > 0 and done > 0 and not has_unfinished_tasks and not has_local_dirty:
             stage = f"🟢 待提 {mr_label}"
         else:
             stage = "🟡 开发中"
     else:
         stage = "⚪ 待认领"
 
-    change_summary = format_change_badge(change, mr_label, mr_prefix) if change else "—"
+    change_summary = (
+        format_change_badge(change, mr_label, mr_prefix, local_unsynced=change_stale)
+        if change
+        else "—"
+    )
     return {
         "issue_number": issue_number,
         "title": title,
@@ -1288,6 +1347,7 @@ def _build_status_row(
         "worktree": wt_path,
         "branch": branch,
         "change": change,
+        "change_stale": change_stale,
         "change_summary": change_summary,
         "repo_name": repo_name,
         "repo_path": repo_path,

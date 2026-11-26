@@ -1892,6 +1892,83 @@ class TestIddCli(unittest.TestCase):
                 multi_body,
             )
 
+    def test_land_blocks_unfinished_tasks_and_allows_force_or_terminal_states(self) -> None:
+        # 1. planned / in_progress / blocked block `idd land` (including `--dry-run`) unless `--force-unfinished-tasks`
+        for status_val in ("in_progress", "planned", "blocked"):
+            with self.subTest(status=status_val), tempfile.TemporaryDirectory() as tmp:
+                h = GitHubHarness(Path(tmp))
+                wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+                subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+                subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+                tdir = wt / "TASK/42-export-csv"
+                tdir.mkdir(parents=True)
+                (tdir / "TASK-01-impl.md").write_text(
+                    "# TASK-01：实现接口\n\n- Issue: #42\n- Status: done\n- Depends on: none\n- Test: pytest\n",
+                    encoding="utf-8",
+                )
+                (tdir / "TASK-02-extra.md").write_text(
+                    f"# TASK-02：补齐配图\n\n- Issue: #42\n- Status: {status_val}\n- Depends on: TASK-01\n- Test: pytest\n",
+                    encoding="utf-8",
+                )
+                (wt / "export.py").write_text("ok = True\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+                subprocess.run(
+                    ["git", "-C", str(wt), "commit", "-m", "feat: 实现接口\n\nTask: 42-export-csv/TASK-01\nRefs: #42"],
+                    check=True,
+                    capture_output=True,
+                )
+                h.run_idd("pr", "42")
+
+                dry_blocked = h.run_idd("land", "42", "--dry-run", check=False)
+                self.assertEqual(dry_blocked.returncode, 2)
+                self.assertIn("TASK-02", dry_blocked.stderr)
+                self.assertIn(status_val, dry_blocked.stderr)
+                self.assertIn("--force-unfinished-tasks", dry_blocked.stderr)
+
+                land_blocked = h.run_idd("land", "42", check=False)
+                self.assertEqual(land_blocked.returncode, 2)
+                self.assertEqual(h.load_state()["issues"]["42"]["state"], "OPEN")
+
+                if status_val == "in_progress":
+                    # Auto-merge PR must also stop at the unfinished TASK guard
+                    am_res = h.run_idd("pr", "42", "--auto-merge", check=False)
+                    self.assertEqual(am_res.returncode, 2)
+                    self.assertIn("--force-unfinished-tasks", am_res.stderr)
+                    self.assertEqual(h.load_state()["issues"]["42"]["state"], "OPEN")
+
+                    forced = h.run_idd("land", "42", "--force-unfinished-tasks")
+                    self.assertIn("Squash Merge 直线合入", forced.stdout)
+                    self.assertEqual(h.load_state()["issues"]["42"]["state"], "CLOSED")
+
+        # 2. cancelled / deferred tasks are terminal decisions and should land without --force-unfinished-tasks
+        for term_status in ("cancelled", "deferred"):
+            with self.subTest(terminal_status=term_status), tempfile.TemporaryDirectory() as tmp:
+                h = GitHubHarness(Path(tmp))
+                wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+                subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+                subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+                tdir = wt / "TASK/42-export-csv"
+                tdir.mkdir(parents=True)
+                (tdir / "TASK-01-impl.md").write_text(
+                    "# TASK-01：实现接口\n\n- Issue: #42\n- Status: done\n- Depends on: none\n- Test: pytest\n",
+                    encoding="utf-8",
+                )
+                (tdir / "TASK-02-skip.md").write_text(
+                    f"# TASK-02：可选项\n\n- Issue: #42\n- Status: {term_status}\n- Depends on: TASK-01\n- Test: pytest\n",
+                    encoding="utf-8",
+                )
+                (wt / "export.py").write_text("ok = True\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+                subprocess.run(
+                    ["git", "-C", str(wt), "commit", "-m", "feat: 实现接口\n\nTask: 42-export-csv/TASK-01\nRefs: #42"],
+                    check=True,
+                    capture_output=True,
+                )
+                h.run_idd("pr", "42")
+                land_ok = h.run_idd("land", "42")
+                self.assertIn("Squash Merge 直线合入", land_ok.stdout)
+                self.assertEqual(h.load_state()["issues"]["42"]["state"], "CLOSED")
+
 
 if __name__ == "__main__":
     unittest.main()
