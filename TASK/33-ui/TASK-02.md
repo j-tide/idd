@@ -1,7 +1,7 @@
 # TASK-02：看板表面进出、空间滑动、数据插值与跟手抽屉调宽
 
 - Issue: 33-ui
-- Status: in_progress
+- Status: done
 - Depends on: TASK-01
 - Test: tests/test_monitor_and_board.py
 
@@ -11,10 +11,10 @@
 - 实施局部就地更新：驾驶舱行选中、抽屉关闭、抽屉 Tab 切换不整页重绘；KPI 数值与进度条平滑插值；视图/筛选切换与骨架→真实数据平滑过渡；侧栏收展缓冲与主题平滑过渡。
 
 ## 验收标准
-- [ ] Popover、抽屉、弹窗、提醒横幅、Toast 全部平滑进出且支持交互打断
-- [ ] 分段控件滑块、KPI 数值、分段条与进度条在状态变化时平滑过渡，2s 轮询不误触发入场动画
-- [ ] 桌面端详情抽屉支持跟手拖拽调宽与双击复位，手机端自动切换为底部 Sheet
-- [ ] `tests/test_monitor_and_board.py` 全部通过
+- [x] Popover、抽屉、弹窗、提醒横幅、Toast 全部平滑进出且支持交互打断
+- [x] 分段控件滑块、KPI 数值、分段条与进度条在状态变化时平滑过渡，2s 轮询不误触发入场动画
+- [x] 桌面端详情抽屉支持跟手拖拽调宽与双击复位，手机端自动切换为底部 Sheet
+- [x] `tests/test_monitor_and_board.py` 全部通过
 
 ## 实现注意事项
 - `syncSlidingIndicator` 在容器重建后需先无动画置于旧坐标，触发一次轻量回流后再开启动画滑向目标位置。
@@ -25,11 +25,13 @@
 - Expected: 所有测试通过。
 
 ## 执行结果
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已完成 `board_ui.py` 全量表面进出与交互连续性升级：`syncSlidingIndicator` 覆盖 4 视图/接力台/抽屉/向导/自动合入分段器；Popover/抽屉（含桌面左缘跟手调宽与手机底部 Sheet）/向导弹窗/顶部横幅平滑进出；驾驶舱行选中、抽屉关闭与标签切换局部就地更新；KPI 数值与进度条插值；主题/侧栏柔和过渡。18 项看板与监控单测全部通过。
 
 ### 当前阻塞
 无。
 
 ### 验证记录
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-26 | `PYTHONPATH=tests python3 -m unittest tests/test_monitor_and_board.py -v` | passed (18/18) | `scripts/board_ui.py` |

@@ -1,7 +1,7 @@
 # TASK-03：预览工作台动效统一、跟手分栏/视口拖拽与热更新润色
 
 - Issue: 33-ui
-- Status: planned
+- Status: in_progress
 - Depends on: TASK-01
 - Test: tests/test_preview_ui.py
 
