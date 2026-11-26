@@ -465,7 +465,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
+      flex-wrap: wrap;
+      gap: 10px 12px;
       min-height: 40px;
       padding: 2px 4px;
     }
@@ -667,6 +668,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .ws-controls {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 7px;
       flex-shrink: 0;
     }
@@ -707,6 +709,233 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .btn.spin svg { animation: spin 0.8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    .status-cluster {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      height: 30px;
+      padding: 0 3px;
+      gap: 2px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+    }
+    .status-cluster.is-err { border-color: rgba(248, 113, 113, 0.36); }
+    .status-cluster-live {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+    }
+    .status-cluster-sep {
+      width: 1px;
+      height: 14px;
+      background: var(--border);
+      margin: 0 2px;
+      flex-shrink: 0;
+    }
+    .cluster-icon-btn {
+      appearance: none;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text-dim);
+      cursor: pointer;
+      display: inline-grid;
+      place-items: center;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .cluster-icon-btn:hover { background: var(--bg-tile); color: var(--text); }
+    .cluster-icon-btn.is-paused {
+      background: var(--amber-soft);
+      border-color: rgba(251, 191, 36, 0.32);
+      color: var(--amber);
+    }
+    .forge-status-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+    }
+    .forge-status-btn {
+      appearance: none;
+      height: 24px;
+      padding: 0 7px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-dim);
+      font-size: 11.5px;
+      font-weight: 530;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+      transition: background 0.12s, color 0.12s, border-color 0.12s, opacity 0.12s;
+    }
+    .forge-status-btn:hover,
+    .forge-status-btn.is-open { background: var(--bg-tile); color: var(--text); }
+    .forge-status-btn.is-open { border-color: var(--border-strong); }
+    .forge-status-btn.is-gitlab svg { color: #fb923c; }
+    html[data-theme="light"] .forge-status-btn.is-gitlab svg { color: #c2410c; }
+    .forge-status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--text-faint);
+    }
+    .forge-status-btn.is-connected .forge-status-dot { background: var(--green); }
+    .forge-status-btn.is-connected { color: var(--text); }
+    .forge-status-btn.is-syncing .forge-status-dot { background: var(--accent); animation: pulse 1.2s infinite; }
+    .forge-status-btn.is-syncing { color: var(--text); }
+    .forge-status-btn.is-auth .forge-status-dot,
+    .forge-status-btn.is-partial .forge-status-dot { background: var(--amber); }
+    .forge-status-btn.is-auth,
+    .forge-status-btn.is-partial {
+      background: var(--amber-soft);
+      border-color: rgba(251, 191, 36, 0.24);
+      color: var(--amber);
+    }
+    .forge-status-btn.is-error .forge-status-dot { background: var(--red); }
+    .forge-status-btn.is-error {
+      background: var(--red-soft);
+      border-color: rgba(248, 113, 113, 0.28);
+      color: var(--red);
+    }
+    .forge-status-btn.is-local .forge-status-dot { background: var(--text-faint); }
+    .forge-status-btn.is-unconfigured { opacity: 0.68; }
+    .forge-status-btn.is-unconfigured:hover,
+    .forge-status-btn.is-unconfigured.is-open { opacity: 1; }
+    .forge-status-btn.is-unconfigured .forge-status-dot {
+      background: transparent;
+      border: 1.5px solid var(--text-faint);
+    }
+    .forge-status-state {
+      font-size: 10.5px;
+      font-weight: 600;
+      opacity: 0.92;
+    }
+    .status-popover {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      width: 360px;
+      max-width: calc(100vw - 24px);
+      z-index: 95;
+      background: var(--bg-card);
+      border: 1px solid var(--border-strong);
+      border-radius: 13px;
+      box-shadow: var(--shadow-panel);
+      padding: 12px;
+      display: none;
+      flex-direction: column;
+      gap: 9px;
+    }
+    .status-popover.open { display: flex; }
+    .status-pop-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 11.5px;
+      color: var(--text-dim);
+    }
+    .status-pop-live {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 580;
+      color: var(--text);
+    }
+    .status-pop-card {
+      padding: 9px 11px;
+      border-radius: 10px;
+      background: var(--bg-well);
+      border: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .status-pop-card.is-focus { border-color: var(--accent-ring); }
+    .status-pop-card-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .status-pop-plat {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12.5px;
+      font-weight: 620;
+      color: var(--text);
+    }
+    .status-pop-hosts {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .status-pop-host {
+      padding: 7px 9px;
+      border-radius: 8px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 11.5px;
+    }
+    .status-pop-host-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .status-pop-host-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 11px;
+      color: var(--text-faint);
+    }
+    .status-pop-err {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--red);
+      word-break: break-word;
+    }
+    .status-pop-empty {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 11.5px;
+      color: var(--text-faint);
+    }
+    .status-pop-ftr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding-top: 2px;
+    }
+    @media (max-width: 960px) {
+      .status-cluster .live-clock,
+      .status-cluster .live-sep { display: none; }
+      .forge-status-state { display: none; }
+    }
+
     .live-pill {
       display: inline-flex;
       align-items: center;
@@ -720,11 +949,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
       border: 1px solid var(--border);
       color: var(--text-dim);
     }
+    .status-cluster .live-pill {
+      height: 24px;
+      padding: 0 7px;
+      border: 0;
+      background: transparent;
+      border-radius: 6px;
+    }
     .live-pill.is-live .dot-pulse { background: var(--green); animation: pulse 2s infinite; }
     .live-pill.is-loading .dot-pulse,
     .live-pill.is-syncing .dot-pulse { background: var(--accent); animation: pulse 1.2s infinite; }
     .live-pill.is-loading,
     .live-pill.is-syncing { border-color: var(--accent-ring); color: var(--text); }
+    .live-pill.is-local .dot-pulse { background: var(--text-faint); }
     .live-pill.is-err { color: var(--red); border-color: rgba(248, 113, 113, 0.32); }
     .dot-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
     @keyframes pulse {
@@ -1989,14 +2226,21 @@ BOARD_HTML = r"""<!DOCTYPE html>
           <span id="ws-repo-link-wrap"></span>
         </div>
         <div class="ws-controls">
-          <span id="conn-tag" class="live-pill is-loading">
-            <span class="dot-pulse"></span>
-            <span>初始化中</span>
-            <span class="sep">·</span>
-            <span id="updated-tag" class="num">扫描仓库...</span>
-          </span>
+          <div id="status-cluster" class="status-cluster">
+            <div class="status-cluster-live">
+              <span id="conn-tag" class="live-pill is-loading">
+                <span class="dot-pulse"></span>
+                <span>初始化中</span>
+                <span class="sep live-sep">·</span>
+                <span id="updated-tag" class="num live-clock">扫描仓库...</span>
+              </span>
+              <button id="pause-btn" class="cluster-icon-btn" type="button" title="暂停自动轮询" aria-label="暂停自动轮询"></button>
+            </div>
+            <span class="status-cluster-sep" aria-hidden="true"></span>
+            <div id="forge-status-group" class="forge-status-group"></div>
+            <div id="forge-status-popover" class="status-popover" role="dialog" aria-label="托管平台连接详情" aria-hidden="true"></div>
+          </div>
           <button id="setup-btn" class="btn" type="button"></button>
-          <button id="pause-btn" class="btn" type="button"></button>
           <button id="sync-btn" class="btn btn-primary" type="button" title="快捷键 r"></button>
         </div>
       </header>
@@ -2099,6 +2343,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
         repoInitRunning: {},
         repoInitErrors: {},
         repoInitBannerDismissed: false,
+        statusPopoverOpen: false,
+        statusPopoverForge: "",
+        lastForgeStatusSig: "",
         lastTopAlertsSig: "",
         consoleTab: "handoff",
         inspectorTab: "tasks",
@@ -2261,6 +2508,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (stg) stg.title = tr("收起 / 展开侧栏 ([)", "Toggle sidebar ([)");
         const sy = document.getElementById("sync-btn");
         if (sy) sy.title = tr("快捷键 r", "Shortcut r");
+        const fp = document.getElementById("forge-status-popover");
+        if (fp) fp.setAttribute("aria-label", tr("托管平台连接详情", "Forge connection details"));
         const ip = document.getElementById("inspector-panel");
         if (ip) ip.setAttribute("aria-label", tr("任务详情抽屉", "Task details drawer"));
       }
@@ -2289,6 +2538,243 @@ BOARD_HTML = r"""<!DOCTYPE html>
         bar.classList.toggle("is-active", Boolean(active));
       }
 
+      function resolveForgeConnections() {
+        const snap = state.snapshot;
+        if (snap && snap.forge_connections && snap.forge_connections.github && snap.forge_connections.gitlab) {
+          return snap.forge_connections;
+        }
+        const localOnly = Boolean(snap && snap.local_only);
+        const authHosts = (state.authStatus && Array.isArray(state.authStatus.hosts)) ? state.authStatus.hosts : [];
+        const repos = (snap && Array.isArray(snap.repos)) ? snap.repos : [];
+        const out = {};
+        for (const [fg, label] of [["github", "GitHub"], ["gitlab", "GitLab"]]) {
+          const matchedHosts = authHosts.filter((h) => h.forge === fg);
+          const matchedRepos = repos.filter((r) => r.forge === fg);
+          const totalRepos = matchedRepos.length;
+          const connectedRepos = matchedRepos.filter((r) => r.forge_connected).length;
+          const syncingRepos = matchedRepos.filter((r) => r.forge_syncing).length;
+          const authErrorRepos = matchedRepos.filter((r) => r.auth_alert).length;
+          const errorRepos = matchedRepos.filter((r) => r.forge_error && !r.auth_alert).length;
+          const configured = matchedHosts.some((h) => h.configured);
+          let status = "unconfigured";
+          if (localOnly) {
+            status = (totalRepos > 0 || configured) ? "local_only" : "unconfigured";
+          } else if (totalRepos > 0) {
+            if (connectedRepos === totalRepos) status = "connected";
+            else if (connectedRepos > 0) status = "partial";
+            else if (authErrorRepos > 0) status = "auth_required";
+            else if (errorRepos > 0) status = "error";
+            else if (syncingRepos > 0) status = "syncing";
+            else status = configured ? "syncing" : "auth_required";
+          } else if (configured) {
+            status = "connected";
+          } else if (matchedHosts.length > 0) {
+            status = "auth_required";
+          }
+          out[fg] = {
+            forge: fg,
+            label,
+            status,
+            configured,
+            connected_repos: connectedRepos,
+            total_repos: totalRepos,
+            syncing_repos: syncingRepos,
+            error_repos: errorRepos,
+            auth_error_repos: authErrorRepos,
+            last_synced_at: matchedRepos.reduce((mx, r) => Math.max(mx, Number(r.forge_fetched_at || 0)), 0),
+            error: (matchedRepos.find((r) => r.forge_error) || {}).forge_error || "",
+            hosts: matchedHosts.map((h) => ({
+              host: h.host,
+              api_base: h.api_base,
+              status: h.configured ? status : "auth_required",
+              configured: Boolean(h.configured),
+              auth_source: h.auth_source || "missing",
+              username: h.username || "",
+              repo_count: (h.repos || []).length,
+              connected_repos: 0,
+              repos: (h.repos || []).map((x) => x.name),
+              last_synced_at: 0,
+              error: ""
+            }))
+          };
+        }
+        return out;
+      }
+
+      function forgeStatusBadgeMeta(status) {
+        switch (status) {
+          case "connected":
+            return { cls: "is-connected", tone: "tone-success", shortText: "", longText: tr("已连接", "Connected") };
+          case "syncing":
+            return { cls: "is-syncing", tone: "tone-info", shortText: tr("同步中", "Syncing"), longText: tr("同步中", "Syncing") };
+          case "auth_required":
+            return { cls: "is-auth", tone: "tone-warning", shortText: tr("待配置", "Auth"), longText: tr("待配置令牌", "Token Required") };
+          case "partial":
+            return { cls: "is-partial", tone: "tone-warning", shortText: tr("部分异常", "Partial"), longText: tr("部分仓库异常", "Partially Connected") };
+          case "error":
+            return { cls: "is-error", tone: "tone-danger", shortText: tr("异常", "Error"), longText: tr("连接异常", "Connection Error") };
+          case "local_only":
+            return { cls: "is-local", tone: "tone-muted", shortText: tr("仅本地", "Local"), longText: tr("仅本地模式", "Local-Only") };
+          default:
+            return { cls: "is-unconfigured", tone: "tone-muted", shortText: tr("未配置", "Not set"), longText: tr("未配置", "Not Configured") };
+        }
+      }
+
+      function formatAuthSourceLabel(authSource, username) {
+        const tag = authSource === "gh_cli"
+          ? "gh CLI"
+          : (authSource === "env" ? "ENV" : (authSource === "hosts.json" ? "Token" : ""));
+        if (username) {
+          return "@" + username + (tag ? " · " + tag : "");
+        }
+        return tag || tr("未配置令牌", "No Token");
+      }
+
+      function renderForgeStatus(force) {
+        const groupEl = document.getElementById("forge-status-group");
+        const popEl = document.getElementById("forge-status-popover");
+        if (!groupEl || !popEl) return;
+
+        const conns = resolveForgeConnections();
+        const snap = state.snapshot;
+        const localOnly = Boolean(snap && snap.local_only);
+        const syncingRemote = Boolean(snap && snap.forge_syncing);
+        const sig = JSON.stringify({
+          c: conns,
+          po: state.statusPopoverOpen,
+          pf: state.statusPopoverForge,
+          lg: state.lang,
+          pa: state.paused,
+          lo: localOnly,
+          fs: syncingRemote,
+          ck: state.lastClockStr,
+          sv: state.authSavingHost
+        });
+        if (!force && sig === state.lastForgeStatusSig) return;
+        state.lastForgeStatusSig = sig;
+
+        groupEl.innerHTML = ["github", "gitlab"].map((fg) => {
+          const info = conns[fg] || { forge: fg, label: fg === "github" ? "GitHub" : "GitLab", status: "unconfigured", hosts: [] };
+          const meta = forgeStatusBadgeMeta(info.status);
+          const isOpen = state.statusPopoverOpen && (!state.statusPopoverForge || state.statusPopoverForge === fg);
+          const hosts = Array.isArray(info.hosts) ? info.hosts : [];
+          const primaryHost = hosts[0] || null;
+          const tipParts = [info.label + "：" + meta.longText];
+          if (primaryHost) {
+            const hostStr = String(primaryHost.host || primaryHost.api_base || "");
+            const whoStr = formatAuthSourceLabel(primaryHost.auth_source, primaryHost.username);
+            tipParts.push(hostStr + " (" + whoStr + ")");
+          }
+          if (Number(info.total_repos || 0) > 0) {
+            tipParts.push(tr("已连通仓库 ", "Connected repos ") + info.connected_repos + "/" + info.total_repos);
+          }
+          if (info.error) {
+            tipParts.push(info.error);
+          }
+          tipParts.push(tr("点击查看连接详情", "Click for connection details"));
+          return (
+            '<button class="forge-status-btn is-' + fg + " " + meta.cls + (isOpen ? " is-open" : "") + '" type="button" data-forge-status="' + fg + '" aria-expanded="' + (isOpen ? "true" : "false") + '" title="' + escapeHtml(tipParts.join(" · ")) + '">' +
+              '<span class="forge-status-dot" aria-hidden="true"></span>' +
+              forgeIcon(fg, 12) +
+              "<span>" + escapeHtml(info.label) + "</span>" +
+              (meta.shortText ? '<span class="forge-status-state">' + escapeHtml(meta.shortText) + "</span>" : "") +
+            "</button>"
+          );
+        }).join("");
+
+        if (!state.statusPopoverOpen) {
+          popEl.classList.remove("open");
+          popEl.setAttribute("aria-hidden", "true");
+          popEl.innerHTML = "";
+          return;
+        }
+
+        popEl.classList.add("open");
+        popEl.setAttribute("aria-hidden", "false");
+        const pollStateLabel = state.paused
+          ? tr("轮询已暂停", "Polling Paused")
+          : (localOnly
+              ? tr("仅本地模式 (--local-only)", "Local-Only Mode")
+              : (syncingRemote ? tr("后台同步远端中...", "Syncing remote...") : tr("实时监控 · 2s 轮询", "Live · 2s polling")));
+        const pollDotColor = state.paused ? "var(--amber)" : (localOnly ? "var(--text-faint)" : (syncingRemote ? "var(--accent)" : "var(--green)"));
+
+        const cardsHtml = ["github", "gitlab"].map((fg) => {
+          const info = conns[fg] || { forge: fg, label: fg === "github" ? "GitHub" : "GitLab", status: "unconfigured", hosts: [] };
+          const meta = forgeStatusBadgeMeta(info.status);
+          const isFocus = state.statusPopoverForge === fg;
+          const hosts = Array.isArray(info.hosts) ? info.hosts : [];
+          const repoSummary = Number(info.total_repos || 0) > 0
+            ? '<span class="num" style="font-size:11px;color:var(--text-faint);">' + info.connected_repos + "/" + info.total_repos + tr(" 仓库", " repos") + "</span>"
+            : "";
+
+          let hostsHtml = "";
+          if (hosts.length === 0) {
+            hostsHtml =
+              '<div class="status-pop-empty">' +
+                "<span>" + tr("尚未检测到该平台仓库或令牌", "No repos or token configured yet") + "</span>" +
+                '<button class="btn btn-xs" type="button" data-popover-open-setup="' + fg + '">' + tr("添加主机", "Add Host") + "</button>" +
+              "</div>";
+          } else {
+            hostsHtml = '<div class="status-pop-hosts">' + hosts.map((h) => {
+              const hMeta = forgeStatusBadgeMeta(h.status || info.status);
+              const hUrl = safeUrl(h.api_base);
+              const hLabel = String(h.host || h.api_base || fg).replace(/^https?:\/\//i, "");
+              const authLabel = formatAuthSourceLabel(h.auth_source, h.username);
+              const repoList = Array.isArray(h.repos) && h.repos.length ? h.repos.join(" · ") : tr("无纳管仓库", "No active repos");
+              const syncClock = h.last_synced_at ? formatClock(h.last_synced_at) : "—";
+              const actionBtn = h.status === "auth_required"
+                ? '<button class="btn btn-xs btn-warn" type="button" data-popover-open-setup="' + fg + '">' + tr("配置令牌", "Setup") + "</button>"
+                : (h.status === "error" && !localOnly
+                    ? '<button class="btn btn-xs" type="button" data-popover-sync="1">' + tr("重试", "Retry") + "</button>"
+                    : "");
+              return (
+                '<div class="status-pop-host">' +
+                  '<div class="status-pop-host-top">' +
+                    (hUrl
+                      ? '<a class="host-url-link" href="' + escapeHtml(hUrl) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(hLabel) + " ↗</a>"
+                      : '<span class="host-url-link">' + escapeHtml(hLabel) + "</span>") +
+                    '<span class="badge ' + hMeta.tone + '" style="font-size:10px;padding:1px 6px;">' + escapeHtml(authLabel) + "</span>" +
+                  "</div>" +
+                  '<div class="status-pop-host-meta">' +
+                    '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:215px;" title="' + escapeHtml(repoList) + '">' + escapeHtml(repoList) + "</span>" +
+                    '<span class="num">' + tr("同步 ", "Sync ") + escapeHtml(syncClock) + "</span>" +
+                  "</div>" +
+                  (h.error || actionBtn
+                    ? '<div class="status-pop-err"><span style="color:' + (h.status === "auth_required" ? "var(--amber)" : "var(--red)") + ';">' + escapeHtml(h.error || "") + "</span>" + actionBtn + "</div>"
+                    : "") +
+                "</div>"
+              );
+            }).join("") + "</div>";
+          }
+
+          return (
+            '<div class="status-pop-card' + (isFocus ? " is-focus" : "") + '">' +
+              '<div class="status-pop-card-hdr">' +
+                '<span class="status-pop-plat">' + forgeIcon(fg, 14) + "<span>" + escapeHtml(info.label) + "</span>" + repoSummary + "</span>" +
+                '<span class="badge ' + meta.tone + '">' + escapeHtml(meta.longText) + "</span>" +
+              "</div>" +
+              hostsHtml +
+            "</div>"
+          );
+        }).join("");
+
+        popEl.innerHTML =
+          '<div class="status-pop-hdr">' +
+            '<span class="status-pop-live"><span style="width:7px;height:7px;border-radius:50%;background:' + pollDotColor + ';display:inline-block;"></span><span>' + escapeHtml(pollStateLabel) + "</span></span>" +
+            '<span style="display:inline-flex;align-items:center;gap:6px;">' +
+              '<span class="num">' + escapeHtml(state.lastClockStr || "—") + "</span>" +
+              '<button class="cluster-icon-btn" type="button" data-popover-close="1" aria-label="' + tr("关闭", "Close") + '">' + icon("x", 13) + "</button>" +
+            "</span>" +
+          "</div>" +
+          cardsHtml +
+          '<div class="status-pop-ftr">' +
+            '<button class="btn btn-xs" type="button" data-popover-open-setup="">' + icon("key", 11) + "<span>" + tr("连接配置与令牌", "Platform Setup") + "</span></button>" +
+            (localOnly
+              ? '<span style="font-size:11px;color:var(--text-faint);">--local-only</span>'
+              : '<button class="btn btn-xs btn-primary" type="button" data-popover-sync="1">' + icon("refresh", 11) + "<span>" + tr("立即同步远端", "Sync Forge") + "</span></button>") +
+          "</div>";
+      }
+
       function syncHeaderControls() {
         const setupBtn = document.getElementById("setup-btn");
         if (setupBtn) {
@@ -2305,9 +2791,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
         const pauseBtn = document.getElementById("pause-btn");
         if (pauseBtn) {
-          pauseBtn.innerHTML = state.paused
-            ? icon("play", 12) + "<span>" + tr("继续", "Resume") + "</span>"
-            : icon("pause", 12) + "<span>" + tr("暂停", "Pause") + "</span>";
+          const pLabel = state.paused ? tr("继续自动轮询", "Resume auto-refresh") : tr("暂停自动轮询", "Pause auto-refresh");
+          pauseBtn.classList.toggle("is-paused", Boolean(state.paused));
+          pauseBtn.title = pLabel;
+          pauseBtn.setAttribute("aria-label", pLabel);
+          pauseBtn.innerHTML = state.paused ? icon("play", 12) : icon("pause", 12);
         }
         const isBusy =
           (!state.hasLiveSnapshot && !state.initError) ||
@@ -2315,9 +2803,15 @@ BOARD_HTML = r"""<!DOCTYPE html>
           state.manualRefreshing;
         const syncBtn = document.getElementById("sync-btn");
         if (syncBtn) {
+          const localOnly = Boolean(state.snapshot && state.snapshot.local_only);
           syncBtn.classList.toggle("spin", isBusy);
+          syncBtn.title = localOnly
+            ? tr("当前为仅本地模式 (快捷键 r 刷新本地)", "Local-only mode (press r to refresh)")
+            : tr("同步 GitHub / GitLab 远端 (快捷键 r)", "Sync GitHub / GitLab (shortcut r)");
           syncBtn.innerHTML = icon("refresh", 12) + "<span>" + (isBusy ? tr("同步中", "Syncing") : tr("同步远端", "Sync Forge")) + "</span>";
         }
+
+        renderForgeStatus(false);
 
         const s = (state.snapshot && state.snapshot.summary) || {};
         const hasLive = Number(s.coding_now_count || 0) > 0 || Number(s.active_worktrees || 0) > 0;
@@ -2338,6 +2832,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
       function updateConnectionBadge(ok, errorMsg) {
         const tag = document.getElementById("conn-tag");
+        const cluster = document.getElementById("status-cluster");
+        if (cluster) cluster.classList.toggle("is-err", !ok);
         if (!tag) return;
         const clock = escapeHtml(state.lastClockStr || tr("同步中...", "Syncing..."));
         if (!ok) {
@@ -2347,22 +2843,27 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
         if (state.paused) {
           tag.className = "live-pill";
-          tag.innerHTML = icon("pause", 11) + "<span>" + tr("已暂停", "Paused") + '</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
+          tag.innerHTML = icon("pause", 11) + "<span>" + tr("已暂停", "Paused") + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + clock + "</span>";
           return;
         }
         if (!state.hasLiveSnapshot && !state.snapshot) {
           tag.className = "live-pill is-loading";
-          tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("初始化中", "Initializing") + '</span><span>·</span><span id="updated-tag" class="num">' + tr("扫描中...", "Scanning...") + "</span>";
+          tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("初始化中", "Initializing") + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + tr("扫描中...", "Scanning...") + "</span>";
           return;
         }
         if (!state.hasLiveSnapshot && state.fromCache) {
           tag.className = "live-pill is-syncing";
-          tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("更新中...", "Refreshing...") + '</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
+          tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("更新中...", "Refreshing...") + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + clock + "</span>";
+          return;
+        }
+        if (state.snapshot && state.snapshot.local_only) {
+          tag.className = "live-pill is-local";
+          tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("仅本地", "Local") + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + clock + "</span>";
           return;
         }
         const syncingRemote = Boolean(state.snapshot && state.snapshot.forge_syncing);
         tag.className = syncingRemote ? "live-pill is-syncing" : "live-pill is-live";
-        tag.innerHTML = '<span class="dot-pulse"></span><span>' + (syncingRemote ? tr("同步远端...", "Syncing Forge...") : tr("实时", "Live")) + '</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
+        tag.innerHTML = '<span class="dot-pulse"></span><span>' + (syncingRemote ? tr("同步远端...", "Syncing Forge...") : tr("实时", "Live")) + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + clock + "</span>";
       }
 
       function parseStage(rawStage) {
@@ -4131,9 +4632,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 const icCls = isGitLab ? "is-gitlab" : "is-github";
 
                 if (!isEditing && h.configured) {
+                  const authTag = h.auth_source === "gh_cli" ? "gh CLI" : (h.auth_source === "env" ? "ENV" : "");
                   const srcNote = h.username
-                    ? ("@" + h.username)
-                    : (h.auth_source === "gh_cli" ? "gh CLI" : (h.auth_source === "env" ? "ENV" : (h.masked_token || "")));
+                    ? ("@" + h.username + (authTag ? " · " + authTag : ""))
+                    : (authTag || h.masked_token || "");
                   const compactRepos = (h.repos || []).map((r) => {
                     const href = safeUrl(r.url);
                     return href
@@ -4464,6 +4966,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
           o: snap.orphan_changes,
           aa: snap.auth_alerts,
           fs: snap.forge_syncing,
+          lo: snap.local_only,
+          fconn: snap.forge_connections,
+          ac: state.authStatus ? state.authStatus.unconfigured_count : -1,
           fc: state.fromCache,
           hl: state.hasLiveSnapshot,
           w: snap.warnings,
@@ -4914,6 +5419,60 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (!state.paused) fetchSnapshot(false);
       });
 
+      document.getElementById("forge-status-group").addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-forge-status]");
+        if (!btn) return;
+        e.stopPropagation();
+        const fg = btn.getAttribute("data-forge-status") || "";
+        if (state.statusPopoverOpen && state.statusPopoverForge === fg) {
+          state.statusPopoverOpen = false;
+          state.statusPopoverForge = "";
+        } else {
+          state.statusPopoverOpen = true;
+          state.statusPopoverForge = fg;
+        }
+        renderForgeStatus(true);
+      });
+
+      document.getElementById("forge-status-popover").addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (e.target.closest("[data-popover-close]")) {
+          state.statusPopoverOpen = false;
+          state.statusPopoverForge = "";
+          renderForgeStatus(true);
+          return;
+        }
+        if (e.target.closest("[data-popover-sync]")) {
+          fetchSnapshot(true);
+          fetchAuthStatus();
+          renderForgeStatus(true);
+          return;
+        }
+        const setupTarget = e.target.closest("[data-popover-open-setup]");
+        if (setupTarget) {
+          const fg = setupTarget.getAttribute("data-popover-open-setup") || "";
+          state.statusPopoverOpen = false;
+          state.statusPopoverForge = "";
+          if (fg === "github" || fg === "gitlab") {
+            const authHosts = (state.authStatus && Array.isArray(state.authStatus.hosts)) ? state.authStatus.hosts : [];
+            if (!authHosts.some((h) => h.forge === fg)) {
+              state.showCustomHostForm = true;
+              state.customHostForge = fg;
+            }
+          }
+          renderForgeStatus(true);
+          openSetupModal("auth");
+        }
+      });
+
+      document.addEventListener("click", (e) => {
+        if (state.statusPopoverOpen && !e.target.closest("#status-cluster")) {
+          state.statusPopoverOpen = false;
+          state.statusPopoverForge = "";
+          renderForgeStatus(true);
+        }
+      });
+
       document.getElementById("sync-btn").addEventListener("click", () => {
         fetchSnapshot(true);
       });
@@ -4929,10 +5488,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
         state.lang = isEn() ? "zh" : "en";
         localStorage.setItem("idd_board_lang", state.lang);
         state.lastTopAlertsSig = "";
+        state.lastForgeStatusSig = "";
         applyLang();
         applyTheme(document.documentElement.getAttribute("data-theme") || "dark");
         syncHeaderControls();
         updateConnectionBadge(true);
+        renderForgeStatus(true);
         renderAll(true);
         if (state.setupOpen) renderSetupModal();
       });
@@ -4981,6 +5542,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (e.key === "Escape") {
           if (state.setupOpen) {
             closeSetupModal(true);
+          } else if (state.statusPopoverOpen) {
+            state.statusPopoverOpen = false;
+            state.statusPopoverForge = "";
+            renderForgeStatus(true);
           } else if (state.inspectedKey) {
             state.inspectedKey = null;
             renderAll(true);

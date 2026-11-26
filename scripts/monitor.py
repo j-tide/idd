@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 from typing import Any
+import urllib.parse
 
 from forge import (
     ForgeAuthError,
@@ -354,24 +355,65 @@ def unregister_repo(target: Path) -> bool:
         return removed
 
 
-_GH_CLI_CACHE: dict[str, Any] = {"checked_at": 0.0, "logged_in": False}
+_GH_CLI_CACHE: dict[str, Any] = {"checked_at": 0.0, "logged_in": False, "username": ""}
+_GH_CLI_LOCK = threading.Lock()
+_GH_CLI_INFLIGHT = False
+
+
+def _check_gh_cli_status(ttl: float = 30.0) -> tuple[bool, str]:
+    global _GH_CLI_INFLIGHT
+    now = time.time()
+    with _GH_CLI_LOCK:
+        if (now - float(_GH_CLI_CACHE.get("checked_at") or 0.0)) < ttl:
+            return bool(_GH_CLI_CACHE.get("logged_in")), str(_GH_CLI_CACHE.get("username") or "")
+    ok = False
+    username = ""
+    if shutil.which("gh"):
+        try:
+            proc = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, timeout=4.0)
+            ok = proc.returncode == 0
+            if ok:
+                combined = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+                m = re.search(r"Logged in to [^\s]+ (?:account|as) ([^\s(]+)", combined)
+                if m:
+                    username = m.group(1).strip()
+        except _IGNORED_GIT_ERROR:
+            ok = False
+    with _GH_CLI_LOCK:
+        _GH_CLI_CACHE["checked_at"] = time.time()
+        _GH_CLI_CACHE["logged_in"] = ok
+        _GH_CLI_CACHE["username"] = username
+        _GH_CLI_INFLIGHT = False
+    return ok, username
+
+
+def _get_gh_cli_status_nonblocking(ttl: float = 30.0) -> tuple[bool, str]:
+    """Return cached `gh auth status` immediately and refresh stale cache on a background thread."""
+    global _GH_CLI_INFLIGHT
+    now = time.time()
+    with _GH_CLI_LOCK:
+        checked_at = float(_GH_CLI_CACHE.get("checked_at") or 0.0)
+        logged_in = bool(_GH_CLI_CACHE.get("logged_in"))
+        username = str(_GH_CLI_CACHE.get("username") or "")
+        if (now - checked_at) < ttl:
+            return logged_in, username
+        if not _GH_CLI_INFLIGHT:
+            _GH_CLI_INFLIGHT = True
+
+            def _bg_probe() -> None:
+                try:
+                    _check_gh_cli_status(ttl=ttl)
+                finally:
+                    with _GH_CLI_LOCK:
+                        global _GH_CLI_INFLIGHT
+                        _GH_CLI_INFLIGHT = False
+
+            threading.Thread(target=_bg_probe, daemon=True).start()
+        return logged_in, username
 
 
 def _check_gh_cli_logged_in(ttl: float = 30.0) -> bool:
-    now = time.time()
-    if (now - float(_GH_CLI_CACHE.get("checked_at") or 0.0)) < ttl:
-        return bool(_GH_CLI_CACHE.get("logged_in"))
-    if not shutil.which("gh"):
-        _GH_CLI_CACHE["checked_at"] = now
-        _GH_CLI_CACHE["logged_in"] = False
-        return False
-    try:
-        proc = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, timeout=4.0)
-        ok = proc.returncode == 0
-    except _IGNORED_GIT_ERROR:
-        ok = False
-    _GH_CLI_CACHE["checked_at"] = now
-    _GH_CLI_CACHE["logged_in"] = ok
+    ok, _ = _check_gh_cli_status(ttl=ttl)
     return ok
 
 
@@ -442,7 +484,7 @@ def collect_auth_hosts_status(*, root: Path | None = None, global_mode: bool = T
     has_gitlab_env = bool(os.environ.get("GITLAB_TOKEN", "").strip() or os.environ.get("GITLAB_PRIVATE_TOKEN", "").strip())
     has_github_env = bool(os.environ.get("GH_TOKEN", "").strip() or os.environ.get("GITHUB_TOKEN", "").strip())
     has_glab_cli = bool(shutil.which("glab"))
-    gh_logged_in: bool | None = None
+    gh_status: tuple[bool, str] | None = None
 
     items: list[dict[str, Any]] = []
     for bucket in hosts_map.values():
@@ -470,11 +512,14 @@ def collect_auth_hosts_status(*, root: Path | None = None, global_mode: bool = T
                 configured = True
                 auth_source = "env"
             else:
-                if gh_logged_in is None:
-                    gh_logged_in = _check_gh_cli_logged_in()
+                if gh_status is None:
+                    gh_status = _check_gh_cli_status()
+                gh_logged_in, gh_username = gh_status
                 if gh_logged_in and (host_key == "github.com" or host_key.endswith(".github.com")):
                     configured = True
                     auth_source = "gh_cli"
+                    if not username and gh_username:
+                        username = gh_username
 
         if fg == "gitlab":
             token_url = (
@@ -827,6 +872,9 @@ class ForgeSnapshotCache:
         if not has_origin:
             return {
                 "forge_type": "local",
+                "forge_host": "",
+                "forge_api_base": "",
+                "forge_error": "",
                 "mr_label": "PR/MR",
                 "mr_prefix": "#",
                 "forge_connected": False,
@@ -837,11 +885,14 @@ class ForgeSnapshotCache:
                 "fetched_at": 0.0,
                 "syncing": False,
             }
-        _, inferred = inspect_remote_origin(main_worktree)
+        spec, inferred = inspect_remote_origin(main_worktree)
         mr_label = "MR" if inferred == "gitlab" else ("PR" if inferred == "github" else "PR/MR")
         mr_prefix = "!" if inferred == "gitlab" else "#"
         return {
             "forge_type": inferred,
+            "forge_host": spec.host if spec else "",
+            "forge_api_base": spec.api_base.rstrip("/") if spec else "",
+            "forge_error": "",
             "mr_label": mr_label,
             "mr_prefix": mr_prefix,
             "forge_connected": False,
@@ -858,6 +909,11 @@ class ForgeSnapshotCache:
             start_epoch = self._epoch if epoch is None else epoch
         forge = get_forge(main_worktree)
         forge_type = forge.forge_type
+        forge_host = forge.spec.host if forge.spec else ""
+        forge_api_base = (
+            getattr(forge, "api_base", "") or (forge.spec.api_base if forge.spec else "")
+        ).rstrip("/")
+        forge_error = ""
         mr_label = forge.mr_label
         mr_prefix = forge.mr_prefix
         open_issues: list[dict[str, Any]] = []
@@ -890,8 +946,10 @@ class ForgeSnapshotCache:
                     except Exception:
                         pass
             else:
+                forge_error = "远端仓库查询不可用"
                 warnings.append("远端仓库查询不可用，已降级为本地工作树视图。")
         except ForgeAuthError as exc:
+            forge_error = str(exc).splitlines()[0].strip()
             auth_alert = {
                 "host": exc.host,
                 "api_base": exc.api_base,
@@ -901,10 +959,14 @@ class ForgeSnapshotCache:
             }
             warnings.append(f"{exc}（已降级为本地工作树视图）")
         except ForgeError as exc:
+            forge_error = str(exc).splitlines()[0].strip()
             warnings.append(f"{exc}（已降级为本地工作树视图）")
 
         entry = {
             "forge_type": forge_type,
+            "forge_host": forge_host,
+            "forge_api_base": forge_api_base,
+            "forge_error": forge_error,
             "mr_label": mr_label,
             "mr_prefix": mr_prefix,
             "forge_connected": forge_connected,
@@ -1374,6 +1436,9 @@ def collect_repo_snapshot(
 
     forge_info: dict[str, Any] = {
         "forge_type": inferred_forge,
+        "forge_host": remote_spec.host if remote_spec else "",
+        "forge_api_base": remote_spec.api_base.rstrip("/") if remote_spec else "",
+        "forge_error": "",
         "mr_label": "MR" if inferred_forge == "gitlab" else ("PR" if inferred_forge == "github" else "PR/MR"),
         "mr_prefix": "!" if inferred_forge == "gitlab" else "#",
         "forge_connected": False,
@@ -1600,6 +1665,9 @@ def collect_repo_snapshot(
         "repo_url": repo_web_url,
         "default_branch": default_branch,
         "forge": effective_forge,
+        "forge_host": str(forge_info.get("forge_host") or (remote_spec.host if remote_spec else "")),
+        "forge_api_base": str(forge_info.get("forge_api_base") or (remote_spec.api_base.rstrip("/") if remote_spec else "")),
+        "forge_error": str(forge_info.get("forge_error") or ""),
         "forge_connected": forge_connected,
         "forge_syncing": bool(forge_info.get("syncing")),
         "auth_alert": forge_info.get("auth_alert"),
@@ -1729,6 +1797,242 @@ def _compute_global_summary(
     }
 
 
+def _resolve_forge_status(
+    *,
+    local_only: bool,
+    configured: bool,
+    total_repos: int,
+    connected_repos: int,
+    syncing_repos: int,
+    error_repos: int,
+    auth_error_repos: int,
+) -> str:
+    if local_only:
+        return "local_only" if (total_repos > 0 or configured) else "unconfigured"
+    if total_repos > 0:
+        if connected_repos == total_repos:
+            return "connected"
+        if connected_repos > 0:
+            return "partial"
+        if auth_error_repos > 0:
+            return "auth_required"
+        if error_repos > 0:
+            return "error"
+        if syncing_repos > 0:
+            return "syncing"
+        return "auth_required" if not configured else "syncing"
+    return "connected" if configured else "unconfigured"
+
+
+def _build_forge_connections(
+    repo_snaps: list[dict[str, Any]],
+    *,
+    local_only: bool = False,
+    allow_stale_async: bool = False,
+) -> dict[str, Any]:
+    """Summarize live connection status for GitHub and GitLab from repo snapshots and cached auth state."""
+    saved_hosts = load_hosts_config()
+    has_gitlab_env = bool(os.environ.get("GITLAB_TOKEN", "").strip() or os.environ.get("GITLAB_PRIVATE_TOKEN", "").strip())
+    has_github_env = bool(os.environ.get("GH_TOKEN", "").strip() or os.environ.get("GITHUB_TOKEN", "").strip())
+    gh_ok, gh_user = _get_gh_cli_status_nonblocking() if allow_stale_async else _check_gh_cli_status()
+
+    def _resolve_host_auth(fg: str, host_key: str, saved_entry: dict[str, str] | None) -> tuple[bool, str, str]:
+        saved_tok = str((saved_entry or {}).get("token") or "").strip()
+        saved_user = str((saved_entry or {}).get("username") or "").strip()
+        if saved_tok:
+            return True, "hosts.json", saved_user
+        if fg == "gitlab" and has_gitlab_env:
+            return True, "env", saved_user
+        if fg == "github":
+            if has_github_env:
+                return True, "env", saved_user
+            if gh_ok and (not host_key or host_key == "github.com" or host_key.endswith(".github.com")):
+                return True, "gh_cli", saved_user or gh_user
+        return False, "missing", saved_user
+
+    def _new_bucket(fg: str, host_key: str, api_base: str, saved_entry: dict[str, str] | None) -> dict[str, Any]:
+        configured, auth_source, username = _resolve_host_auth(fg, host_key, saved_entry)
+        return {
+            "host": host_key,
+            "api_base": api_base.rstrip("/"),
+            "configured": configured,
+            "auth_source": auth_source,
+            "username": username,
+            "repo_count": 0,
+            "connected_repos": 0,
+            "syncing_repos": 0,
+            "error_repos": 0,
+            "auth_error_repos": 0,
+            "repos": [],
+            "last_synced_at": 0.0,
+            "error": "",
+            "_matched_saved_keys": set(),
+        }
+
+    buckets_by_forge: dict[str, dict[str, dict[str, Any]]] = {"github": {}, "gitlab": {}}
+
+    for snap in repo_snaps:
+        fg = str(snap.get("forge") or "local")
+        if fg not in ("github", "gitlab"):
+            continue
+        host_key = str(snap.get("forge_host") or "").strip()
+        api_base = str(snap.get("forge_api_base") or "").strip().rstrip("/")
+        repo_url = str(snap.get("repo_url") or "").strip()
+        if (not host_key or not api_base) and repo_url:
+            parsed = urllib.parse.urlparse(repo_url)
+            if parsed.netloc and not host_key:
+                host_key = parsed.netloc.lower()
+            if parsed.scheme and parsed.netloc and not api_base:
+                api_base = f"{parsed.scheme}://{parsed.netloc}".lower()
+        if not host_key and fg == "github":
+            host_key = "github.com"
+        if not api_base and host_key:
+            api_base = f"https://{host_key}"
+
+        hostname = host_key.split(":", 1)[0].lower() if host_key else ""
+        matched_key = ""
+        saved_entry: dict[str, str] | None = None
+        for candidate in (host_key, hostname):
+            if candidate and candidate in saved_hosts:
+                matched_key = candidate
+                saved_entry = saved_hosts[candidate]
+                break
+        if saved_entry and saved_entry.get("api_url") and not api_base:
+            api_base = str(saved_entry["api_url"]).rstrip("/")
+
+        bucket_key = host_key or api_base or fg
+        forge_buckets = buckets_by_forge[fg]
+        bucket = forge_buckets.get(bucket_key)
+        if bucket is None:
+            bucket = _new_bucket(fg, host_key or api_base, api_base, saved_entry)
+            forge_buckets[bucket_key] = bucket
+        if matched_key:
+            bucket["_matched_saved_keys"].add(matched_key)
+
+        repo_name = str(snap.get("repo_name") or "").strip()
+        if repo_name and repo_name not in bucket["repos"]:
+            bucket["repos"].append(repo_name)
+        bucket["repo_count"] += 1
+        if snap.get("forge_connected"):
+            bucket["connected_repos"] += 1
+        if snap.get("forge_syncing"):
+            bucket["syncing_repos"] += 1
+        has_auth_alert = isinstance(snap.get("auth_alert"), dict)
+        forge_err = str(snap.get("forge_error") or "").strip()
+        if has_auth_alert:
+            bucket["auth_error_repos"] += 1
+        elif forge_err:
+            bucket["error_repos"] += 1
+        if not snap.get("forge_connected") and not bucket["error"]:
+            if forge_err:
+                bucket["error"] = forge_err
+            elif has_auth_alert:
+                bucket["error"] = f"访问 {host_key or api_base} 需要鉴权令牌"
+
+        fetched_at = float(snap.get("forge_fetched_at") or 0.0)
+        if fetched_at > bucket["last_synced_at"]:
+            bucket["last_synced_at"] = fetched_at
+
+    for saved_key, entry in sorted(saved_hosts.items()):
+        entry_fg = str(entry.get("forge") or ("github" if "github.com" in saved_key else "gitlab"))
+        if entry_fg not in ("github", "gitlab"):
+            continue
+        forge_buckets = buckets_by_forge[entry_fg]
+        already = any(
+            saved_key in b["_matched_saved_keys"] or b["host"] == saved_key
+            for b in forge_buckets.values()
+        )
+        if already:
+            continue
+        api_base = str(entry.get("api_url") or f"https://{saved_key}").rstrip("/")
+        forge_buckets[saved_key] = _new_bucket(entry_fg, saved_key, api_base, entry)
+
+    if not buckets_by_forge["github"] and (has_github_env or gh_ok):
+        buckets_by_forge["github"]["github.com"] = _new_bucket("github", "github.com", "https://github.com", None)
+
+    if not buckets_by_forge["gitlab"] and has_gitlab_env:
+        env_url = os.environ.get("IDD_GITLAB_URL", "").strip().rstrip("/")
+        gl_host = urllib.parse.urlparse(env_url).netloc.lower() if env_url else "gitlab"
+        buckets_by_forge["gitlab"][gl_host or "gitlab"] = _new_bucket("gitlab", gl_host or "gitlab", env_url, None)
+
+    connections: dict[str, Any] = {}
+    for fg, label in (("github", "GitHub"), ("gitlab", "GitLab")):
+        raw_buckets = list(buckets_by_forge[fg].values())
+        hosts_out: list[dict[str, Any]] = []
+        total_repos = 0
+        connected_repos = 0
+        syncing_repos = 0
+        error_repos = 0
+        auth_error_repos = 0
+        last_synced_at = 0.0
+        first_error = ""
+
+        for b in raw_buckets:
+            h_status = _resolve_forge_status(
+                local_only=local_only,
+                configured=bool(b["configured"]),
+                total_repos=int(b["repo_count"]),
+                connected_repos=int(b["connected_repos"]),
+                syncing_repos=int(b["syncing_repos"]),
+                error_repos=int(b["error_repos"]),
+                auth_error_repos=int(b["auth_error_repos"]),
+            )
+            h_err = "" if h_status in ("connected", "local_only") else str(b["error"] or "")
+            hosts_out.append(
+                {
+                    "host": b["host"],
+                    "api_base": b["api_base"],
+                    "status": h_status,
+                    "configured": bool(b["configured"]),
+                    "auth_source": b["auth_source"],
+                    "username": b["username"],
+                    "repo_count": int(b["repo_count"]),
+                    "connected_repos": int(b["connected_repos"]),
+                    "repos": list(b["repos"]),
+                    "last_synced_at": float(b["last_synced_at"]),
+                    "error": h_err,
+                }
+            )
+            total_repos += int(b["repo_count"])
+            connected_repos += int(b["connected_repos"])
+            syncing_repos += int(b["syncing_repos"])
+            error_repos += int(b["error_repos"])
+            auth_error_repos += int(b["auth_error_repos"])
+            if float(b["last_synced_at"]) > last_synced_at:
+                last_synced_at = float(b["last_synced_at"])
+            if h_err and not first_error:
+                first_error = h_err
+
+        configured = any(h["configured"] for h in hosts_out)
+        overall_status = _resolve_forge_status(
+            local_only=local_only,
+            configured=configured,
+            total_repos=total_repos,
+            connected_repos=connected_repos,
+            syncing_repos=syncing_repos,
+            error_repos=error_repos,
+            auth_error_repos=auth_error_repos,
+        )
+        if overall_status in ("connected", "local_only", "unconfigured"):
+            first_error = ""
+        connections[fg] = {
+            "forge": fg,
+            "label": label,
+            "status": overall_status,
+            "configured": configured,
+            "connected_repos": connected_repos,
+            "total_repos": total_repos,
+            "syncing_repos": syncing_repos,
+            "error_repos": error_repos,
+            "auth_error_repos": auth_error_repos,
+            "last_synced_at": last_synced_at,
+            "error": first_error,
+            "hosts": hosts_out,
+        }
+
+    return connections
+
+
 def collect_global_snapshot(
     *,
     current_cwd: Path | None = None,
@@ -1791,9 +2095,15 @@ def collect_global_snapshot(
     summary = _compute_global_summary(repos_out, all_issues, all_local, all_orphans)
     return {
         "global": True,
+        "local_only": bool(local_only),
         "generated_at": time.time(),
         "repos_config_path": str(get_repos_path()),
         "forge_syncing": any(bool(r.get("forge_syncing")) for r in repos_out),
+        "forge_connections": _build_forge_connections(
+            repos_out,
+            local_only=local_only,
+            allow_stale_async=allow_stale_async,
+        ),
         "auth_alerts": auth_alerts,
         "summary": summary,
         "repos": repos_out,
@@ -1834,9 +2144,15 @@ def collect_scope_snapshot(
         auth_alerts, warnings = _dedupe_auth_alerts([snap])
         return {
             "global": False,
+            "local_only": bool(local_only),
             "generated_at": snap["generated_at"],
             "repos_config_path": str(get_repos_path()),
             "forge_syncing": bool(snap.get("forge_syncing")),
+            "forge_connections": _build_forge_connections(
+                [snap],
+                local_only=local_only,
+                allow_stale_async=allow_stale_async,
+            ),
             "auth_alerts": auth_alerts,
             "summary": summary,
             "repos": [snap],

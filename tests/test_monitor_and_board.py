@@ -323,6 +323,8 @@ class TestMonitorAndBoard(unittest.TestCase):
                     self.assertIn("wt-tasks-strip", html)
                     self.assertIn("auth_alerts", html)
                     self.assertIn("forge_syncing", html)
+                    self.assertIn("forge_connections", html)
+                    self.assertIn("renderForgeStatus", html)
                     self.assertIn("buildHandoffPrompt", html)
                     self.assertNotIn("backlog", html.lower())
                     self.assertNotIn("__IDD_VERSION__", html)
@@ -330,6 +332,9 @@ class TestMonitorAndBoard(unittest.TestCase):
                     for element_id in (
                         "top-progress",
                         "sync-banner-wrap",
+                        "status-cluster",
+                        "forge-status-group",
+                        "forge-status-popover",
                         "view-cockpit",
                         "view-kanban",
                         "view-repos",
@@ -370,6 +375,10 @@ class TestMonitorAndBoard(unittest.TestCase):
                 with urllib.request.urlopen(f"{base_url}/api/snapshot", timeout=5) as resp:
                     snap1 = json.loads(resp.read().decode("utf-8"))
                     self.assertEqual(snap1["summary"]["repo_count"], 1)
+                    self.assertTrue(snap1["local_only"])
+                    self.assertIn("github", snap1["forge_connections"])
+                    self.assertIn("gitlab", snap1["forge_connections"])
+                    self.assertIn(snap1["forge_connections"]["github"]["status"], ("local_only", "unconfigured"))
 
                 # Modify a file in wt and confirm live snapshot updates without restart
                 (wt / "live_edit.py").write_text("print('live')\n", encoding="utf-8")
@@ -1100,6 +1109,280 @@ class TestMonitorAndBoard(unittest.TestCase):
                     proc.stderr.close()
                 gl_server.shutdown()
                 gl_server.server_close()
+
+    def test_forge_connections_states_and_gh_username_parsing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "config"
+            cfg.mkdir(parents=True, exist_ok=True)
+            env_patch = {"IDD_CONFIG_DIR": str(cfg)}
+            with mock.patch.dict(os.environ, env_patch, clear=False):
+                for key in ("GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "GITLAB_PRIVATE_TOKEN"):
+                    os.environ.pop(key, None)
+
+                # 1. `gh auth status` username parsing (modern "account X" and legacy "as X")
+                monitor._GH_CLI_CACHE["checked_at"] = 0.0
+                fake_proc_new = subprocess.CompletedProcess(
+                    ["gh", "auth", "status"],
+                    0,
+                    stdout="github.com\n  ✓ Logged in to github.com account j-tide (keyring)\n",
+                    stderr="",
+                )
+                with (
+                    mock.patch.object(monitor.shutil, "which", return_value="/usr/bin/gh"),
+                    mock.patch.object(monitor.subprocess, "run", return_value=fake_proc_new),
+                ):
+                    ok, user = monitor._check_gh_cli_status(ttl=30.0)
+                    self.assertTrue(ok)
+                    self.assertEqual(user, "j-tide")
+
+                monitor._GH_CLI_CACHE["checked_at"] = 0.0
+                fake_proc_old = subprocess.CompletedProcess(
+                    ["gh", "auth", "status"],
+                    0,
+                    stdout="",
+                    stderr="github.com\n  ✓ Logged in to github.com as octocat (oauth_token)\n",
+                )
+                with (
+                    mock.patch.object(monitor.shutil, "which", return_value="/usr/bin/gh"),
+                    mock.patch.object(monitor.subprocess, "run", return_value=fake_proc_old),
+                ):
+                    ok, user = monitor._check_gh_cli_status(ttl=30.0)
+                    self.assertTrue(ok)
+                    self.assertEqual(user, "octocat")
+
+                # 2. `_build_forge_connections` across states
+                with mock.patch.object(monitor, "_check_gh_cli_status", return_value=(False, "")):
+                    empty_conns = monitor._build_forge_connections([], local_only=False)
+                    self.assertEqual(empty_conns["github"]["status"], "unconfigured")
+                    self.assertEqual(empty_conns["gitlab"]["status"], "unconfigured")
+
+                    # Connected GitHub repo stays `connected` during background TTL revalidation
+                    gh_connected = monitor._build_forge_connections(
+                        [
+                            {
+                                "repo_name": "idd",
+                                "repo_url": "https://github.com/j-tide/idd",
+                                "forge": "github",
+                                "forge_host": "github.com",
+                                "forge_api_base": "https://github.com",
+                                "forge_connected": True,
+                                "forge_syncing": True,
+                                "forge_error": "",
+                                "auth_alert": None,
+                                "forge_fetched_at": 1234.0,
+                            }
+                        ]
+                    )
+                    self.assertEqual(gh_connected["github"]["status"], "connected")
+                    self.assertEqual(gh_connected["github"]["connected_repos"], 1)
+
+                    # Syncing, partial, auth_required, error, and local_only
+                    mixed = monitor._build_forge_connections(
+                        [
+                            {
+                                "repo_name": "gh-sync",
+                                "repo_url": "https://github.com/acme/gh-sync",
+                                "forge": "github",
+                                "forge_host": "github.com",
+                                "forge_api_base": "https://github.com",
+                                "forge_connected": False,
+                                "forge_syncing": True,
+                                "forge_error": "",
+                                "auth_alert": None,
+                                "forge_fetched_at": 0.0,
+                            },
+                            {
+                                "repo_name": "gl-ok",
+                                "repo_url": "http://10.0.0.5:8080/team/gl-ok",
+                                "forge": "gitlab",
+                                "forge_host": "10.0.0.5:8080",
+                                "forge_api_base": "http://10.0.0.5:8080",
+                                "forge_connected": True,
+                                "forge_syncing": False,
+                                "forge_error": "",
+                                "auth_alert": None,
+                                "forge_fetched_at": 1234.0,
+                            },
+                            {
+                                "repo_name": "gl-bad",
+                                "repo_url": "http://10.0.0.5:8080/team/gl-bad",
+                                "forge": "gitlab",
+                                "forge_host": "10.0.0.5:8080",
+                                "forge_api_base": "http://10.0.0.5:8080",
+                                "forge_connected": False,
+                                "forge_syncing": False,
+                                "forge_error": "无法连接 GitLab",
+                                "auth_alert": None,
+                                "forge_fetched_at": 1234.0,
+                            },
+                        ]
+                    )
+                    self.assertEqual(mixed["github"]["status"], "syncing")
+                    self.assertEqual(mixed["gitlab"]["status"], "partial")
+                    self.assertEqual(mixed["gitlab"]["connected_repos"], 1)
+                    self.assertEqual(mixed["gitlab"]["total_repos"], 2)
+
+                    gl_err = monitor._build_forge_connections(
+                        [
+                            {
+                                "repo_name": "gl-only",
+                                "repo_url": "http://10.0.0.5:8080/team/gl-only",
+                                "forge": "gitlab",
+                                "forge_host": "10.0.0.5:8080",
+                                "forge_api_base": "http://10.0.0.5:8080",
+                                "forge_connected": False,
+                                "forge_syncing": False,
+                                "forge_error": "无法连接 GitLab",
+                                "auth_alert": None,
+                                "forge_fetched_at": 1234.0,
+                            }
+                        ]
+                    )
+                    self.assertEqual(gl_err["gitlab"]["status"], "error")
+                    self.assertEqual(gl_err["gitlab"]["error"], "无法连接 GitLab")
+
+                    gl_auth = monitor._build_forge_connections(
+                        [
+                            {
+                                "repo_name": "gl-auth",
+                                "repo_url": "http://10.0.0.5:8080/team/gl-auth",
+                                "forge": "gitlab",
+                                "forge_host": "10.0.0.5:8080",
+                                "forge_api_base": "http://10.0.0.5:8080",
+                                "forge_connected": False,
+                                "forge_syncing": False,
+                                "forge_error": "GitLab 鉴权失败（HTTP 401）",
+                                "auth_alert": {"host": "10.0.0.5:8080", "api_base": "http://10.0.0.5:8080"},
+                                "forge_fetched_at": 1234.0,
+                            }
+                        ]
+                    )
+                    self.assertEqual(gl_auth["gitlab"]["status"], "auth_required")
+
+                    local_conns = monitor._build_forge_connections(
+                        [
+                            {
+                                "repo_name": "idd",
+                                "repo_url": "https://github.com/j-tide/idd",
+                                "forge": "github",
+                                "forge_host": "github.com",
+                                "forge_api_base": "https://github.com",
+                                "forge_connected": False,
+                                "forge_syncing": False,
+                                "forge_error": "",
+                                "auth_alert": None,
+                                "forge_fetched_at": 0.0,
+                            }
+                        ],
+                        local_only=True,
+                    )
+                    self.assertEqual(local_conns["github"]["status"], "local_only")
+                    self.assertEqual(local_conns["gitlab"]["status"], "unconfigured")
+
+    def test_board_forge_connections_transitions_auth_connected_and_offline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            empty_dir = root / "workspace"
+            empty_dir.mkdir()
+            repo, origin, _, env = _create_repo_harness(root / "gl", "demo", cfg)
+
+            gl_state = MockGitLabState(origin)
+            gl_server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(gl_state))
+            gl_port = gl_server.server_address[1]
+            gl_base = f"http://127.0.0.1:{gl_port}"
+            gl_state.base_url = gl_base
+            threading.Thread(target=gl_server.serve_forever, daemon=True).start()
+
+            subprocess.run(
+                ["git", "-C", str(repo), "remote", "set-url", "origin", f"{gl_base}/dept/sub/demo.git"],
+                check=True,
+            )
+
+            sub_env = dict(env)
+            sub_env["PYTHONUNBUFFERED"] = "1"
+            for key in ("GITLAB_TOKEN", "GITLAB_PRIVATE_TOKEN", "IDD_FORGE"):
+                sub_env.pop(key, None)
+            with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
+                monitor.register_repo(repo)
+
+            proc = subprocess.Popen(
+                [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--no-open"],
+                cwd=str(empty_dir),
+                env=sub_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            gl_closed = False
+            try:
+                assert proc.stdout is not None
+                banner = proc.stdout.readline().strip()
+                m = re.search(r"(http://127\.0\.0\.1:\d+)", banner)
+                self.assertIsNotNone(m, f"Unexpected board startup output: {banner!r}")
+                base_url = m.group(1)
+
+                def _wait_settled(refresh: bool = False) -> dict:
+                    url = f"{base_url}/api/snapshot?refresh=1" if refresh else f"{base_url}/api/snapshot"
+                    with urllib.request.urlopen(url, timeout=5) as resp:
+                        snap = json.loads(resp.read().decode("utf-8"))
+                    deadline = time.monotonic() + 5.0
+                    while snap.get("forge_syncing") and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                        with urllib.request.urlopen(f"{base_url}/api/snapshot", timeout=5) as resp:
+                            snap = json.loads(resp.read().decode("utf-8"))
+                    return snap
+
+                # 1. Missing token -> `auth_required`
+                snap_auth = _wait_settled(refresh=False)
+                gl_conn = snap_auth["forge_connections"]["gitlab"]
+                self.assertEqual(gl_conn["status"], "auth_required")
+                self.assertEqual(gl_conn["total_repos"], 1)
+                self.assertEqual(gl_conn["connected_repos"], 0)
+
+                # 2. Save valid token -> `connected`
+                req_save = urllib.request.Request(
+                    f"{base_url}/api/auth/save",
+                    data=json.dumps({"host": gl_base, "token": "glpat-secret", "forge": "gitlab"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_save, timeout=5) as resp:
+                    self.assertTrue(json.loads(resp.read().decode("utf-8"))["ok"])
+
+                snap_ok = _wait_settled(refresh=False)
+                gl_conn_ok = snap_ok["forge_connections"]["gitlab"]
+                self.assertEqual(gl_conn_ok["status"], "connected")
+                self.assertEqual(gl_conn_ok["connected_repos"], 1)
+                self.assertEqual(gl_conn_ok["hosts"][0]["username"], "j.tide")
+                self.assertEqual(gl_conn_ok["hosts"][0]["auth_source"], "hosts.json")
+
+                # 3. Token rejected (401) -> `auth_required`
+                gl_state.expected_token = "rotated-secret"
+                snap_expired = _wait_settled(refresh=True)
+                self.assertEqual(snap_expired["forge_connections"]["gitlab"]["status"], "auth_required")
+
+                # 4. Server unreachable -> `error` with message
+                gl_server.shutdown()
+                gl_server.server_close()
+                gl_closed = True
+                snap_err = _wait_settled(refresh=True)
+                self.assertEqual(snap_err["forge_connections"]["gitlab"]["status"], "error")
+                self.assertTrue(snap_err["forge_connections"]["gitlab"]["error"])
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                if proc.stdout is not None:
+                    proc.stdout.close()
+                if proc.stderr is not None:
+                    proc.stderr.close()
+                if not gl_closed:
+                    gl_server.shutdown()
+                    gl_server.server_close()
 
 
 if __name__ == "__main__":
