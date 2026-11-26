@@ -25,6 +25,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from forge import (  # noqa: E402
     ForgeError,
+    evaluate_repo_init_settings,
     get_config_dir,
     get_forge,
     get_hosts_path,
@@ -1415,20 +1416,23 @@ def cmd_repos(args: argparse.Namespace) -> int:
             for item in entries:
                 ts = float(item.get("last_seen_at") or 0.0)
                 ago = monitor.format_relative_time(max(0.0, now - ts)) if ts > 0 else "无记录"
-                lines.append(f"- {item['name']} ({ago}): {item['path']}")
+                init_state = item.get("repo_init_state")
+                init_tag = " [待初始化策略: idd repo-init --apply]" if init_state in ("pending", "prompted") else ""
+                lines.append(f"- {item['name']} ({ago}): {item['path']}{init_tag}")
         print("\n".join(lines))
         return 0
 
     if subcmd == "add":
         added: list[dict[str, Any]] = []
         hints: list[str] = []
+        auto_apply = not bool(getattr(args, "no_repo_init", False))
         for raw in args.paths:
             main_wt = monitor.resolve_main_worktree_ro(Path(raw))
             if main_wt is None:
                 raise IddError(f"路径不是有效的 Git 仓库：{raw}")
             entry = monitor.register_repo(main_wt)
             has_origin = run_cmd(["git", "-C", str(main_wt), "remote", "get-url", "origin"], check=False).returncode == 0
-            hint = _maybe_check_first_time_repo_init(main_wt, has_origin=has_origin)
+            hint = _maybe_check_first_time_repo_init(main_wt, has_origin=has_origin, auto_apply=auto_apply)
             if hint:
                 entry = dict(entry)
                 entry["repo_init_hint"] = hint
@@ -1467,40 +1471,18 @@ def cmd_repos(args: argparse.Namespace) -> int:
     raise IddError(f"未知 repos 子命令：{subcmd}")
 
 
-def evaluate_repo_init_settings(result: dict[str, Any]) -> tuple[bool, list[str]]:
-    """Return `(is_aligned, mismatches)` for a `forge.repo_init` result."""
-    forge_type = result.get("forge")
-    settings = result.get("settings") or {}
-    mismatches: list[str] = []
-    if forge_type == "github":
-        if settings.get("allow_merge_commit") is True:
-            mismatches.append("allow_merge_commit=true（建议 false）")
-        if settings.get("allow_squash_merge") is False:
-            mismatches.append("allow_squash_merge=false（建议 true）")
-        if settings.get("delete_branch_on_merge") is True:
-            mismatches.append("delete_branch_on_merge=true（建议 false）")
-    elif forge_type == "gitlab":
-        merge_method = settings.get("merge_method")
-        if merge_method is not None and merge_method != "ff":
-            mismatches.append(f"merge_method={merge_method}（建议 ff）")
-        squash_option = settings.get("squash_option")
-        if squash_option is not None and squash_option != "always":
-            mismatches.append(f"squash_option={squash_option}（建议 always）")
-        if settings.get("remove_source_branch_after_merge") is True:
-            mismatches.append("remove_source_branch_after_merge=true（建议 false）")
-    return len(mismatches) == 0, mismatches
-
-
 def _maybe_check_first_time_repo_init(
     main_worktree: Path,
     *,
     has_origin: bool,
     forge: Any | None = None,
+    auto_apply: bool = True,
 ) -> dict[str, Any] | None:
-    """Probe remote merge policy once per repository and return an onboarding hint if unaligned."""
+    """Probe remote merge policy once per repository and auto-apply or mark pending."""
     if not has_origin:
         return None
-    if monitor.get_repo_init_state(main_worktree) in ("aligned", "prompted"):
+    prev_meta = monitor.get_repo_init_meta(main_worktree)
+    if prev_meta["state"] in ("aligned", "pending"):
         return None
     try:
         active_forge = forge if forge is not None else get_forge(main_worktree)
@@ -1510,25 +1492,74 @@ def _maybe_check_first_time_repo_init(
 
     aligned, mismatches = evaluate_repo_init_settings(result)
     if aligned:
-        monitor.set_repo_init_state(main_worktree, "aligned")
+        monitor.set_repo_init_meta(main_worktree, "aligned")
         return None
 
-    monitor.set_repo_init_state(main_worktree, "prompted")
     forge_type = str(result.get("forge") or "github")
     forge_name = "GitLab" if forge_type == "gitlab" else "GitHub"
+    repo_slug = str(result.get("repo") or "")
     policy_desc = (
-        "「仅 Fast-Forward + Squash 且保留分支」"
+        "「仅 Fast-Forward + Squash 且保留分支」与默认压缩提交模板"
         if forge_type == "gitlab"
-        else "「仅 Squash 直线合入且保留分支」"
+        else "「仅 Squash 直线合入且保留分支」与默认 PR 提交模板"
     )
+
+    if not auto_apply:
+        monitor.set_repo_init_meta(main_worktree, "pending", mismatches=mismatches)
+        message = (
+            f"💡 首次接管提示：已跳过自动初始化 {forge_name} 仓库线性 Squash 策略（{'、'.join(mismatches)}）。\n"
+            f"   已标记为待初始化，可在 `idd ui` 一键执行或稍后运行 `idd repo-init --apply` 锁定{policy_desc}。"
+        )
+        return {
+            "status": "skipped",
+            "forge": forge_type,
+            "repo": repo_slug,
+            "mismatches": mismatches,
+            "command": "idd repo-init --apply",
+            "message": message,
+        }
+
+    try:
+        applied_result = active_forge.repo_init(apply=True)
+    except Exception as exc:
+        err_msg = str(exc)
+        monitor.set_repo_init_meta(main_worktree, "pending", mismatches=mismatches, error=err_msg)
+        message = (
+            f"⚠️ 首次接管自动执行 `idd repo-init --apply` 未完成（{err_msg}）；"
+            f"已标记为待初始化，可在 `idd ui` 点击重试或稍后手动运行 `idd repo-init --apply`。"
+        )
+        return {
+            "status": "failed",
+            "forge": forge_type,
+            "repo": repo_slug,
+            "mismatches": mismatches,
+            "error": err_msg,
+            "command": "idd repo-init --apply",
+            "message": message,
+        }
+
+    aligned_after, remaining = evaluate_repo_init_settings(applied_result)
+    if aligned_after:
+        monitor.set_repo_init_meta(main_worktree, "aligned")
+        return {
+            "status": "applied",
+            "forge": forge_type,
+            "repo": repo_slug,
+            "mismatches": [],
+            "command": "idd repo-init --apply",
+            "message": f"✅ 首次接管已自动初始化 {forge_name} 仓库线性 Squash 策略与提交模板。",
+        }
+
+    monitor.set_repo_init_meta(main_worktree, "pending", mismatches=remaining)
     message = (
-        f"💡 首次接管提示：检测到当前 {forge_name} 仓库尚未启用线性 Squash 合入策略（{'、'.join(mismatches)}）。\n"
-        f"   建议向用户确认后执行 `idd repo-init --apply` 锁定{policy_desc}，避免后续产生 Merge 节点。"
+        f"⚠️ 首次接管已尝试执行 `idd repo-init --apply`，但仍有未对齐项（{'、'.join(remaining)}）；"
+        f"已在 `idd ui` 保留待初始化提示，可随时点击重试。"
     )
     return {
+        "status": "pending",
         "forge": forge_type,
-        "repo": str(result.get("repo") or ""),
-        "mismatches": mismatches,
+        "repo": repo_slug,
+        "mismatches": remaining,
         "command": "idd repo-init --apply",
         "message": message,
     }
@@ -1644,7 +1675,12 @@ def cmd_issue_create(args: argparse.Namespace) -> int:
     if args.body_file:
         body = Path(args.body_file).read_text(encoding="utf-8")
     created = forge.create_issue(title, body=body, labels=args.label, assignees=args.assignee)
-    hint = _maybe_check_first_time_repo_init(repo.main_worktree, has_origin=repo.has_origin, forge=forge)
+    hint = _maybe_check_first_time_repo_init(
+        repo.main_worktree,
+        has_origin=repo.has_origin,
+        forge=forge,
+        auto_apply=not bool(getattr(args, "no_repo_init", False)),
+    )
     if args.json:
         if hint:
             created = dict(created)
@@ -1730,7 +1766,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         }
         if push_warning:
             payload["push_warning"] = push_warning
-        hint = _maybe_check_first_time_repo_init(repo.main_worktree, has_origin=repo.has_origin)
+        hint = _maybe_check_first_time_repo_init(
+            repo.main_worktree,
+            has_origin=repo.has_origin,
+            auto_apply=not bool(getattr(args, "no_repo_init", False)),
+        )
         if hint:
             payload["repo_init_hint"] = hint
         if args.json:
@@ -1827,7 +1867,12 @@ def cmd_start(args: argparse.Namespace) -> int:
     }
     if push_warning:
         payload["push_warning"] = push_warning
-    hint = _maybe_check_first_time_repo_init(repo.main_worktree, has_origin=repo.has_origin, forge=forge_for_hint)
+    hint = _maybe_check_first_time_repo_init(
+        repo.main_worktree,
+        has_origin=repo.has_origin,
+        forge=forge_for_hint,
+        auto_apply=not bool(getattr(args, "no_repo_init", False)),
+    )
     if hint:
         payload["repo_init_hint"] = hint
     if args.json:
@@ -2508,8 +2553,13 @@ def cmd_repo_init(args: argparse.Namespace) -> int:
     repo = get_repo_info(Path.cwd())
     forge = get_forge(repo.main_worktree)
     result = forge.repo_init(apply=args.apply)
-    aligned, _ = evaluate_repo_init_settings(result)
-    monitor.set_repo_init_state(repo.main_worktree, "aligned" if aligned else "prompted")
+    aligned, mismatches = evaluate_repo_init_settings(result)
+    monitor.set_repo_init_meta(
+        repo.main_worktree,
+        "aligned" if aligned else "pending",
+        mismatches=mismatches,
+        error="",
+    )
     settings = result.get("settings") or {}
     if result["forge"] == "gitlab":
         prefix = (
@@ -3190,6 +3240,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_repos_add = repos_sub.add_parser("add", help="将指定 Git 仓库加入全局监控索引")
     p_repos_add.add_argument("paths", nargs="+", help="仓库或工作树路径（如 .）")
+    p_repos_add.add_argument("--no-repo-init", action="store_true", help="首次接管仓库时跳过自动执行 idd repo-init --apply（仍保留待初始化状态提示）")
     p_repos_add.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="输出 JSON")
     p_repos_add.set_defaults(func=cmd_repos)
 
@@ -3216,6 +3267,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_issue_create.add_argument("--body-file", type=Path, help="从文件读取 Issue 正文")
     p_issue_create.add_argument("--label", action="append", help="添加标签（可重复）")
     p_issue_create.add_argument("--assignee", action="append", help="指派负责人（可重复）")
+    p_issue_create.add_argument("--no-repo-init", action="store_true", help="首次接管仓库时跳过自动执行 idd repo-init --apply（仍保留待初始化状态提示）")
     p_issue_create.add_argument("--json", action="store_true", help="输出 JSON")
     p_issue_create.set_defaults(func=cmd_issue_create)
 
@@ -3226,6 +3278,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_start.add_argument("--prefix", choices=list(ALLOWED_TYPES), help="分支前缀（允许 8 类标准 type）")
     p_start.add_argument("--base", help="基准分支（默认 origin/<default_branch> 或本地主分支）")
     p_start.add_argument("--no-push", action="store_true", help="仅创建本地工作树与分支，跳过自动推送到远端 origin")
+    p_start.add_argument("--no-repo-init", action="store_true", help="首次接管仓库时跳过自动执行 idd repo-init --apply（仍保留待初始化状态提示）")
     p_start.add_argument("--json", action="store_true", help="输出 JSON")
     p_start.set_defaults(func=cmd_start)
 

@@ -935,6 +935,172 @@ class TestMonitorAndBoard(unittest.TestCase):
             self.assertNotIn("BrokenPipeError", stderr_out)
             self.assertNotIn("ConnectionResetError", stderr_out)
 
+    def test_board_auto_repo_init_on_token_save_and_manual_retry_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            empty_dir = root / "workspace"
+            empty_dir.mkdir()
+            repo, origin, _, env = _create_repo_harness(root / "gl", "demo", cfg)
+
+            gl_state = MockGitLabState(origin)
+            gl_server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(gl_state))
+            gl_port = gl_server.server_address[1]
+            gl_base = f"http://127.0.0.1:{gl_port}"
+            gl_state.base_url = gl_base
+            threading.Thread(target=gl_server.serve_forever, daemon=True).start()
+
+            subprocess.run(
+                ["git", "-C", str(repo), "remote", "set-url", "origin", f"{gl_base}/dept/sub/demo.git"],
+                check=True,
+            )
+
+            sub_env = dict(env)
+            sub_env["PYTHONUNBUFFERED"] = "1"
+            sub_env.pop("GITLAB_TOKEN", None)
+            sub_env.pop("GITLAB_PRIVATE_TOKEN", None)
+            sub_env.pop("IDD_FORGE", None)
+            with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
+                monitor.register_repo(repo)
+
+            proc = subprocess.Popen(
+                [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--no-open"],
+                cwd=str(empty_dir),
+                env=sub_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                assert proc.stdout is not None
+                banner = proc.stdout.readline().strip()
+                m = re.search(r"(http://127\.0\.0\.1:\d+)", banner)
+                self.assertIsNotNone(m, f"Unexpected board startup output: {banner!r}")
+                base_url = m.group(1)
+
+                # 1. Save token with `auto_repo_init: false` (skipped) -> marks `pending` with mismatches
+                req_save_skip = urllib.request.Request(
+                    f"{base_url}/api/auth/save",
+                    data=json.dumps(
+                        {"host": gl_base, "token": "glpat-secret", "forge": "gitlab", "auto_repo_init": False}
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_save_skip, timeout=5) as resp:
+                    saved_skip = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(saved_skip["ok"])
+                    self.assertEqual(len(saved_skip["repo_init_results"]), 1)
+                    self.assertEqual(saved_skip["repo_init_results"][0]["state"], "pending")
+
+                with urllib.request.urlopen(f"{base_url}/api/snapshot", timeout=5) as resp:
+                    snap_pending = json.loads(resp.read().decode("utf-8"))
+                ri_pending = snap_pending["repos"][0]["repo_init"]
+                self.assertEqual(ri_pending["state"], "pending")
+                self.assertTrue(any("squash_commit_template=" in x for x in ri_pending["mismatches"]))
+
+                # 2. `/api/repo/init` enforces CSRF and registered-repo whitelist
+                req_no_csrf = urllib.request.Request(
+                    f"{base_url}/api/repo/init",
+                    data=json.dumps({"repo_path": str(repo)}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as csrf_err:
+                    urllib.request.urlopen(req_no_csrf, timeout=5)
+                self.assertEqual(csrf_err.exception.code, 403)
+                csrf_err.exception.close()
+
+                req_bad_repo = urllib.request.Request(
+                    f"{base_url}/api/repo/init",
+                    data=json.dumps({"repo_path": str(empty_dir)}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as bad_repo_err:
+                    urllib.request.urlopen(req_bad_repo, timeout=5)
+                self.assertEqual(bad_repo_err.exception.code, 403)
+                bad_repo_err.exception.close()
+
+                # 3. Simulated 403 on PUT keeps `pending` + error in snapshot
+                gl_state.fail_repo_init_put = True
+                req_retry_fail = urllib.request.Request(
+                    f"{base_url}/api/repo/init",
+                    data=json.dumps({"repo_path": str(repo)}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_retry_fail, timeout=5) as resp:
+                    fail_res = json.loads(resp.read().decode("utf-8"))
+                    self.assertFalse(fail_res["ok"])
+                    self.assertEqual(fail_res["failed_count"], 1)
+                    self.assertIn("403", fail_res["error"])
+
+                with urllib.request.urlopen(f"{base_url}/api/snapshot", timeout=5) as resp:
+                    snap_err = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(snap_err["repos"][0]["repo_init"]["state"], "pending")
+                self.assertIn("403", snap_err["repos"][0]["repo_init"]["error"])
+
+                # 4. Retry succeeds once permissions are restored -> `aligned` + Squash template saved
+                gl_state.fail_repo_init_put = False
+                req_retry_ok = urllib.request.Request(
+                    f"{base_url}/api/repo/init",
+                    data=json.dumps({"repo_path": str(repo)}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_retry_ok, timeout=5) as resp:
+                    ok_res = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(ok_res["ok"])
+                    self.assertEqual(ok_res["applied_count"], 1)
+
+                self.assertEqual(gl_state.project_settings["merge_method"], "ff")
+                self.assertEqual(gl_state.project_settings["squash_option"], "always")
+                self.assertFalse(gl_state.project_settings["remove_source_branch_after_merge"])
+                self.assertEqual(gl_state.project_settings["squash_commit_template"], "%{title}\n\n%{description}")
+
+                with urllib.request.urlopen(f"{base_url}/api/snapshot", timeout=5) as resp:
+                    snap_aligned = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(snap_aligned["repos"][0]["repo_init"]["state"], "aligned")
+                self.assertEqual(snap_aligned["repos"][0]["repo_init"]["error"], "")
+
+                # 5. Reset GitLab settings & `repos.json` state -> default `auto_repo_init: true` aligns automatically on `/api/auth/save`
+                gl_state.project_settings.update({
+                    "merge_method": "merge",
+                    "squash_option": "default_off",
+                    "remove_source_branch_after_merge": True,
+                    "squash_commit_template": "%{title}",
+                })
+                with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
+                    monitor.set_repo_init_meta(repo, "")
+
+                req_save_auto = urllib.request.Request(
+                    f"{base_url}/api/auth/save",
+                    data=json.dumps({"host": gl_base, "token": "glpat-secret", "forge": "gitlab"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_save_auto, timeout=5) as resp:
+                    saved_auto = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(saved_auto["ok"])
+                    self.assertEqual(len(saved_auto["repo_init_results"]), 1)
+                    self.assertTrue(saved_auto["repo_init_results"][0]["aligned"])
+                self.assertEqual(gl_state.project_settings["merge_method"], "ff")
+                self.assertEqual(gl_state.project_settings["squash_commit_template"], "%{title}\n\n%{description}")
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                if proc.stdout is not None:
+                    proc.stdout.close()
+                if proc.stderr is not None:
+                    proc.stderr.close()
+                gl_server.shutdown()
+                gl_server.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

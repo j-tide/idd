@@ -102,15 +102,15 @@ config/local.*.json
 
 ### 一次锁定仓库仅 Squash 直线合入（同时保留需求分支）
 
-首次接管仓库时，可检查或一键启用线性合并策略且合入后保留需求分支（首次在带远端的仓库运行 `idd issue create`、`idd start` 或 `idd repos add` 时，CLI 也会自动只读探测一次并在未锁定该策略时输出一次性 `💡 首次接管提示`，结果记录于 `~/.config/idd/repos.json` 的 `repo_init_state`；Agent 看到提示后先向用户确认，再执行 `--apply`）：
+首次接管仓库时，可检查或一键启用线性合并策略、Squash 默认提交消息模板且合入后保留需求分支（首次在带远端的仓库运行 `idd issue create`、`idd start`、`idd repos add`，或在 `idd ui` 初始化向导连接成功后，默认会自动尝试执行 `--apply`；若传入 `--no-repo-init` 跳过、取消向导勾选或遇到权限失败，会在 `~/.config/idd/repos.json` 记录 `pending` 状态及原因，并在 `idd repos list` 与 `idd ui` 中持续提供一键重试入口）：
 
 ```bash
 idd repo-init          # 只读检查当前设置
 idd repo-init --apply
 ```
 
-- **GitHub**：关闭 merge commit，开启 squash merge，设置 `delete_branch_on_merge=false`（建议同步在 Branch Ruleset 勾选 `Require linear history`）。
-- **GitLab**：将项目设置为 `merge_method="ff"`（Fast-Forward 零 Merge 节点）、`squash_option="always"`、`remove_source_branch_after_merge=false`。`idd land` 在修改工作树前检查前两项，并在请求合入时再次核对。
+- **GitHub**：关闭 merge commit，开启 squash merge，设置 `delete_branch_on_merge=false`、`squash_merge_commit_title=PR_TITLE`、`squash_merge_commit_message=PR_BODY`（建议同步在 Branch Ruleset 勾选 `Require linear history`）。
+- **GitLab**：将项目设置为 `merge_method="ff"`（Fast-Forward 零 Merge 节点）、`squash_option="always"`、`remove_source_branch_after_merge=false`、`squash_commit_template="%{title}\n\n%{description}"`。`idd land` 在修改工作树前检查前两项，并在请求合入时再次核对。
 
 ### `idd land` 标准执行顺序
 
