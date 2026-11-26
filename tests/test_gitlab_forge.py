@@ -54,6 +54,10 @@ class MockGitLabState:
             "remove_source_branch_after_merge": True,
         }
         self.last_merge_payload: dict | None = None
+        self.stale_get_polls: int = 0
+        self.merge_transient_failures: list[tuple[int, str]] = []
+        self.merge_attempts: int = 0
+        self.mr_get_calls: int = 0
 
     def origin_sha(self, branch: str) -> str:
         proc = subprocess.run(
@@ -169,7 +173,19 @@ def make_handler(state: MockGitLabState):
                 if iid not in state.mrs:
                     self._send_json(404, {"message": "MR not found"})
                     return
-                self._send_json(200, state.mrs[iid])
+                mr = state.mrs[iid]
+                state.mr_get_calls += 1
+                if state.stale_get_polls > 0:
+                    state.stale_get_polls -= 1
+                    mr["detailed_merge_status"] = "checking"
+                else:
+                    oid = state.origin_sha(mr["source_branch"])
+                    if oid:
+                        mr["sha"] = oid
+                        mr.setdefault("diff_refs", {})["head_sha"] = oid
+                    mr["detailed_merge_status"] = "mergeable"
+                    mr["head_pipeline"]["status"] = state.jobs[701]["status"]
+                self._send_json(200, mr)
                 return
 
             m_jobs = re.fullmatch(rf"{re.escape(proj_prefix)}/pipelines/(\d+)/jobs", path)
@@ -225,6 +241,7 @@ def make_handler(state: MockGitLabState):
                     "target_branch": body.get("target_branch", "main"),
                     "state": "opened",
                     "sha": sha,
+                    "diff_refs": {"head_sha": sha},
                     "has_conflicts": False,
                     "detailed_merge_status": "mergeable",
                     "head_pipeline": {
@@ -271,10 +288,12 @@ def make_handler(state: MockGitLabState):
                     mr["title"] = body["title"]
                 if "description" in body:
                     mr["description"] = body["description"]
-                oid = state.origin_sha(mr["source_branch"])
-                if oid:
-                    mr["sha"] = oid
-                mr["head_pipeline"]["status"] = state.jobs[701]["status"]
+                if state.stale_get_polls == 0:
+                    oid = state.origin_sha(mr["source_branch"])
+                    if oid:
+                        mr["sha"] = oid
+                        mr.setdefault("diff_refs", {})["head_sha"] = oid
+                    mr["head_pipeline"]["status"] = state.jobs[701]["status"]
                 self._send_json(200, mr)
                 return
 
@@ -282,10 +301,20 @@ def make_handler(state: MockGitLabState):
             if m_merge:
                 iid = int(m_merge.group(1))
                 mr = state.mrs[iid]
+                state.merge_attempts += 1
                 state.last_merge_payload = body
+                if state.merge_transient_failures:
+                    code, msg = state.merge_transient_failures.pop(0)
+                    self._send_json(code, {"message": msg})
+                    return
+                diff_head_sha = (mr.get("diff_refs") or {}).get("head_sha") or mr.get("sha")
+                if body.get("sha") and body.get("sha") != diff_head_sha:
+                    self._send_json(409, {"message": "SHA does not match HEAD of source branch"})
+                    return
                 oid = state.origin_sha(mr["source_branch"])
                 if oid:
                     mr["sha"] = oid
+                    mr.setdefault("diff_refs", {})["head_sha"] = oid
                 msg = body.get("squash_commit_message") or mr["title"]
                 state.perform_ff_squash(mr, msg)
                 mr["state"] = "merged"
@@ -325,6 +354,90 @@ class TestGitLabForge(unittest.TestCase):
         self.assertEqual(ssh_port.project_path, "org/service")
 
         self.assertIsNone(forge.parse_remote_url("/tmp/bare/origin.git"))
+
+    def test_normalize_mr_prefers_diff_refs_head_sha_and_tracks_checking_states(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            gl = forge.GitLabForge(
+                Path(tmp),
+                forge.RemoteSpec("https", "gitlab.example.com", "gitlab.example.com", None, "org/repo", "https://gitlab.example.com"),
+                {"token": "glpat-test"},
+            )
+            for status in ("checking", "unchecked", "preparing"):
+                normalized = gl._normalize_mr(
+                    {
+                        "iid": 12,
+                        "title": "fix: test",
+                        "state": "opened",
+                        "sha": "new_branch_sha",
+                        "diff_refs": {"head_sha": "old_diff_sha"},
+                        "detailed_merge_status": status,
+                        "source_branch": "fix/1-test",
+                        "target_branch": "main",
+                    },
+                    fetch_jobs=False,
+                )
+                self.assertEqual(normalized["headRefOid"], "old_diff_sha")
+                self.assertEqual(normalized["rawSha"], "new_branch_sha")
+                self.assertEqual(normalized["mergeStateStatus"], "CHECKING")
+                self.assertEqual(normalized["detailedMergeStatus"], status)
+
+            fallback = gl._normalize_mr(
+                {
+                    "iid": 13,
+                    "title": "fix: list item",
+                    "state": "opened",
+                    "sha": "list_sha",
+                    "merge_status": "unchecked",
+                    "source_branch": "fix/2-test",
+                    "target_branch": "main",
+                },
+                fetch_jobs=False,
+            )
+            self.assertEqual(fallback["headRefOid"], "list_sha")
+            self.assertEqual(fallback["rawSha"], "list_sha")
+            self.assertEqual(fallback["mergeStateStatus"], "CHECKING")
+
+    def test_merge_squash_passes_expected_sha_and_http_status_on_error(self) -> None:
+        captured: list[tuple[str, str, dict | None]] = []
+
+        class StubGitLabForge(forge.GitLabForge):
+            def _request(self, method, path, *, query=None, json_body=None, raw_text=False, check=True):
+                captured.append((method, path, json_body))
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gl = StubGitLabForge(
+                root,
+                forge.RemoteSpec("https", "gitlab.example.com", "gitlab.example.com", None, "org/repo", "https://gitlab.example.com"),
+                {"token": "glpat-test"},
+            )
+            gl.merge_squash(15, "fix: title", "Closes #1", auto=False, expected_sha="abc123")
+            self.assertEqual(len(captured), 1)
+            self.assertEqual(captured[0][0], "PUT")
+            self.assertEqual(captured[0][2]["sha"], "abc123")
+
+            gh = forge.GitHubForge(root)
+            calls: list[list[str]] = []
+            orig_run = forge._run
+            try:
+                def fake_run(args, *, cwd=None, check=True, env=None):
+                    calls.append(args)
+                    return forge.subprocess.CompletedProcess(args, 0, "", "")
+
+                forge._run = fake_run
+                gh.merge_squash(9, "fix: title", "Closes #1", auto=True, expected_sha="def456")
+            finally:
+                forge._run = orig_run
+
+            self.assertEqual(len(calls), 1)
+            self.assertIn("--auto", calls[0])
+            self.assertIn("--match-head-commit", calls[0])
+            idx = calls[0].index("--match-head-commit")
+            self.assertEqual(calls[0][idx + 1], "def456")
+
+            err = forge.ForgeError("conflict", exit_code=1, http_status=409)
+            self.assertEqual(err.http_status, 409)
 
     def test_self_hosted_gitlab_end_to_end_workflow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -472,7 +585,9 @@ class TestGitLabForge(unittest.TestCase):
                 self.assertTrue(wt.exists())
 
                 # Verify GitLab merge payload & linear main without TASK/1-export-csv
+                wt_head = subprocess.check_output(["git", "-C", str(wt), "rev-parse", "HEAD"], text=True).strip()
                 self.assertTrue(state.last_merge_payload["squash"])
+                self.assertEqual(state.last_merge_payload.get("sha"), wt_head)
                 self.assertFalse(state.last_merge_payload["should_remove_source_branch"])
                 self.assertEqual(state.issues[1]["state"], "closed")
                 self.assertEqual(
@@ -499,6 +614,136 @@ class TestGitLabForge(unittest.TestCase):
                 # 10. Logout removes host entry cleanly
                 logout_res = run_idd("auth", "logout", f"127.0.0.1:{port}")
                 self.assertIn("已移除主机", logout_res.stdout)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def _setup_gitlab_mr_repo(self, tmp: str):
+        root = Path(tmp)
+        origin = root / "origin.git"
+        repo = root / "demo"
+        config_dir = root / "config"
+
+        subprocess.run(["git", "init", "--bare", "-b", "main", str(origin)], check=True, capture_output=True)
+        state = MockGitLabState(origin)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+        port = server.server_address[1]
+        base_url = f"http://127.0.0.1:{port}"
+        state.base_url = base_url
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        remote_url = f"{base_url}/dept/sub/demo.git"
+        subprocess.run(["git", "clone", str(origin), str(repo)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "checkout", "-b", "main"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tester"], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+        (repo / "README.md").write_text("# GitLab Demo\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-m", "chore: init"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "push", "-u", "origin", "main"], check=True, capture_output=True)
+        subprocess.run(["git", "--git-dir", str(origin), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
+
+        subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin", remote_url], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", f"url.{origin}.insteadOf", remote_url], check=True)
+        subprocess.run(["git", "-C", str(repo), "fetch", "origin", "main"], check=True, capture_output=True)
+
+        env = dict(os.environ)
+        env["IDD_CONFIG_DIR"] = str(config_dir)
+        env["IDD_NO_AUTO_UPDATE"] = "1"
+        env["IDD_LAND_SYNC_INTERVAL"] = "0.05"
+        env["IDD_LAND_MERGE_RETRY_DELAY"] = "0.05"
+        env.pop("IDD_WORKTREE_ROOT", None)
+        env.pop("IDD_FORGE", None)
+        env.pop("GITLAB_TOKEN", None)
+
+        def run_idd(*args: str, cwd: Path | None = None, check: bool = True):
+            return subprocess.run(
+                [sys.executable, str(IDD_BIN), *args],
+                cwd=str(cwd or repo),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=check,
+            )
+
+        run_idd("auth", "login", base_url, "--token", "glpat-secret")
+        run_idd("issue", "create", "--title", "Async land test", "--body", "Verify sha sync", "--label", "fix")
+        started = json.loads(run_idd("start", "1", "--slug", "async-land", "--json").stdout)
+        wt = Path(started["worktree"])
+        task_dir = wt / "TASK/1-async-land"
+        task_dir.mkdir(parents=True)
+        (task_dir / "TASK-01-fix.md").write_text(
+            "# TASK-01：修复问题\n\n"
+            "- Issue: 1-async-land\n"
+            "- Status: done\n"
+            "- Depends on: none\n"
+            "- Test: pytest test_fix.py\n\n"
+            "## 执行结果\n- Outcome: passed\n",
+            encoding="utf-8",
+        )
+        (wt / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+        subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+        subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(wt), "commit", "-m", "fix: 修复逻辑\n\nTask: 1-async-land/TASK-01\nRefs: #1\nTest: pytest — 1 passed"],
+            check=True,
+            capture_output=True,
+        )
+        run_idd("sync", "1")
+        state.jobs[701]["status"] = "success"
+        run_idd("mr", "1")
+        return root, repo, wt, state, server, env, run_idd
+
+    def test_gitlab_land_waits_for_async_head_sha_refresh_and_retries_transient_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, repo, wt, state, server, _, run_idd = self._setup_gitlab_mr_repo(tmp)
+            try:
+                old_sha = state.mrs[10]["diff_refs"]["head_sha"]
+                gl_direct = forge.GitLabForge(
+                    repo,
+                    forge.RemoteSpec("http", f"127.0.0.1:{server.server_address[1]}", "127.0.0.1", server.server_address[1], "dept/sub/demo", state.base_url),
+                    {"token": "glpat-secret"},
+                )
+                with self.assertRaises(forge.ForgeError) as ctx:
+                    gl_direct.merge_squash(10, "fix: stale", "Closes #1", expected_sha="0000000000000000000000000000000000000000")
+                self.assertEqual(ctx.exception.http_status, 409)
+                state.merge_attempts = 0
+
+                # Simulate GitLab async Sidekiq lag after `idd land` commits `git rm -rf TASK/...` and pushes
+                state.stale_get_polls = 2
+                state.merge_transient_failures = [(406, "Branch cannot be merged")]
+                state.mr_get_calls = 0
+
+                land_res = run_idd("land", "1")
+                self.assertIn("已通过 Squash Merge 直线合入 MR !10", land_res.stdout)
+                self.assertGreaterEqual(state.mr_get_calls, 3)
+                self.assertEqual(state.merge_attempts, 2)
+
+                wt_head = subprocess.check_output(["git", "-C", str(wt), "rev-parse", "HEAD"], text=True).strip()
+                self.assertNotEqual(wt_head, old_sha)
+                self.assertEqual(state.last_merge_payload.get("sha"), wt_head)
+                self.assertTrue((repo / "app.py").is_file())
+                self.assertFalse((repo / "TASK/1-async-land").exists())
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_gitlab_land_fails_safely_when_head_sha_refresh_times_out(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, wt, state, server, env, run_idd = self._setup_gitlab_mr_repo(tmp)
+            try:
+                env["IDD_LAND_SYNC_TIMEOUT"] = "0.2"
+                state.stale_get_polls = 99
+                state.merge_attempts = 0
+
+                land_res = run_idd("land", "1", check=False)
+                self.assertEqual(land_res.returncode, 3)
+                self.assertIn("超时", land_res.stderr)
+                self.assertEqual(state.merge_attempts, 0)
+                self.assertEqual(state.mrs[10]["state"], "opened")
+                self.assertFalse((wt / "TASK/1-async-land").exists())
             finally:
                 server.shutdown()
                 server.server_close()
