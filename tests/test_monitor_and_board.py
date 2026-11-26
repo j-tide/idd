@@ -1552,6 +1552,156 @@ class TestMonitorAndBoard(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
         self.assertIn("JS_PRIMARY_LINK_OK", proc.stdout)
 
+    def test_board_auto_merge_config_endpoints_security_and_ui_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            outside_dir = root / "outside"
+            outside_dir.mkdir()
+            repo, _, _, env = _create_repo_harness(root / "repo", "demo", cfg)
+
+            sub_env = dict(env)
+            sub_env["PYTHONUNBUFFERED"] = "1"
+            with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
+                monitor.register_repo(repo)
+
+            proc = subprocess.Popen(
+                [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--local-only", "--no-open"],
+                cwd=str(outside_dir),
+                env=sub_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                assert proc.stdout is not None
+                banner = proc.stdout.readline().strip()
+                m = re.search(r"(http://127\.0\.0\.1:\d+)", banner)
+                self.assertIsNotNone(m, f"Unexpected board startup output: {banner!r}")
+                base_url = m.group(1)
+
+                # 1. Initial GET /api/config & /api/snapshot default to False
+                with urllib.request.urlopen(f"{base_url}/api/config", timeout=5) as resp:
+                    cfg_data = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(cfg_data["ok"])
+                    self.assertFalse(cfg_data["auto_merge"])
+
+                with urllib.request.urlopen(f"{base_url}/api/snapshot", timeout=5) as resp:
+                    snap0 = json.loads(resp.read().decode("utf-8"))
+                    self.assertFalse(snap0["config"]["auto_merge"])
+                    self.assertFalse(snap0["repos"][0]["auto_merge"]["enabled"])
+                    self.assertEqual(snap0["repos"][0]["auto_merge"]["source"], "global")
+
+                # 2. Missing CSRF header -> 403
+                req_no_csrf = urllib.request.Request(
+                    f"{base_url}/api/config/auto-merge",
+                    data=json.dumps({"scope": "global", "enabled": True}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as csrf_err:
+                    urllib.request.urlopen(req_no_csrf, timeout=5)
+                self.assertEqual(csrf_err.exception.code, 403)
+                csrf_err.exception.close()
+
+                # 3. Non-whitelisted repo_path -> 403
+                req_bad_repo = urllib.request.Request(
+                    f"{base_url}/api/config/auto-merge",
+                    data=json.dumps({"scope": "repo", "repo_path": str(outside_dir), "value": True}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as repo_err:
+                    urllib.request.urlopen(req_bad_repo, timeout=5)
+                self.assertEqual(repo_err.exception.code, 403)
+                repo_err.exception.close()
+
+                # 4. Invalid payload type -> 400
+                req_bad_val = urllib.request.Request(
+                    f"{base_url}/api/config/auto-merge",
+                    data=json.dumps({"scope": "global", "enabled": "yes"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as val_err:
+                    urllib.request.urlopen(req_bad_val, timeout=5)
+                self.assertEqual(val_err.exception.code, 400)
+                val_err.exception.close()
+
+                # 5. Toggle global ON -> snapshot reflects global=True, repo inherited=True
+                req_g_on = urllib.request.Request(
+                    f"{base_url}/api/config/auto-merge",
+                    data=json.dumps({"scope": "global", "enabled": True}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_g_on, timeout=5) as resp:
+                    g_res = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(g_res["ok"])
+                    self.assertTrue(g_res["auto_merge"])
+
+                with urllib.request.urlopen(f"{base_url}/api/snapshot", timeout=5) as resp:
+                    snap1 = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(snap1["config"]["auto_merge"])
+                    self.assertTrue(snap1["repos"][0]["auto_merge"]["enabled"])
+                    self.assertEqual(snap1["repos"][0]["auto_merge"]["source"], "global")
+
+                # 6. Override repo OFF -> snapshot reflects repo override=False
+                req_r_off = urllib.request.Request(
+                    f"{base_url}/api/config/auto-merge",
+                    data=json.dumps({"scope": "repo", "repo_path": str(repo), "value": False}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_r_off, timeout=5) as resp:
+                    r_off_res = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(r_off_res["ok"])
+                    self.assertFalse(r_off_res["auto_merge"]["enabled"])
+                    self.assertEqual(r_off_res["auto_merge"]["source"], "repo")
+
+                # 7. Reset repo to inherit (null) -> falls back to global=True
+                req_r_inh = urllib.request.Request(
+                    f"{base_url}/api/config/auto-merge",
+                    data=json.dumps({"scope": "repo", "repo_path": str(repo), "value": None}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_r_inh, timeout=5) as resp:
+                    r_inh_res = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(r_inh_res["ok"])
+                    self.assertTrue(r_inh_res["auto_merge"]["enabled"])
+                    self.assertEqual(r_inh_res["auto_merge"]["source"], "global")
+                    self.assertIsNone(r_inh_res["auto_merge"]["repo_override"])
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                if proc.stdout is not None:
+                    proc.stdout.close()
+                if proc.stderr is not None:
+                    proc.stderr.close()
+
+        # Verify UI markers and JS syntax validity
+        html_doc = board_ui.BOARD_HTML
+        self.assertIn("data-am-global-toggle", html_doc)
+        self.assertIn("data-am-repo-val", html_doc)
+        self.assertIn("data-am-quick-global", html_doc)
+        self.assertIn("data-am-quick-repo", html_doc)
+        self.assertIn("/api/config/auto-merge", html_doc)
+
+        node_bin = shutil.which("node")
+        if node_bin:
+            script_match = re.search(r"<script>\s*([\s\S]*?)\s*</script>", html_doc)
+            self.assertIsNotNone(script_match)
+            with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=True) as js_tmp:
+                js_tmp.write(script_match.group(1))
+                js_tmp.flush()
+                chk = subprocess.run([node_bin, "--check", js_tmp.name], capture_output=True, text=True, check=False)
+                self.assertEqual(chk.returncode, 0, chk.stderr or chk.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

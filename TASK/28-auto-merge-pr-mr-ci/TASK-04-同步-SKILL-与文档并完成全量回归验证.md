@@ -1,7 +1,7 @@
 # TASK-04：同步 SKILL 与文档并完成全量回归验证
 
 - Issue: 28-auto-merge-pr-mr-ci
-- Status: planned
+- Status: in_progress
 - Depends on: TASK-02, TASK-03
 - Test: python3 -m unittest discover -s tests -v && python3 scripts/release.py --check
 

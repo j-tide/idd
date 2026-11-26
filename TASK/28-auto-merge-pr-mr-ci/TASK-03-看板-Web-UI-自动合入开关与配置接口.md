@@ -1,7 +1,7 @@
 # TASK-03：看板 Web UI 自动合入开关与配置接口
 
 - Issue: 28-auto-merge-pr-mr-ci
-- Status: in_progress
+- Status: done
 - Depends on: TASK-01
 - Test: tests/test_monitor_and_board.py
 
@@ -12,23 +12,25 @@
 - 更新向导文案并在 `tests/test_monitor_and_board.py` 补充接口安全与前端交互标记/语法校验。
 
 ## 验收标准
-- [ ] `GET /api/config` 与 `POST /api/config/auto-merge` 正确读写全局和仓库级开关，CSRF 缺失或非法路径返回 403/400。
-- [ ] 设置弹窗与工作区顶栏均能清晰展示并切换全局及仓库级三态开关。
-- [ ] 前端 `<script>` 通过 `node --check` 语法校验，测试全通过。
+- [x] `GET /api/config` 与 `POST /api/config/auto-merge` 正确读写全局和仓库级开关，CSRF 缺失或非法路径返回 403/400。
+- [x] 设置弹窗与工作区顶栏均能清晰展示并切换全局及仓库级三态开关。
+- [x] 前端 `<script>` 通过 `node --check` 语法校验，测试全通过。
 
 ## 实现注意事项
 - 遵循 `board_ui.py` 现有中英双语（`tr(...)`）与深浅色主题变量规范。
 
 ## 验证方式
-- Command: `python3 -m unittest tests/test_monitor_and_board.py -v`
+- Command: `python3 -m unittest discover -s tests -p "test_monitor_and_board.py" -v`
 - Expected: 全部测试通过。
 
 ## 执行结果
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已完成 `/api/config`、`/api/config/auto-merge` 接口与看板设置弹窗/顶栏开关控件开发，安全校验与 JS 语法检查及全量看板测试（18/18）全部通过。
 
 ### 当前阻塞
 无。
 
 ### 验证记录
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-26 | `python3 -m unittest discover -s tests -p "test_monitor_and_board.py" -v` (含 `node --check` 校验) | passed (18/18) | `tests/test_monitor_and_board.py` |

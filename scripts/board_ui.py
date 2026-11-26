@@ -1778,6 +1778,147 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .sb-policy-btn:hover { background: rgba(251, 191, 36, 0.24); }
     .sb-policy-btn:disabled { opacity: 0.55; cursor: wait; }
 
+    /* Auto-Merge Switch, 3-State Segmented Control & Header Pill */
+    .am-toggle-switch {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .am-toggle-switch input {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .am-toggle-track {
+      width: 34px;
+      height: 20px;
+      border-radius: 999px;
+      background: var(--bg-tile-active);
+      border: 1px solid var(--border-strong);
+      position: relative;
+      transition: background 0.16s ease, border-color 0.16s ease;
+      flex-shrink: 0;
+    }
+    .am-toggle-track::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      transition: transform 0.16s ease, background 0.16s ease;
+    }
+    .am-toggle-switch input:checked + .am-toggle-track {
+      background: var(--green-soft);
+      border-color: rgba(74, 222, 128, 0.45);
+    }
+    .am-toggle-switch input:checked + .am-toggle-track::after {
+      transform: translateX(14px);
+      background: var(--green);
+    }
+    .am-toggle-switch input:disabled + .am-toggle-track {
+      opacity: 0.55;
+      cursor: wait;
+    }
+    .am-toggle-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-dim);
+    }
+    .am-toggle-switch input:checked ~ .am-toggle-label {
+      color: var(--green);
+    }
+    .am-seg-group {
+      display: inline-flex;
+      padding: 2px;
+      gap: 2px;
+      border-radius: 8px;
+      background: var(--bg-well);
+      border: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .am-seg-btn {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--text-dim);
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 560;
+      cursor: pointer;
+      transition: background 0.12s ease, color 0.12s ease;
+    }
+    .am-seg-btn:hover:not(:disabled) {
+      color: var(--text);
+      background: var(--bg-tile);
+    }
+    .am-seg-btn.active {
+      background: var(--bg-tile-active);
+      color: var(--text);
+      font-weight: 650;
+    }
+    .am-seg-btn.active.is-on {
+      background: var(--green-soft);
+      color: var(--green);
+    }
+    .am-seg-btn.active.is-off {
+      background: var(--bg-inset);
+      color: var(--text-dim);
+    }
+    .am-seg-btn:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+    .am-header-pill {
+      appearance: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 26px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg-tile);
+      color: var(--text-dim);
+      font-size: 11.5px;
+      font-weight: 560;
+      cursor: pointer;
+      transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+    }
+    .am-header-pill:hover:not(:disabled) {
+      background: var(--bg-tile-active);
+      color: var(--text);
+      border-color: var(--border-strong);
+    }
+    .am-header-pill.is-on {
+      background: var(--green-soft);
+      border-color: rgba(74, 222, 128, 0.36);
+      color: var(--green);
+    }
+    .am-header-pill:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+    .am-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-faint);
+      flex-shrink: 0;
+    }
+    .am-header-pill.is-on .am-dot {
+      background: var(--green);
+      box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
+    }
+
     /* Setup & Quickstart Onboarding Wizard Modal (Clean Minimalist Hierarchy) */
     .modal-overlay {
       position: fixed;
@@ -2325,6 +2466,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         repoInitRunning: {},
         repoInitErrors: {},
         repoInitBannerDismissed: false,
+        autoMergeSaving: {},
         statusPopoverOpen: false,
         statusPopoverForge: "",
         lastForgeStatusSig: "",
@@ -3384,7 +3526,17 @@ BOARD_HTML = r"""<!DOCTYPE html>
                   "<span>" + (activeBusy ? tr("初始化中...", "Applying...") : (ari.error ? tr("策略初始化失败 · 点击重试", "Policy Init Failed · Retry") : tr("待初始化策略 · 点击执行", "Policy Pending · Apply"))) + "</span>" +
                 "</button>"
               : "";
-            linkWrap.innerHTML = chipHtml + policyHdrBtn;
+            const am = activeRepo.auto_merge || {};
+            const amEnabled = Boolean(am.enabled);
+            const amBusy = Boolean(state.autoMergeSaving[activeRepo.repo_path]);
+            const amSrc = am.source === "repo" ? tr("仓库", "Repo") : tr("全局", "Global");
+            const amHdrBtn = (activeRepo.forge === "github" || activeRepo.forge === "gitlab")
+              ? '<button class="am-header-pill ' + (amEnabled ? "is-on" : "") + '" type="button" data-am-quick-repo="' + escapeHtml(activeRepo.repo_path) + '" data-am-next="' + (amEnabled ? "0" : "1") + '" ' + (amBusy ? "disabled" : "") + ' title="' + escapeHtml(tr("切换当前仓库 PR/MR 自动准入与自动合入开关（可在设置中恢复跟随全局）", "Toggle repo PR/MR auto-merge (or reset to Inherit in Setup)")) + '">' +
+                  '<span class="am-dot"></span>' +
+                  "<span>" + (amEnabled ? tr("自动合入: 开 (" + amSrc + ")", "Auto-Merge: ON (" + amSrc + ")") : tr("自动合入: 关", "Auto-Merge: OFF")) + "</span>" +
+                "</button>"
+              : "";
+            linkWrap.innerHTML = chipHtml + amHdrBtn + policyHdrBtn;
           }
         } else {
           if (titleEl) titleEl.textContent = tr("全局工作区", "Global Workspace");
@@ -3396,7 +3548,15 @@ BOARD_HTML = r"""<!DOCTYPE html>
             scopeEl.style.display = "inline-flex";
             scopeEl.textContent = snap.global ? tr("全局", "Global") : tr("单仓库", "Single Repo");
           }
-          if (linkWrap) linkWrap.innerHTML = "";
+          if (linkWrap) {
+            const globalAm = Boolean(snap.config && snap.config.auto_merge);
+            const gBusy = Boolean(state.autoMergeSaving.__global__);
+            linkWrap.innerHTML =
+              '<button class="am-header-pill ' + (globalAm ? "is-on" : "") + '" type="button" data-am-quick-global="1" data-am-next="' + (globalAm ? "0" : "1") + '" ' + (gBusy ? "disabled" : "") + ' title="' + escapeHtml(tr("切换全局默认 PR/MR 自动准入与自动合入开关", "Toggle global default PR/MR auto-merge switch")) + '">' +
+                '<span class="am-dot"></span>' +
+                "<span>" + (globalAm ? tr("全局自动合入: 开", "Global Auto-Merge: ON") : tr("全局自动合入: 关", "Global Auto-Merge: OFF")) + "</span>" +
+              "</button>";
+          }
         }
       }
 
@@ -4467,6 +4627,57 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
       }
 
+      async function setAutoMergeSetting(scope, repoPath, value) {
+        const busyKey = scope === "global" ? "__global__" : (repoPath || "");
+        if (!busyKey || state.autoMergeSaving[busyKey]) return false;
+        state.autoMergeSaving[busyKey] = true;
+        renderAll(true);
+        if (state.setupOpen) renderSetupModal();
+        try {
+          const payload = scope === "global"
+            ? { scope: "global", enabled: Boolean(value) }
+            : { scope: "repo", repo_path: repoPath, value: value };
+          const res = await fetch("/api/config/auto-merge", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-IDD-Request": "1"
+            },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) {
+            throw new Error(data.error || ("HTTP " + res.status));
+          }
+          if (scope === "global") {
+            showToast(
+              data.auto_merge
+                ? tr("已开启全局默认 PR/MR 自动准入合入", "Enabled global default PR/MR auto-merge")
+                : tr("已关闭全局默认 PR/MR 自动准入合入", "Disabled global default PR/MR auto-merge")
+            );
+          } else if (value === null) {
+            showToast(tr("已恢复跟随全局自动合入开关", "Repository auto-merge reset to inherit global"));
+          } else {
+            showToast(
+              value
+                ? tr("已为该仓库开启自动准入合入", "Enabled auto-merge for repository")
+                : tr("已为该仓库关闭自动准入合入", "Disabled auto-merge for repository")
+            );
+          }
+          await fetchSnapshot(false);
+          renderAll(true);
+          if (state.setupOpen) renderSetupModal();
+          return true;
+        } catch (err) {
+          showToast(tr("保存开关失败: ", "Failed to save setting: ") + (err.message || ""), "err");
+          return false;
+        } finally {
+          delete state.autoMergeSaving[busyKey];
+          renderAll(true);
+          if (state.setupOpen) renderSetupModal();
+        }
+      }
+
       async function removeHostToken(targetHost) {
         state.authSavingHost = targetHost;
         if (state.setupOpen) renderSetupModal();
@@ -4587,10 +4798,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
               step: "04",
               title: tr("CI 全绿后线性 Squash 合入", "CI Self-Healing & Squash Land"),
               desc: tr(
-                "自动提 PR / MR 并监控流水线（失败会自动拉取日志修复），全绿后清理临时 TASK 并以直线历史合入 main。",
-                "Opens PR/MR, auto-fetches failing CI logs for fixes, cleans temporary TASK files, and squash-merges linearly into main."
+                "自动提 PR / MR 并监控流水线（失败会自动拉取日志修复），全绿后清理临时 TASK 并以直线历史合入 main；可在顶栏或配置开启「自动合入」免口头确认。",
+                "Opens PR/MR, auto-fetches failing CI logs for fixes, cleans temporary TASK files, and squash-merges linearly into main. Enable Auto-Merge to skip manual confirmation."
               ),
-              cmd: tr('对 Agent 说："合入 #42"', 'Say: "Land #42"')
+              cmd: tr('对 Agent 说："合入 #42" 或开启自动合入开关', 'Say: "Land #42" or toggle Auto-Merge')
             }
           ];
           bodyHtml =
@@ -4779,7 +4990,59 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 "</div>" +
               "</div>";
 
-          bodyHtml = hostCards + autoCheckHtml + policyRowsHtml + customForm;
+          const globalAm = Boolean(state.snapshot && state.snapshot.config && state.snapshot.config.auto_merge);
+          const gAmBusy = Boolean(state.autoMergeSaving.__global__);
+          const autoMergeRepoRows = remoteRepos.length === 0
+            ? ""
+            : '<div class="policy-repo-list">' +
+                remoteRepos.map((r) => {
+                  const am = r.auto_merge || {};
+                  const ovr = am.repo_override;
+                  const mode = ovr === true ? "on" : (ovr === false ? "off" : "inherit");
+                  const eff = Boolean(am.enabled);
+                  const rBusy = Boolean(state.autoMergeSaving[r.repo_path]);
+                  const effBadge = eff
+                    ? '<span class="badge tone-success">' + tr("生效: 开", "Active: ON") + (am.source === "repo" ? tr(" · 仓库", " · Repo") : tr(" · 全局", " · Global")) + "</span>"
+                    : '<span class="badge">' + tr("生效: 关", "Active: OFF") + "</span>";
+                  return (
+                    '<div class="policy-repo-row">' +
+                      '<div style="min-width:0;flex:1;">' +
+                        '<div style="display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;">' +
+                          '<span class="host-ic sm ' + (r.forge === "gitlab" ? "is-gitlab" : "is-github") + '">' + forgeIcon(r.forge, 12) + "</span>" +
+                          "<span>" + escapeHtml(r.repo_name) + "</span>" +
+                          effBadge +
+                        "</div>" +
+                      "</div>" +
+                      '<div class="am-seg-group" role="group" aria-label="' + escapeHtml(r.repo_name) + '">' +
+                        '<button class="am-seg-btn ' + (mode === "inherit" ? "active" : "") + '" type="button" data-am-repo-path="' + escapeHtml(r.repo_path) + '" data-am-repo-val="inherit" ' + (rBusy ? "disabled" : "") + ">" + tr("跟随全局", "Inherit") + "</button>" +
+                        '<button class="am-seg-btn ' + (mode === "on" ? "active is-on" : "") + '" type="button" data-am-repo-path="' + escapeHtml(r.repo_path) + '" data-am-repo-val="on" ' + (rBusy ? "disabled" : "") + ">" + tr("开", "ON") + "</button>" +
+                        '<button class="am-seg-btn ' + (mode === "off" ? "active is-off" : "") + '" type="button" data-am-repo-path="' + escapeHtml(r.repo_path) + '" data-am-repo-val="off" ' + (rBusy ? "disabled" : "") + ">" + tr("关", "OFF") + "</button>" +
+                      "</div>" +
+                    "</div>"
+                  );
+                }).join("") +
+              "</div>";
+
+          const autoMergeSectionHtml =
+            '<div class="policy-section">' +
+              '<div class="policy-section-hdr">' +
+                '<span style="font-size:12.5px;font-weight:600;color:var(--text);">' + tr("PR/MR 自动准入与自动合入（auto_merge）", "PR/MR Auto-Merge Switch (auto_merge)") + "</span>" +
+                '<label class="am-toggle-switch">' +
+                  '<input type="checkbox" data-am-global-toggle="1" ' + (globalAm ? "checked" : "") + " " + (gAmBusy ? "disabled" : "") + " />" +
+                  '<span class="am-toggle-track"></span>' +
+                  '<span class="am-toggle-label">' + (globalAm ? tr("全局默认: 开", "Global Default: ON") : tr("全局默认: 关", "Global Default: OFF")) + "</span>" +
+                "</label>" +
+              "</div>" +
+              '<div style="font-size:11.5px;color:var(--text-dim);line-height:1.45;">' +
+                tr(
+                  "默认关闭。开启后，Agent 运行 `idd pr` / `idd mr` 将自动等待 CI 结算并在通过（或无远端 CI 且本地测试通过）后直接 Squash 直线合入；遇 CI 2 轮修复失败、Rebase 冲突或 evidence/ 含附件时自动暂停。",
+                  "Disabled by default. When enabled, `idd pr` / `idd mr` waits for CI settlement and squash-lands linearly (including repos without remote CI after local tests pass). Pauses safely on CI failure, rebase conflicts, or evidence attachments."
+                ) +
+              "</div>" +
+              autoMergeRepoRows +
+            "</div>";
+
+          bodyHtml = hostCards + autoCheckHtml + policyRowsHtml + autoMergeSectionHtml + customForm;
         }
 
         const hdrTitle = isGuide
@@ -4974,7 +5237,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
           it: state.inspectorTab,
           ri: state.repoInitRunning,
           rie: state.repoInitErrors,
-          ribd: state.repoInitBannerDismissed
+          ribd: state.repoInitBannerDismissed,
+          cfg: snap.config,
+          ams: state.autoMergeSaving
         });
       }
 
@@ -5204,6 +5469,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
       document.getElementById("setup-modal").addEventListener("change", (e) => {
         if (e.target && e.target.matches("[data-auto-repo-init-toggle]")) {
           state.autoRepoInit = Boolean(e.target.checked);
+          return;
+        }
+        if (e.target && e.target.matches("[data-am-global-toggle]")) {
+          setAutoMergeSetting("global", "", Boolean(e.target.checked));
         }
       });
 
@@ -5239,6 +5508,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const applyPolicyBtn = e.target.closest("[data-apply-repo-init]");
         if (applyPolicyBtn) {
           await applyRepoInit(applyPolicyBtn.getAttribute("data-apply-repo-init") || "");
+          return;
+        }
+        const amSegBtn = e.target.closest("[data-am-repo-path][data-am-repo-val]");
+        if (amSegBtn) {
+          const rp = amSegBtn.getAttribute("data-am-repo-path") || "";
+          const rawVal = amSegBtn.getAttribute("data-am-repo-val") || "inherit";
+          const nextVal = rawVal === "on" ? true : (rawVal === "off" ? false : null);
+          await setAutoMergeSetting("repo", rp, nextVal);
           return;
         }
         const tabBtn = e.target.closest("[data-setup-tab]");
@@ -5311,6 +5588,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const applyBtn = e.target.closest("[data-apply-repo-init]");
         if (applyBtn) {
           applyRepoInit(applyBtn.getAttribute("data-apply-repo-init") || "");
+          return;
+        }
+        const qGlobal = e.target.closest("[data-am-quick-global]");
+        if (qGlobal) {
+          const nextOn = qGlobal.getAttribute("data-am-next") === "1";
+          setAutoMergeSetting("global", "", nextOn);
+          return;
+        }
+        const qRepo = e.target.closest("[data-am-quick-repo]");
+        if (qRepo) {
+          const rp = qRepo.getAttribute("data-am-quick-repo") || "";
+          const nextOn = qRepo.getAttribute("data-am-next") === "1";
+          setAutoMergeSetting("repo", rp, nextOn);
         }
       });
 
@@ -5765,6 +6055,17 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"ok": True, "version": self.version})
             return
 
+        if parsed.path == "/api/config":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "auto_merge": monitor.get_global_auto_merge(),
+                    "config_path": str(monitor.get_config_path()),
+                },
+            )
+            return
+
         if parsed.path == "/api/auth/status":
             try:
                 auth_status = monitor.collect_auth_hosts_status(root=self.root, global_mode=self.global_mode)
@@ -5950,6 +6251,62 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
                     self._refresh_cached_repos(timeout=1.5)
             auth_status = monitor.collect_auth_hosts_status(root=self.root, global_mode=self.global_mode)
             self._send_json(HTTPStatus.OK, {"ok": True, "removed": removed, "auth": auth_status})
+            return
+
+        if parsed.path == "/api/config/auto-merge":
+            payload = self._read_json_body()
+            if payload is None:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "请求格式无效"})
+                return
+            scope = str(payload.get("scope") or "").strip().lower()
+            if not scope and payload.get("global") is True:
+                scope = "global"
+            if scope == "global":
+                raw_enabled = payload.get("enabled")
+                if not isinstance(raw_enabled, bool):
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "enabled 必须为布尔值"})
+                    return
+                cfg = monitor.set_global_auto_merge(raw_enabled)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "ok": True,
+                        "scope": "global",
+                        "auto_merge": bool(cfg["auto_merge"]),
+                        "config_path": str(monitor.get_config_path()),
+                    },
+                )
+                return
+            if scope == "repo":
+                raw_repo_path = str(payload.get("repo_path") or "").strip()
+                if not raw_repo_path:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "缺少 repo_path 参数"})
+                    return
+                try:
+                    req_path = Path(raw_repo_path).expanduser().resolve()
+                except OSError:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "无效的仓库路径"})
+                    return
+                target_repos = [p.expanduser().resolve() for p in self._target_repos()]
+                if req_path not in target_repos:
+                    self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "仓库不在当前监控白名单内"})
+                    return
+                val = payload.get("value")
+                if val is not None and not isinstance(val, bool):
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "value 必须为 true、false 或 null"})
+                    return
+                resolved = monitor.set_repo_auto_merge_override(req_path, val)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "ok": True,
+                        "scope": "repo",
+                        "repo_path": str(req_path),
+                        "auto_merge": resolved,
+                    },
+                )
+                return
+            self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "scope 必须为 global 或 repo"})
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
