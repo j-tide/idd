@@ -52,6 +52,7 @@ class MockGitLabState:
             "merge_method": "merge",
             "squash_option": "default_off",
             "remove_source_branch_after_merge": True,
+            "squash_commit_template": "%{title}",
         }
         self.last_merge_payload: dict | None = None
         self.stale_get_polls: int = 0
@@ -60,6 +61,7 @@ class MockGitLabState:
         self.mr_get_calls: int = 0
         self.merge_without_squash = False
         self.defer_auto_merge = False
+        self.fail_repo_init_put: bool = False
 
     def origin_sha(self, branch: str) -> str:
         proc = subprocess.run(
@@ -267,7 +269,10 @@ def make_handler(state: MockGitLabState):
             proj_prefix = f"/api/v4/projects/{state.encoded_project}"
 
             if path == proj_prefix:
-                for key in ("merge_method", "squash_option", "remove_source_branch_after_merge"):
+                if state.fail_repo_init_put:
+                    self._send_json(403, {"message": "403 Forbidden"})
+                    return
+                for key in ("merge_method", "squash_option", "remove_source_branch_after_merge", "squash_commit_template"):
                     if key in body:
                         state.project_settings[key] = body[key]
                 self._send_json(200, state.project_settings)
@@ -894,23 +899,52 @@ class TestGitLabForge(unittest.TestCase):
 
                 run_idd("auth", "login", f"http://127.0.0.1:{port}", "--token", "glpat-secret")
 
+                # 1. Default first-time GitLab onboarding auto-applies ff + always + squash_commit_template
                 first_out = run_idd("issue", "create", "--title", "feat: Init check", "--body", "desc").stdout
-                self.assertIn("💡 首次接管提示", first_out)
-                self.assertIn("GitLab", first_out)
-                self.assertIn("merge_method=merge（建议 ff）", first_out)
-                self.assertIn("squash_option=default_off（建议 always）", first_out)
-                self.assertIn("idd repo-init --apply", first_out)
+                self.assertIn("✅ 首次接管已自动初始化 GitLab 仓库线性 Squash 策略与提交模板", first_out)
+                self.assertEqual(state.project_settings["merge_method"], "ff")
+                self.assertEqual(state.project_settings["squash_option"], "always")
+                self.assertFalse(state.project_settings["remove_source_branch_after_merge"])
+                self.assertEqual(state.project_settings["squash_commit_template"], "%{title}\n\n%{description}")
 
                 repos_file = config_dir / "repos.json"
                 repos_data = json.loads(repos_file.read_text(encoding="utf-8"))
-                self.assertEqual(repos_data["repos"][0]["repo_init_state"], "prompted")
+                self.assertEqual(repos_data["repos"][0]["repo_init_state"], "aligned")
 
                 second_out = run_idd("start", "1", "--slug", "init-check").stdout
-                self.assertNotIn("💡 首次接管提示", second_out)
+                self.assertNotIn("首次接管", second_out)
 
-                run_idd("repo-init", "--apply")
+                # 2. Reset settings + state and simulate `--no-repo-init` skip -> marks `pending` with mismatches
+                state.project_settings.update({
+                    "merge_method": "merge",
+                    "squash_option": "default_off",
+                    "remove_source_branch_after_merge": True,
+                    "squash_commit_template": "%{title}",
+                })
+                repos_file.unlink()
+                skip_out = run_idd("repos", "add", ".", "--no-repo-init").stdout
+                self.assertIn("已跳过自动初始化 GitLab 仓库线性 Squash 策略", skip_out)
+                self.assertIn("merge_method=merge（建议 ff）", skip_out)
+                self.assertIn("squash_commit_template=", skip_out)
+                repos_skipped = json.loads(repos_file.read_text(encoding="utf-8"))
+                self.assertEqual(repos_skipped["repos"][0]["repo_init_state"], "pending")
+
+                # 3. Reset state and simulate 403 permission error -> non-blocking `pending` + error, recoverable via `repo-init --apply`
+                repos_file.unlink()
+                state.fail_repo_init_put = True
+                fail_out = run_idd("repos", "add", ".").stdout
+                self.assertIn("未完成", fail_out)
+                self.assertIn("403", fail_out)
+                repos_failed = json.loads(repos_file.read_text(encoding="utf-8"))
+                self.assertEqual(repos_failed["repos"][0]["repo_init_state"], "pending")
+                self.assertIn("403", repos_failed["repos"][0]["repo_init_error"])
+
+                state.fail_repo_init_put = False
+                applied = run_idd("repo-init", "--apply").stdout
+                self.assertIn("squash_commit_template: %{title}", applied)
                 repos_after = json.loads(repos_file.read_text(encoding="utf-8"))
                 self.assertEqual(repos_after["repos"][0]["repo_init_state"], "aligned")
+                self.assertNotIn("repo_init_error", repos_after["repos"][0])
             finally:
                 server.shutdown()
                 server.server_close()

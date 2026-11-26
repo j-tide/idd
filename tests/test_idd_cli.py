@@ -258,10 +258,16 @@ if args[:2] == ["run", "view"]:
 
 if args[:1] == ["api"]:
     if "PATCH" in args:
+        if state.get("fail_repo_init_patch"):
+            save_state(state)
+            print("gh: 403 Forbidden (Must have admin rights to Repository.)", file=sys.stderr)
+            sys.exit(1)
         state["repo_settings"].update({
             "allow_merge_commit": False,
             "allow_squash_merge": True,
             "delete_branch_on_merge": False,
+            "squash_merge_commit_title": "PR_TITLE",
+            "squash_merge_commit_message": "PR_BODY",
         })
     save_state(state)
     print(json.dumps(state["repo_settings"]))
@@ -317,6 +323,8 @@ class GitHubHarness:
                 "allow_squash_merge": True,
                 "allow_rebase_merge": True,
                 "delete_branch_on_merge": False,
+                "squash_merge_commit_title": "COMMIT_OR_PR_TITLE",
+                "squash_merge_commit_message": "COMMIT_MESSAGES",
                 "allow_auto_merge": True,
             },
             "calls": [],
@@ -1159,60 +1167,136 @@ class TestIddCli(unittest.TestCase):
     def test_first_time_repo_init_hint_prompts_once_and_marks_aligned(self) -> None:
         self.assertEqual(
             idd_cli.evaluate_repo_init_settings(
-                {"forge": "github", "settings": {"allow_merge_commit": False, "allow_squash_merge": True, "delete_branch_on_merge": False}}
+                {
+                    "forge": "github",
+                    "settings": {
+                        "allow_merge_commit": False,
+                        "allow_squash_merge": True,
+                        "delete_branch_on_merge": False,
+                        "squash_merge_commit_title": "PR_TITLE",
+                        "squash_merge_commit_message": "PR_BODY",
+                    },
+                }
             ),
             (True, []),
         )
+        gh_bad, gh_mm = idd_cli.evaluate_repo_init_settings(
+            {
+                "forge": "github",
+                "settings": {
+                    "allow_merge_commit": False,
+                    "allow_squash_merge": True,
+                    "delete_branch_on_merge": False,
+                    "squash_merge_commit_title": "COMMIT_OR_PR_TITLE",
+                    "squash_merge_commit_message": "COMMIT_MESSAGES",
+                },
+            }
+        )
+        self.assertFalse(gh_bad)
+        self.assertIn("squash_merge_commit_title=COMMIT_OR_PR_TITLE（建议 PR_TITLE）", gh_mm)
+        self.assertIn("squash_merge_commit_message=COMMIT_MESSAGES（建议 PR_BODY）", gh_mm)
+
         self.assertEqual(
             idd_cli.evaluate_repo_init_settings(
-                {"forge": "gitlab", "settings": {"merge_method": "ff", "squash_option": "always", "remove_source_branch_after_merge": False}}
+                {
+                    "forge": "gitlab",
+                    "settings": {
+                        "merge_method": "ff",
+                        "squash_option": "always",
+                        "remove_source_branch_after_merge": False,
+                        "squash_commit_template": "%{title}\n\n%{description}",
+                    },
+                }
             ),
             (True, []),
         )
+        gl_bad, gl_mm = idd_cli.evaluate_repo_init_settings(
+            {
+                "forge": "gitlab",
+                "settings": {
+                    "merge_method": "ff",
+                    "squash_option": "always",
+                    "remove_source_branch_after_merge": False,
+                    "squash_commit_template": "%{title}",
+                },
+            }
+        )
+        self.assertFalse(gl_bad)
+        self.assertTrue(any("squash_commit_template=" in m for m in gl_mm))
+
         self.assertEqual(
             idd_cli.evaluate_repo_init_settings({"forge": "gitlab", "settings": {"merge_method": None, "squash_option": None}}),
             (True, []),
         )
 
-        # 1. Unaligned GitHub repo prompts once on first onboarding command, then stops repeating and updates on apply
+        # 1. Default first-time GitHub onboarding auto-applies `repo-init --apply` including PR_TITLE / PR_BODY
         with tempfile.TemporaryDirectory() as tmp:
             h = GitHubHarness(Path(tmp))
             first_out = h.run_idd("issue", "create", "--title", "feat: Test onboarding", "--body", "desc").stdout
-            self.assertIn("💡 首次接管提示", first_out)
-            self.assertIn("allow_merge_commit=true（建议 false）", first_out)
-            self.assertIn("idd repo-init --apply", first_out)
+            self.assertIn("✅ 首次接管已自动初始化 GitHub 仓库线性 Squash 策略与提交模板", first_out)
 
             repos_file = h.root / "idd-config" / "repos.json"
             repos_data = json.loads(repos_file.read_text(encoding="utf-8"))
-            self.assertEqual(repos_data["repos"][0]["repo_init_state"], "prompted")
+            self.assertEqual(repos_data["repos"][0]["repo_init_state"], "aligned")
+
+            settings_after = h.load_state()["repo_settings"]
+            self.assertFalse(settings_after["allow_merge_commit"])
+            self.assertEqual(settings_after["squash_merge_commit_title"], "PR_TITLE")
+            self.assertEqual(settings_after["squash_merge_commit_message"], "PR_BODY")
 
             second_out = h.run_idd("start", "42", "--slug", "export-csv").stdout
-            self.assertNotIn("💡 首次接管提示", second_out)
+            self.assertNotIn("首次接管", second_out)
 
-            h.run_idd("repo-init", "--apply")
-            repos_after = json.loads(repos_file.read_text(encoding="utf-8"))
-            self.assertEqual(repos_after["repos"][0]["repo_init_state"], "aligned")
-
-        # 2. Already-aligned GitHub repo skips prompt and records `aligned`
+        # 2. `--no-repo-init` skips auto-apply, persists `pending`, shows in `idd repos list`, and clears on `repo-init --apply`
         with tempfile.TemporaryDirectory() as tmp:
             h2 = GitHubHarness(Path(tmp))
-            h2.state["repo_settings"].update(
-                {"allow_merge_commit": False, "allow_squash_merge": True, "delete_branch_on_merge": False}
-            )
-            h2.save_state()
-            start_out = h2.run_idd("start", "42", "--slug", "export-csv").stdout
-            self.assertNotIn("💡 首次接管提示", start_out)
-            repos_data2 = json.loads((h2.root / "idd-config" / "repos.json").read_text(encoding="utf-8"))
-            self.assertEqual(repos_data2["repos"][0]["repo_init_state"], "aligned")
+            skipped_out = h2.run_idd("issue", "create", "--title", "feat: Skip init", "--body", "desc", "--no-repo-init").stdout
+            self.assertIn("已跳过自动初始化 GitHub 仓库线性 Squash 策略", skipped_out)
+            self.assertIn("allow_merge_commit=true（建议 false）", skipped_out)
 
-        # 3. `--json` mode keeps valid JSON with `repo_init_hint`
+            repos_file2 = h2.root / "idd-config" / "repos.json"
+            repos_data2 = json.loads(repos_file2.read_text(encoding="utf-8"))
+            self.assertEqual(repos_data2["repos"][0]["repo_init_state"], "pending")
+            self.assertIn("allow_merge_commit=true（建议 false）", repos_data2["repos"][0]["repo_init_mismatches"])
+
+            repos_list = h2.run_idd("repos", "list").stdout
+            self.assertIn("[待初始化策略: idd repo-init --apply]", repos_list)
+
+            h2.run_idd("repo-init", "--apply")
+            repos_after2 = json.loads(repos_file2.read_text(encoding="utf-8"))
+            self.assertEqual(repos_after2["repos"][0]["repo_init_state"], "aligned")
+            self.assertNotIn("repo_init_mismatches", repos_after2["repos"][0])
+
+        # 3. 403 / permission failure on auto-apply does NOT block `issue create` and persists `pending` + error
         with tempfile.TemporaryDirectory() as tmp:
             h3 = GitHubHarness(Path(tmp))
+            h3.state["fail_repo_init_patch"] = True
+            h3.save_state()
+            fail_out = h3.run_idd("issue", "create", "--title", "feat: Perm fail", "--body", "desc").stdout
+            self.assertIn("已创建 Issue #50", fail_out)
+            self.assertIn("未完成", fail_out)
+            self.assertIn("403 Forbidden", fail_out)
+
+            repos_file3 = h3.root / "idd-config" / "repos.json"
+            repos_data3 = json.loads(repos_file3.read_text(encoding="utf-8"))
+            self.assertEqual(repos_data3["repos"][0]["repo_init_state"], "pending")
+            self.assertIn("403 Forbidden", repos_data3["repos"][0]["repo_init_error"])
+
+            h3.state["fail_repo_init_patch"] = False
+            h3.save_state()
+            h3.run_idd("repo-init", "--apply")
+            repos_after3 = json.loads(repos_file3.read_text(encoding="utf-8"))
+            self.assertEqual(repos_after3["repos"][0]["repo_init_state"], "aligned")
+            self.assertNotIn("repo_init_error", repos_after3["repos"][0])
+
+        # 4. `--json` mode keeps valid JSON with `repo_init_hint`
+        with tempfile.TemporaryDirectory() as tmp:
+            h4 = GitHubHarness(Path(tmp))
             created_json = json.loads(
-                h3.run_idd("issue", "create", "--title", "feat: JSON onboarding", "--body", "desc", "--json").stdout
+                h4.run_idd("issue", "create", "--title", "feat: JSON onboarding", "--body", "desc", "--json").stdout
             )
+            self.assertEqual(created_json["repo_init_hint"]["status"], "applied")
             self.assertEqual(created_json["repo_init_hint"]["command"], "idd repo-init --apply")
-            self.assertIn("allow_merge_commit=true（建议 false）", created_json["repo_init_hint"]["mismatches"])
 
     def test_merge_progress_block_ignores_inline_and_fenced_markers(self) -> None:
         original = (
