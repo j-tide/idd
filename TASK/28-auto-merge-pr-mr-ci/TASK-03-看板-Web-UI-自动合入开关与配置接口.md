@@ -1,7 +1,7 @@
 # TASK-03：看板 Web UI 自动合入开关与配置接口
 
 - Issue: 28-auto-merge-pr-mr-ci
-- Status: planned
+- Status: in_progress
 - Depends on: TASK-01
 - Test: tests/test_monitor_and_board.py
 
