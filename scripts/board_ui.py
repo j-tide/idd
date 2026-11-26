@@ -1432,14 +1432,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--amber);
       font-size: 12px;
     }
+    #top-alerts-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    #top-alerts-wrap:empty { display: none; }
     .auth-alert-box {
       display: flex;
       flex-direction: column;
       gap: 10px;
-      padding: 12px 16px;
-      border-radius: 12px;
-      border: 1px solid var(--border-strong);
-      border-left: 3px solid var(--amber);
+      padding: 13px 16px;
+      border-radius: var(--radius-card);
+      border: 1px solid var(--border);
       background: var(--bg-card);
       color: var(--text);
       font-size: 12.5px;
@@ -1457,6 +1462,20 @@ BOARD_HTML = r"""<!DOCTYPE html>
       gap: 8px;
       flex-wrap: wrap;
       min-width: 0;
+    }
+    .alert-ic {
+      width: 26px;
+      height: 26px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+      background: var(--amber-soft);
+      border: 1px solid rgba(251, 191, 36, 0.26);
+      color: var(--amber);
+    }
+    html[data-theme="light"] .alert-ic {
+      border-color: rgba(217, 119, 6, 0.22);
     }
     .auth-alert-form {
       display: flex;
@@ -1530,6 +1549,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
       justify-content: space-between;
       gap: 10px;
       flex-wrap: wrap;
+    }
+    .auth-alert-box .policy-repo-row {
+      padding: 9px 12px;
+      border-radius: 10px;
+      background: var(--bg-well);
+      border-color: var(--border-subtle);
     }
     .btn-warn {
       background: var(--amber-soft);
@@ -4431,9 +4456,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
             '<div class="auth-alert-box">' +
               '<div class="auth-alert-top">' +
                 '<div class="auth-alert-main">' +
-                  icon("alertTriangle", 14) +
-                  "<strong>" + tr("待初始化仓库线性 Squash 合入策略 (" + pendingPolicyRepos.length + ")", "Repository Linear Squash Policy Pending (" + pendingPolicyRepos.length + ")") + "</strong>" +
-                  '<span style="font-size:11.5px;color:var(--text-dim);">' + tr("暂跳过或失败时仍可在左侧仓库栏与设置向导点击执行", "You can still trigger initialization anytime from the sidebar or Setup") + "</span>" +
+                  '<span class="alert-ic" aria-hidden="true">' + icon("alertTriangle", 13) + "</span>" +
+                  "<strong>" + tr("待初始化仓库线性 Squash 合入策略", "Repository Linear Squash Policy Pending") + "</strong>" +
+                  '<span class="badge tone-warning num">' + pendingPolicyRepos.length + "</span>" +
+                  '<span style="font-size:11.5px;color:var(--text-faint);">' + tr("暂跳过或失败时仍可在左侧仓库栏与设置向导点击执行", "You can still trigger initialization anytime from the sidebar or Setup") + "</span>" +
                 "</div>" +
                 '<div style="display:inline-flex;align-items:center;gap:6px;">' +
                   (pendingPolicyRepos.length > 1
