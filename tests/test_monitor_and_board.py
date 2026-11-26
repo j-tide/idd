@@ -1967,11 +1967,12 @@ class TestMonitorAndBoard(unittest.TestCase):
 
     def test_board_redesigned_layout_removes_worktree_rail_and_surfaces_cleanable_worktrees(self) -> None:
         html_doc = board_ui.BOARD_HTML
-        for removed_token in ("wt-rail-list", "sb-hdr-wts", "sb-filters", "并行目录", "view-cockpit", "workbench-grid", "console-sticky", "renderCockpitView"):
+        for removed_token in ("wt-rail-list", "sb-hdr-wts", "sb-filters", "并行目录", "view-cockpit", "workbench-grid", "console-sticky", "renderCockpitView", "sb-plat-tag"):
             self.assertNotIn(removed_token, html_doc)
+        self.assertIsNone(re.search(r">\s*(?:GH|GL)\s*<", html_doc))
         for view_id in ("view-repos", "view-kanban", "view-list"):
             self.assertIn(view_id, html_doc)
-        for layout_token in ("repo-section", "repo-grid", "telemetry-strip", "toggle-cleanup", "cleanup-drawer"):
+        for layout_token in ("repo-section", "repo-grid", "ws-top-deck", "telemetry-strip", "bento-kpis", "bento-card", "stat-strip", "align-items: stretch;", ".workspace > #top-alerts-wrap:empty", "toggle-cleanup", "toggle-ready", "cleanup-drawer"):
             self.assertIn(layout_token, html_doc)
 
         node_bin = shutil.which("node")
@@ -2023,6 +2024,7 @@ class TestMonitorAndBoard(unittest.TestCase):
             "localizeAgo",
             "renderPulseSummary",
             "renderSegBar",
+            "renderSidebarReposAndWorktrees",
             "renderKpis",
             "resolvePrimaryLink",
             "renderPrimaryLinkBtn",
@@ -2050,6 +2052,9 @@ class TestMonitorAndBoard(unittest.TestCase):
                 panelEl.classList._p = panelEl;
                 const els = {
                   kpis: { innerHTML: '' },
+                  'bento-kpis': { innerHTML: '' },
+                  'repo-pills': { innerHTML: '' },
+                  'sb-repo-cnt': { textContent: '' },
                   'inspector-overlay': overlayEl,
                   'inspector-panel': panelEl
                 };
@@ -2057,7 +2062,8 @@ class TestMonitorAndBoard(unittest.TestCase):
                 const ICONS = {
                   github: '<gh/>', gitlab: '<gl/>', terminal: '<tm/>', externalLink: '<ext/>',
                   copy: '<cp/>', folder: '<fd/>', branch: '<br/>', trash: '<tr/>',
-                  chevronRight: '<cr/>', chevronDown: '<cd/>', x: '<x/>'
+                  chevronRight: '<cr/>', chevronDown: '<cd/>', x: '<x/>',
+                  radar: '<rd/>', gear: '<gr/>', checkCircle: '<cc/>', queue: '<qu/>', sparkle: '<sp/>', layers: '<ly/>'
                 };
                 const state = {
                   lang: 'zh',
@@ -2066,6 +2072,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                   search: '',
                   worktreeOnly: false,
                   alertsOnly: false,
+                  readyOnly: false,
                   todoOnly: false,
                   cleanupOnly: false,
                   cleanupDrawerOpen: false,
@@ -2175,12 +2182,28 @@ class TestMonitorAndBoard(unittest.TestCase):
 
                 renderKpis(state.snapshot);
                 assert(els.kpis.innerHTML.includes('data-kpi-action="toggle-cleanup"'));
-                assert(els.kpis.innerHTML.includes('可清理目录</span><span class="pill-cnt">1</span>'));
+                assert(els.kpis.innerHTML.includes('<span class="stat-lbl">可清理</span><span class="stat-val">1</span>'));
+                assert(els.kpis.innerHTML.includes('data-kpi-action="toggle-ready"'));
+                assert(els.kpis.innerHTML.includes('<span class="stat-lbl">待合入</span><span class="stat-val">1</span>'));
+                assert(els['bento-kpis'].innerHTML.includes('Issue 状态'));
+                assert(els['bento-kpis'].innerHTML.includes('TASK 拆分进度'));
+                assert(els['bento-kpis'].innerHTML.includes('PR / MR 与合入'));
+                assert(els['bento-kpis'].innerHTML.includes('bento-segs'));
+                assert(els['bento-kpis'].innerHTML.includes('bento-slot'));
+
+                renderSidebarReposAndWorktrees(state.snapshot);
+                assert(!els['repo-pills'].innerHTML.includes('>GH<'));
+                assert(!els['repo-pills'].innerHTML.includes('>GL<'));
+                assert(!els['repo-pills'].innerHTML.includes('sb-plat-tag'));
 
                 const items = collectItems(false);
                 const htmlCollapsed = renderReposView(items, state.snapshot);
-                assert(htmlCollapsed.includes('class="repo-section"'));
+                assert(htmlCollapsed.includes('class="repo-section" data-forge="github"'));
                 assert(htmlCollapsed.includes('class="repo-grid"'));
+                assert(htmlCollapsed.includes('class="id-link is-pill"'));
+                assert(!htmlCollapsed.includes('进入仓库主页'));
+                assert(!htmlCollapsed.includes('<div class="card-meta"><a class="forge-chip'));
+                assert(!htmlCollapsed.includes('<div class="card-meta"><span class="forge-chip'));
                 assert(htmlCollapsed.includes('data-toggle-cleanup-drawer="1"'));
                 assert(!htmlCollapsed.includes('class="cleanup-body"'));
                 // Verify stage priority ordering inside repo section: #44 (修 CI) -> #42 (开发中) -> #41 (待合入) -> #47 (待处理)
@@ -2189,6 +2212,12 @@ class TestMonitorAndBoard(unittest.TestCase):
                 const idx41 = htmlCollapsed.indexOf('#41');
                 const idx47 = htmlCollapsed.indexOf('#47');
                 assert(idx44 !== -1 && idx44 < idx42 && idx42 < idx41 && idx41 < idx47, 'expected stage priority ordering in repo grid');
+
+                // Ready-only chip filters down to ready items (#41)
+                state.readyOnly = true;
+                const readyItems = collectItems(false);
+                assert.deepStrictEqual(readyItems.map((x) => x.issue_number), [41]);
+                state.readyOnly = false;
 
                 // 2. Expanding drawer reveals retained directory card with 已合入 badge and idd cleanup action
                 state.cleanupDrawerOpen = true;
