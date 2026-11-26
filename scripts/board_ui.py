@@ -153,20 +153,20 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
     /* Collapsible Left Inset Sidebar */
     .sidebar {
-      width: 248px;
+      width: 236px;
       flex-shrink: 0;
       background: var(--bg-sidebar);
       border: 1px solid var(--border);
       border-radius: var(--radius-shell);
-      padding: 12px;
+      padding: 12px 10px;
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 8px;
       transition: width 0.16s ease, padding 0.16s ease;
     }
     body.sidebar-collapsed .sidebar {
-      width: 58px;
-      padding: 10px 9px;
+      width: 56px;
+      padding: 10px 8px;
       align-items: center;
     }
     body.sidebar-collapsed .hide-collapsed {
@@ -175,22 +175,72 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .show-collapsed { display: none !important; }
     body.sidebar-collapsed .show-collapsed { display: inline-grid !important; }
 
-    /* Sidebar Search */
+    .sb-brand {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 2px 4px 8px;
+      border-bottom: 1px solid var(--border-subtle);
+      width: 100%;
+    }
+    body.sidebar-collapsed .sb-brand {
+      justify-content: center;
+      padding: 2px 0 8px;
+    }
+    .sb-brand-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .sb-logo {
+      width: 26px;
+      height: 26px;
+      border-radius: 8px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid var(--accent-ring);
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+    }
+    .sb-brand-name {
+      font-size: 13.5px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      line-height: 1.15;
+      color: var(--text);
+    }
+    .sb-brand-sub {
+      font-size: 10.5px;
+      color: var(--text-faint);
+      line-height: 1.2;
+    }
+
+    /* Header Search (Moved from Sidebar) */
     .sb-search {
       position: relative;
       display: flex;
       align-items: center;
-      background: var(--bg-input);
-      border: 1px solid transparent;
-      border-radius: 10px;
-      height: 36px;
-      padding: 0 10px;
-      gap: 8px;
-      transition: border-color 0.14s, background 0.14s;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      height: 30px;
+      width: 224px;
+      padding: 0 8px;
+      gap: 7px;
+      transition: border-color 0.14s, background 0.14s, box-shadow 0.14s;
     }
-    .sb-search:focus-within { border-color: var(--border-strong); }
+    .sb-search:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-soft);
+    }
+    @media (max-width: 960px) {
+      .sb-search { width: 175px; }
+    }
     .sb-search-ic {
-      color: var(--text-dim);
+      color: var(--text-faint);
       display: grid;
       place-items: center;
       flex-shrink: 0;
@@ -202,7 +252,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: transparent;
       color: var(--text);
       font-family: var(--sans);
-      font-size: 12.5px;
+      font-size: 12px;
       outline: none;
     }
     .sb-search input::placeholder { color: var(--text-faint); }
@@ -211,7 +261,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-family: var(--mono);
       font-size: 10px;
       color: var(--text-faint);
-      padding: 1px 5px;
+      padding: 0 4px;
       border-radius: 4px;
       border: 1px solid var(--border);
       flex-shrink: 0;
@@ -229,20 +279,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .sb-search.has-value .sb-kbd,
     .sb-search:focus-within .sb-kbd { display: none; }
 
-    body.sidebar-collapsed .sb-search {
-      width: 38px;
-      height: 38px;
-      padding: 0;
-      justify-content: center;
-      cursor: pointer;
-    }
-
-    /* Sidebar Filter Rows (Agents / Alerts / Unstarted) */
+    /* Sidebar Navigation & Repositories */
     .sb-nav {
       display: flex;
       flex-direction: column;
       gap: 2px;
-      margin-top: 4px;
       width: 100%;
     }
     body.sidebar-collapsed .sb-nav {
@@ -252,12 +293,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .sb-item {
       appearance: none;
       width: 100%;
-      border: 0;
+      border: 1px solid transparent;
       background: transparent;
       color: var(--text-dim);
       border-radius: 9px;
       height: 32px;
-      padding: 0 8px;
+      padding: 0 9px;
       font-size: 12.5px;
       font-weight: 500;
       display: flex;
@@ -265,11 +306,17 @@ BOARD_HTML = r"""<!DOCTYPE html>
       justify-content: space-between;
       gap: 8px;
       cursor: pointer;
-      transition: background 0.12s, color 0.12s;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
       position: relative;
+      text-align: left;
     }
     .sb-item:hover { background: var(--bg-tile); color: var(--text); }
-    .sb-item.active { background: var(--bg-tile-active); color: var(--text); }
+    .sb-item.active {
+      background: var(--bg-tile-active);
+      border-color: var(--border-strong);
+      color: var(--text);
+      font-weight: 580;
+    }
     .sb-item-left {
       display: inline-flex;
       align-items: center;
@@ -283,13 +330,25 @@ BOARD_HTML = r"""<!DOCTYPE html>
     }
     .sb-meta {
       font-family: var(--mono);
-      font-size: 11.5px;
+      font-size: 11px;
       color: var(--text-faint);
       flex-shrink: 0;
     }
     .sb-meta.live { color: var(--green); }
     .sb-meta.warn { color: var(--amber); }
     .sb-meta.danger { color: var(--red); }
+
+    .sb-auto-tag {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 5px;
+      border-radius: 999px;
+      background: var(--green-soft);
+      color: var(--green);
+      border: 1px solid rgba(74, 222, 128, 0.28);
+      line-height: 1.3;
+      flex-shrink: 0;
+    }
 
     body.sidebar-collapsed .sb-item {
       width: 38px;
@@ -298,61 +357,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
       justify-content: center;
     }
 
-    .corner-dot {
+    .tile-dot {
       position: absolute;
       top: 6px;
       right: 6px;
       width: 6px;
       height: 6px;
-      border-radius: 50%;
-      background: var(--green);
-      display: none;
-    }
-    .corner-dot.warn { background: var(--amber); }
-    .corner-dot.danger { background: var(--red); }
-    body.sidebar-collapsed .corner-dot.show { display: block; }
-
-    /* 4 Squircle View Tiles */
-    .sb-tiles {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 6px;
-      margin-top: 8px;
-      width: 100%;
-    }
-    body.sidebar-collapsed .sb-tiles {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 6px;
-      margin-top: 6px;
-    }
-    .sb-tile {
-      appearance: none;
-      height: 36px;
-      border-radius: 10px;
-      border: 1px solid transparent;
-      background: var(--bg-tile);
-      color: var(--text-dim);
-      cursor: pointer;
-      display: grid;
-      place-items: center;
-      position: relative;
-      transition: background 0.14s, color 0.14s, border-color 0.14s;
-    }
-    body.sidebar-collapsed .sb-tile { width: 38px; height: 38px; }
-    .sb-tile:hover { background: var(--bg-tile-active); color: var(--text); }
-    .sb-tile.active {
-      background: var(--bg-tile-active);
-      border-color: var(--border-strong);
-      color: var(--text);
-    }
-    .tile-dot {
-      position: absolute;
-      top: 5px;
-      right: 5px;
-      width: 5px;
-      height: 5px;
       border-radius: 50%;
       background: var(--green);
       display: none;
@@ -363,18 +373,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
       height: 1px;
       width: 100%;
       background: var(--border-subtle);
-      margin: 6px 0;
+      margin: 4px 0;
     }
 
     .sb-section-hdr {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 8px 6px 3px;
+      padding: 4px 8px 2px;
       font-size: 11px;
       font-weight: 560;
       color: var(--text-faint);
       letter-spacing: 0.02em;
+      width: 100%;
     }
 
     .sb-list {
@@ -412,24 +423,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .status-dot.warm { background: var(--amber); }
     .status-dot.fail { background: var(--red); }
     .status-dot.quiet { background: var(--text-faint); }
-
-    .sb-wt-icon {
-      width: 24px;
-      height: 24px;
-      border-radius: 7px;
-      display: grid;
-      place-items: center;
-      flex-shrink: 0;
-      background: var(--bg-tile);
-      color: var(--text-dim);
-      font-family: var(--mono);
-      font-size: 10px;
-      font-weight: 600;
-    }
-    .sb-item.active .sb-wt-icon {
-      background: var(--accent-soft);
-      color: var(--accent);
-    }
 
     .sb-footer {
       margin-top: auto;
@@ -1085,76 +1078,80 @@ BOARD_HTML = r"""<!DOCTYPE html>
       }
     }
 
-    /* Bento Telemetry Row (Matches Uptime / CPU Reference Cards) */
-    .telemetry-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
-    }
-    @media (max-width: 900px) {
-      .telemetry-grid { grid-template-columns: 1fr; }
-    }
-    .bento-metric {
-      appearance: none;
-      text-align: left;
-      width: 100%;
+    /* Compact Telemetry & Scenario Filter Strip */
+    .telemetry-strip {
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: var(--radius-card);
-      padding: 14px 18px 13px;
-      color: var(--text);
-      display: flex;
-      flex-direction: column;
-      transition: border-color 0.14s, background 0.14s;
-    }
-    button.bento-metric { cursor: pointer; }
-    button.bento-metric:hover { background: var(--bg-card-hover); border-color: var(--border-strong); }
-    .bento-metric.is-filtered { border-color: var(--accent-ring); }
-    .bento-metric.is-warn { border-color: var(--border); }
-
-    .metric-hdr {
+      border-radius: 12px;
+      padding: 7px 12px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--text-dim);
+      gap: 10px 14px;
+      flex-wrap: wrap;
     }
-    .metric-hdr-left {
+    .filter-pills {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex-wrap: wrap;
+    }
+    .filter-pill {
+      appearance: none;
+      height: 27px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg-well);
+      color: var(--text-dim);
+      font-size: 12px;
+      font-weight: 520;
       display: inline-flex;
       align-items: center;
       gap: 6px;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
     }
-    .metric-val-row {
-      margin-top: 6px;
-      display: flex;
-      align-items: baseline;
-      gap: 5px;
-    }
-    .metric-num {
-      font-size: 28px;
+    .filter-pill:hover { border-color: var(--border-strong); color: var(--text); background: var(--bg-card-hover); }
+    .filter-pill.active {
+      background: var(--accent-soft);
+      border-color: var(--accent-ring);
+      color: var(--accent);
       font-weight: 600;
-      letter-spacing: -0.03em;
-      line-height: 1.08;
-      color: var(--text);
     }
-    .metric-unit {
-      font-size: 13.5px;
-      font-weight: 480;
-      color: var(--text-dim);
+    .filter-pill.is-danger.active {
+      background: var(--red-soft);
+      border-color: rgba(248, 113, 113, 0.34);
+      color: var(--red);
+    }
+    .filter-pill.is-cleanup.active {
+      background: var(--green-soft);
+      border-color: rgba(74, 222, 128, 0.36);
+      color: var(--green);
+    }
+    .pill-cnt {
+      font-family: var(--mono);
+      font-size: 11px;
+      opacity: 0.85;
     }
 
-    /* Chunky Segmented Pill Bar */
+    .progress-strip {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 12px;
+      color: var(--text-dim);
+      flex-wrap: wrap;
+    }
     .seg-bar {
       display: grid;
       grid-template-columns: repeat(8, 1fr);
-      gap: 6px;
-      margin: 12px 0 9px;
+      gap: 3px;
+      width: 96px;
     }
     .seg-pill {
-      height: 14px;
-      border-radius: 3.5px;
+      height: 6px;
+      border-radius: 2px;
       background: var(--bar-empty);
     }
     .seg-pill.on { background: var(--bar-fill); }
@@ -1163,37 +1160,101 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .seg-pill.amber { background: var(--amber); }
     .seg-pill.red { background: var(--red); }
 
-    .metric-sub {
-      font-size: 11.5px;
-      color: var(--text-faint);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+    /* Master-Detail Workbench Layout */
+    .workbench-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.36fr) minmax(350px, 1fr);
+      gap: 12px;
+      align-items: start;
     }
-    .metric-sub.live { color: var(--green); }
-    .metric-sub.warn { color: var(--amber); }
+    @media (max-width: 1140px) {
+      .workbench-grid { grid-template-columns: 1fr; }
+    }
+    .workbench-left {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-width: 0;
+    }
+    .console-sticky {
+      position: sticky;
+      top: 12px;
+      max-height: calc(100vh - 24px);
+      display: flex;
+      flex-direction: column;
+    }
+    @media (max-width: 1140px) {
+      .console-sticky { position: static; max-height: none; }
+    }
+    .console-sticky .console-well {
+      overflow-y: auto;
+      flex: 1;
+      min-height: 0;
+    }
+    .stream-group-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 12px;
+      margin: 4px 0 2px;
+      border-radius: 8px;
+      background: var(--bg-well);
+      border: 1px solid var(--border-subtle);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-faint);
+    }
+    .cleanup-drawer {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      overflow: hidden;
+    }
+    .cleanup-hdr {
+      appearance: none;
+      width: 100%;
+      border: 0;
+      background: var(--bg-well);
+      color: var(--text-dim);
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 12px;
+      font-weight: 580;
+      cursor: pointer;
+      text-align: left;
+    }
+    .cleanup-hdr:hover { color: var(--text); }
+    .cleanup-body {
+      padding: 8px 10px;
+      border-top: 1px solid var(--border-subtle);
+    }
 
-    /* Bento Card Container (Services & Logs Aesthetic) */
+    /* Bento Card Container */
     .bento-card {
       background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: var(--radius-card);
-      padding: 15px 16px;
+      padding: 14px 15px;
     }
     .bento-hdr {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
+      gap: 10px;
       flex-wrap: wrap;
       margin-bottom: 10px;
     }
     .bento-title-row {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       min-width: 0;
       flex: 1;
+      flex-wrap: wrap;
     }
     .bento-title {
       font-size: 13.5px;
@@ -2452,38 +2513,37 @@ BOARD_HTML = r"""<!DOCTYPE html>
   <div class="app-shell">
     <!-- Left Inset Sidebar -->
     <aside class="sidebar" aria-label="工作区侧栏">
-      <div id="search-wrap" class="sb-search">
-        <span class="sb-search-ic" aria-hidden="true">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="11" cy="11" r="8"></circle>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-          </svg>
-        </span>
-        <input id="search-input" class="hide-collapsed" type="search" placeholder="搜索 #编号、目录、分支" />
-        <span class="sb-kbd hide-collapsed">/</span>
-        <button id="search-clear" class="sb-search-clear hide-collapsed" type="button" aria-label="清空搜索">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
+      <div class="sb-brand">
+        <div class="sb-brand-left">
+          <span class="sb-logo" id="sb-brand-logo" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9"></circle><path d="M12 12l4.5-4.5"></path><circle cx="12" cy="12" r="2"></circle>
+            </svg>
+          </span>
+          <div class="hide-collapsed">
+            <div class="sb-brand-name">IDD Radar</div>
+            <div class="sb-brand-sub" id="sb-brand-sub">跨工具进度雷达</div>
+          </div>
+        </div>
+        <button id="sidebar-toggle" class="icon-btn" type="button" title="收起 / 展开侧栏 ([)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="3"></rect>
+            <line x1="9" y1="3" x2="9" y2="21"></line>
           </svg>
         </button>
       </div>
 
-      <div id="sb-filters" class="sb-nav"></div>
-
-      <div class="sb-tiles" role="tablist" aria-label="视图切换">
-        <button id="view-cockpit" class="sb-tile active" type="button" title="驾驶舱视图（工作树 + 接力台）"></button>
-        <button id="view-kanban" class="sb-tile" type="button" title="四列看板视图"></button>
-        <button id="view-repos" class="sb-tile" type="button" title="按仓库分组视图"></button>
-        <button id="view-list" class="sb-tile" type="button" title="紧凑列表视图"></button>
-      </div>
+      <div class="sb-section-hdr hide-collapsed"><span id="sb-hdr-views">视图</span></div>
+      <nav class="sb-nav" role="tablist" aria-label="视图切换">
+        <button id="view-cockpit" class="sb-item active" type="button" title="工作台（左任务流 + 右接力台）"></button>
+        <button id="view-kanban" class="sb-item" type="button" title="流程看板视图"></button>
+        <button id="view-repos" class="sb-item" type="button" title="按仓库分组视图"></button>
+        <button id="view-list" class="sb-item" type="button" title="紧凑列表视图"></button>
+      </nav>
 
       <div class="sb-divider"></div>
       <div class="sb-section-hdr hide-collapsed"><span id="sb-hdr-repos">仓库</span><span id="sb-repo-cnt" class="num">…</span></div>
       <div id="repo-pills" class="sb-list"></div>
-
-      <div class="sb-section-hdr hide-collapsed" style="margin-top:4px;"><span id="sb-hdr-wts">并行目录</span><span id="sb-wt-cnt" class="num">…</span></div>
-      <div id="wt-rail-list" class="sb-list"></div>
 
       <div class="sb-footer">
         <button id="theme-btn" class="sb-item" type="button" title="切换深浅色主题"></button>
@@ -2496,12 +2556,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
     <div class="workspace">
       <header class="ws-header">
         <div class="ws-title-group">
-          <button id="sidebar-toggle" class="icon-btn" type="button" title="收起 / 展开侧栏 ([)">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="3"></rect>
-              <line x1="9" y1="3" x2="9" y2="21"></line>
-            </svg>
-          </button>
           <div id="ws-logo" class="ws-logo" aria-hidden="true">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path>
@@ -2512,6 +2566,22 @@ BOARD_HTML = r"""<!DOCTYPE html>
           <span id="ws-repo-link-wrap"></span>
         </div>
         <div class="ws-controls">
+          <div id="search-wrap" class="sb-search">
+            <span class="sb-search-ic" aria-hidden="true">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+            </span>
+            <input id="search-input" type="search" placeholder="搜索 #编号、目录、分支" />
+            <span class="sb-kbd">/</span>
+            <button id="search-clear" class="sb-search-clear" type="button" aria-label="清空搜索">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
           <div id="status-cluster" class="status-cluster">
             <div class="status-cluster-live">
               <span id="conn-tag" class="live-pill is-loading">
@@ -2533,7 +2603,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
       <div id="top-alerts-wrap"></div>
 
-      <section id="kpis" class="telemetry-grid"></section>
+      <section id="kpis" class="telemetry-strip"></section>
 
       <main id="main-content"></main>
       <div id="warnings-wrap"></div>
@@ -2582,7 +2652,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
         layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
         sparkle: '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3Z"/>',
         circle: '<circle cx="12" cy="12" r="8"/>',
-        chevronRight: '<polyline points="9 18 15 12 9 6"/>'
+        chevronRight: '<polyline points="9 18 15 12 9 6"/>',
+        chevronDown: '<polyline points="6 9 12 15 18 9"/>',
+        trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>'
       };
 
       function icon(name, size) {
@@ -2610,6 +2682,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
         worktreeOnly: false,
         alertsOnly: false,
         todoOnly: false,
+        cleanupOnly: false,
+        cleanupDrawerOpen: false,
         paused: false,
         selectedKey: null,
         inspectedKey: null,
@@ -2636,7 +2710,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         statusPopoverForge: "",
         lastForgeStatusSig: "",
         lastTopAlertsSig: "",
-        consoleTab: "handoff",
+        consoleTab: "tasks",
         inspectorTab: "tasks",
         timerId: null,
         quickSyncTimerId: null,
@@ -2766,15 +2840,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
         document.title = en ? "IDD Live Worktree & Handoff Board" : "IDD 实时开发监控看板";
         const sb = document.querySelector("aside.sidebar");
         if (sb) sb.setAttribute("aria-label", tr("工作区侧栏", "Workspace sidebar"));
+        const sbSub = document.getElementById("sb-brand-sub");
+        if (sbSub) sbSub.textContent = tr("跨工具进度雷达", "Cross-Agent Radar");
+        const vHdr = document.getElementById("sb-hdr-views");
+        if (vHdr) vHdr.textContent = tr("视图", "Views");
         const si = document.getElementById("search-input");
         if (si) si.placeholder = tr("搜索 #编号、目录、分支", "Search #id, dir, branch");
         const sc = document.getElementById("search-clear");
         if (sc) sc.setAttribute("aria-label", tr("清空搜索", "Clear search"));
-        const tl = document.querySelector(".sb-tiles");
+        const tl = document.querySelector(".sb-nav[role='tablist']");
         if (tl) tl.setAttribute("aria-label", tr("视图切换", "View switcher"));
         const viewTitles = {
-          "view-cockpit": tr("驾驶舱视图（工作树 + 接力台）", "Cockpit view (worktrees + handoff)"),
-          "view-kanban": tr("四列看板视图", "Kanban columns view"),
+          "view-cockpit": tr("工作台（左任务流 + 右接力台）", "Workbench (Stream + Handoff)"),
+          "view-kanban": tr("流程看板视图", "Kanban columns view"),
           "view-repos": tr("按仓库分组视图", "Grouped by repository view"),
           "view-list": tr("紧凑列表视图", "Compact list view")
         };
@@ -2784,8 +2862,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
         const rHdr = document.getElementById("sb-hdr-repos");
         if (rHdr) rHdr.textContent = tr("仓库", "Repositories");
-        const wHdr = document.getElementById("sb-hdr-wts");
-        if (wHdr) wHdr.textContent = tr("并行目录", "Worktrees");
         const tb = document.getElementById("theme-btn");
         if (tb) tb.title = tr("切换深浅色主题", "Toggle light/dark theme");
         const lb = document.getElementById("lang-btn");
@@ -3105,16 +3181,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const s = (state.snapshot && state.snapshot.summary) || {};
         const hasLive = Number(s.coding_now_count || 0) > 0 || Number(s.active_worktrees || 0) > 0;
         const modes = [
-          { id: "view-cockpit", mode: "cockpit", ic: "cockpit", dot: hasLive },
-          { id: "view-kanban", mode: "kanban", ic: "columns", dot: false },
-          { id: "view-repos", mode: "repos", ic: "folder", dot: false },
-          { id: "view-list", mode: "list", ic: "list", dot: false }
+          { id: "view-cockpit", mode: "cockpit", ic: "cockpit", label: tr("工作台", "Workbench"), dot: hasLive },
+          { id: "view-kanban", mode: "kanban", ic: "columns", label: tr("流程看板", "Kanban"), dot: false },
+          { id: "view-repos", mode: "repos", ic: "folder", label: tr("按仓库", "By Repo"), dot: false },
+          { id: "view-list", mode: "list", ic: "list", label: tr("紧凑列表", "List"), dot: false }
         ];
         for (const m of modes) {
           const el = document.getElementById(m.id);
           if (!el) continue;
           el.classList.toggle("active", state.viewMode === m.mode);
-          el.innerHTML = icon(m.ic, 14) + '<span class="tile-dot ' + (m.dot ? "show" : "") + '"></span>';
+          el.innerHTML =
+            '<span class="sb-item-left">' + icon(m.ic, 14) + '<span class="hide-collapsed">' + escapeHtml(m.label) + "</span></span>" +
+            '<span class="tile-dot ' + (m.dot ? "show" : "") + '"></span>';
         }
         updateTopProgress();
       }
@@ -3299,7 +3377,101 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return "quiet";
       }
 
+      function collectRetainedWorktrees(snap, ignoreSearch) {
+        const s = snap || state.snapshot;
+        if (!s) return [];
+        const q = ignoreSearch ? "" : String(state.search || "").trim().toLowerCase();
+        const out = [];
+        for (const r of s.repos || []) {
+          if (state.selectedRepo !== "ALL" && r.repo_path !== state.selectedRepo) continue;
+          for (const w of r.retained_idle_worktrees || []) {
+            const it = {
+              _kind: "retained",
+              _key: r.repo_path + "#retained#" + (w.worktree || w.name || w.branch || ""),
+              repo_path: r.repo_path,
+              repo_name: r.repo_name,
+              repo_url: r.repo_url || "",
+              forge_type: r.forge || "local",
+              issue_number: w.issue_number != null ? w.issue_number : null,
+              worktree: w.worktree || "",
+              branch: w.branch || "",
+              name: w.name || "",
+              stage: "已合入",
+              last_active_ago: w.last_active_ago || "",
+              last_commit_sha: w.last_commit_sha || "",
+              tasks: [],
+              counts: {},
+              pulse: null
+            };
+            const slug = shortDirSlug(it.worktree, it.repo_name, it.branch) || w.name || it.branch || (it.issue_number != null ? "#" + it.issue_number : "worktree");
+            it.title = slug;
+            if (q) {
+              const hay = [
+                it.repo_name,
+                it.issue_number != null ? "#" + it.issue_number : "",
+                it.title,
+                it.branch,
+                it.worktree,
+                it.stage
+              ].join(" ").toLowerCase();
+              if (!hay.includes(q)) continue;
+            }
+            out.push(it);
+          }
+        }
+        return out;
+      }
+
+      function getStageQuickCli(item) {
+        if (!item) return null;
+        const targetArg = item.issue_number != null ? String(item.issue_number) : (item.issue || item.issue_dir || "");
+        if (item._kind === "retained") {
+          const base = item.repo_path || item.worktree || "";
+          return {
+            label: tr("清理已合入目录", "Run Cleanup"),
+            cmd: base ? ("cd " + base + " && idd cleanup") : "idd cleanup"
+          };
+        }
+        if (!item.worktree) {
+          if (!targetArg || !item.repo_path) return null;
+          return {
+            label: tr("复制开工命令", "Copy Start Cmd"),
+            cmd: "cd " + item.repo_path + " && idd start " + targetArg
+          };
+        }
+        const stInfo = parseStage(item.stage);
+        if (stInfo.key === "修 CI" || (item.change && item.change.checks_overall === "FAIL")) {
+          return {
+            label: tr("拉取 CI 失败日志", "CI Logs Cmd"),
+            cmd: "cd " + item.worktree + " && idd ci " + (targetArg ? targetArg + " " : "") + "--logs"
+          };
+        }
+        if (stInfo.key === "待合入") {
+          return {
+            label: tr("复制合入命令", "Copy Land Cmd"),
+            cmd: "cd " + item.worktree + " && idd land" + (targetArg ? " " + targetArg : "")
+          };
+        }
+        if (stInfo.key.startsWith("待提") || stInfo.key === "已完成") {
+          return {
+            label: tr("复制提 PR 命令", "Copy PR Cmd"),
+            cmd: "cd " + item.worktree + " && idd pr" + (targetArg ? " " + targetArg : "")
+          };
+        }
+        return {
+          label: tr("复制同步命令", "Copy Sync Cmd"),
+          cmd: "cd " + item.worktree + " && idd sync" + (targetArg ? " " + targetArg : "")
+        };
+      }
+
       function buildHandoffPrompt(item) {
+        if (item && item._kind === "retained") {
+          const repoDir = item.repo_path || item.repo_name || ".";
+          const wtName = item.title || item.branch || item.worktree || "";
+          return isEn()
+            ? ("Clean up merged clean worktree (" + wtName + "):\ncd " + repoDir + " && idd cleanup")
+            : ("清理已合入且工作区干净的本地工作树（" + wtName + "）：\ncd " + repoDir + " && idd cleanup");
+        }
         const stInfo = parseStage(item.stage);
         const { total, done } = getProgressNumbers(item);
         const targetArg = item.issue_number != null ? String(item.issue_number) : (item.issue || item.issue_dir || "");
@@ -3430,6 +3602,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
       function renderIdHtml(item) {
         const issueHref = safeUrl(item.url);
+        if (item._kind === "retained") {
+          return item.issue_number != null
+            ? '<span class="id-link">#' + item.issue_number + "</span>"
+            : '<span class="badge tone-violet">' + tr("已合入", "Merged") + "</span>";
+        }
         if (item._kind === "issue") {
           return issueHref
             ? '<a class="id-link" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer" data-stop-open="1">#' + item.issue_number + "</a>"
@@ -3520,55 +3697,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return '<div class="seg-bar">' + pills.join("") + "</div>";
       }
 
-      function renderSidebarFilters(snap) {
-        const s = snap.summary || {};
-        const allItems = collectItems(true);
-        const todoCount = allItems.filter((it) => it._kind === "issue" && !it.worktree && !it.change).length;
-        const anomalies = Number(s.stalled_worktrees || 0) + Number(s.ci_failed_count || 0);
-        const activeWt = Number(s.active_worktrees || 0);
-
-        const rows = [
-          {
-            id: "filter-wt-btn",
-            act: "toggle-wt",
-            ic: "sparkle",
-            label: tr("活跃工作树", "Active Worktrees"),
-            meta: activeWt + " live",
-            metaCls: activeWt > 0 ? "live" : "",
-            active: state.worktreeOnly,
-            dot: activeWt > 0 ? "show" : ""
-          },
-          {
-            id: "filter-alert-btn",
-            act: "toggle-alerts",
-            ic: "alertTriangle",
-            label: tr("异常提醒", "Alerts"),
-            meta: anomalies > 0 ? (isEn() ? (anomalies + (anomalies === 1 ? " alert" : " alerts")) : (anomalies + " 异常")) : tr("正常", "OK"),
-            metaCls: anomalies > 0 ? "danger" : "",
-            active: state.alertsOnly,
-            dot: anomalies > 0 ? "show danger" : ""
-          },
-          {
-            id: "filter-todo-btn",
-            act: "toggle-todo",
-            ic: "circle",
-            label: tr("待处理 Issue", "Open Issues"),
-            meta: String(todoCount),
-            metaCls: "",
-            active: state.todoOnly,
-            dot: ""
-          }
-        ];
-
-        document.getElementById("sb-filters").innerHTML = rows.map((r) =>
-          '<button id="' + r.id + '" class="sb-item ' + (r.active ? "active" : "") + '" data-kpi-action="' + r.act + '" type="button" title="' + escapeHtml(r.label + " (" + r.meta + ")") + '">' +
-            '<span class="sb-item-left">' + icon(r.ic, 14) + '<span class="hide-collapsed">' + escapeHtml(r.label) + "</span></span>" +
-            '<span class="sb-meta hide-collapsed ' + r.metaCls + '">' + escapeHtml(r.meta) + "</span>" +
-            '<span class="corner-dot ' + r.dot + '"></span>' +
-          "</button>"
-        ).join("");
-      }
-
       function renderSidebarReposAndWorktrees(snap) {
         const repos = snap.repos || [];
         const allItems = collectItems(true);
@@ -3610,6 +3738,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 (riBusy ? tr("执行中", "...") : (ri.error ? tr("重试", "Retry") : tr("待初始化", "Init"))) +
               "</button>"
             : "";
+          const amEnabled = Boolean(r.auto_merge && r.auto_merge.enabled);
+          const amTag = amEnabled
+            ? '<span class="sb-auto-tag hide-collapsed" title="' + escapeHtml(tr("已开启 PR/MR 自动准入", "Auto-Approve enabled")) + '">' + tr("自动", "Auto") + "</span>"
+            : "";
           repoHtml.push(
             '<div class="sb-item ' + (isAct ? "active" : "") + '" role="button" tabindex="0" data-repo="' + escapeHtml(r.repo_path) + '" title="' + escapeHtml("[" + platFull + "] " + r.repo_name + " (" + wtCnt + "/" + items.length + ")") + '">' +
               '<span class="sb-item-left">' +
@@ -3618,6 +3750,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
               "</span>" +
               '<span class="sb-right-group hide-collapsed">' +
                 policyBtn +
+                amTag +
                 (platShort ? '<span class="sb-plat-tag ' + forgeCls + '">' + platShort + "</span>" : "") +
                 '<span class="sb-meta">' + wtCnt + "/" + items.length + "</span>" +
                 extBtn +
@@ -3626,31 +3759,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
           );
         }
         document.getElementById("repo-pills").innerHTML = repoHtml.join("");
-
-        const wtItems = allItems.filter((x) => x.worktree && (state.selectedRepo === "ALL" || x.repo_path === state.selectedRepo));
-        const wtCntEl = document.getElementById("sb-wt-cnt");
-        if (wtCntEl) wtCntEl.textContent = String(wtItems.length);
-
-        const wtHtml = wtItems.map((it) => {
-          const isSel = state.selectedKey === it._key || state.inspectedKey === it._key;
-          const dotCls = itemDotClass(it);
-          const { total, done } = getProgressNumbers(it);
-          const isCiFail = it.change && it.change.checks_overall === "FAIL";
-          const rightTag = isCiFail ? ":CI!" : (total > 0 ? (":" + done + "/" + total) : ":wt");
-          const slug = shortDirSlug(it.worktree, it.repo_name, it.branch) || it.branch || ("#" + it.issue_number);
-          const shortBadge = it.issue_number != null ? ("#" + it.issue_number) : "wt";
-          return (
-            '<button class="sb-item ' + (isSel ? "active" : "") + '" data-jump-key="' + escapeHtml(it._key) + '" type="button" title="' + escapeHtml(slug + " · " + (it.title || "")) + '">' +
-              '<span class="sb-item-left">' +
-                '<span class="status-dot ' + dotCls + ' hide-collapsed"></span>' +
-                '<span class="sb-wt-icon show-collapsed">' + escapeHtml(shortBadge) + "</span>" +
-                '<span class="hide-collapsed">' + escapeHtml(slug) + "</span>" +
-              "</span>" +
-              '<span class="sb-meta hide-collapsed ' + (isCiFail ? "danger" : "") + '">' + escapeHtml(rightTag) + "</span>" +
-            "</button>"
-          );
-        });
-        document.getElementById("wt-rail-list").innerHTML = wtHtml.join("");
       }
 
       function renderWorkspaceHeader(snap) {
@@ -3727,67 +3835,52 @@ BOARD_HTML = r"""<!DOCTYPE html>
       }
 
       function renderKpis(snap) {
-        const s = snap.summary || {};
+        const kpisEl = document.getElementById("kpis");
+        if (!kpisEl) return;
         const allItems = collectItems(true);
         const scopedItems = state.selectedRepo === "ALL"
           ? allItems
           : allItems.filter((it) => it.repo_path === state.selectedRepo);
-        const scopedIssues = scopedItems.filter((it) => it._kind === "issue");
 
         let issueInProg = 0;
         let issueReady = 0;
         let issueQueued = 0;
-        let ciFailed = 0;
-        let openChanges = 0;
-        let dirtyWt = 0;
-        let stalled = 0;
         let activeWt = 0;
-
+        let attentionCnt = 0;
         let totalSteps = 0;
         let doneSteps = 0;
         let inProgSteps = 0;
         let blockedSteps = 0;
-        let plannedSteps = 0;
 
         for (const it of scopedItems) {
           if (it.worktree) activeWt += 1;
-          if (it.change) openChanges += 1;
-          const p = it.pulse || null;
-          if (p && Number(p.dirty_count || 0) > 0) dirtyWt += 1;
-          if (p && p.activity_state === "stalled") stalled += 1;
-          const stKey = parseStage(it.stage).key;
-          if (stKey === "修 CI" || (it.change && it.change.checks_overall === "FAIL")) ciFailed += 1;
-
+          if (isItemAlert(it)) attentionCnt += 1;
+          if (it._kind === "issue") {
+            const b = cardBucket(it);
+            if (b === "ready") issueReady += 1;
+            else if (b === "todo") issueQueued += 1;
+            else issueInProg += 1;
+          }
           const counts = it.counts || {};
           const nums = getProgressNumbers(it);
           totalSteps += nums.total;
           doneSteps += nums.done;
           inProgSteps += Number(counts.in_progress || 0);
           blockedSteps += Number(counts.blocked || 0);
-          plannedSteps += Number(counts.planned || 0);
         }
 
-        for (const row of scopedIssues) {
-          const b = cardBucket(row);
-          if (b === "ready") issueReady += 1;
-          else if (b === "todo") issueQueued += 1;
-          else issueInProg += 1;
-        }
+        const retainedCnt = collectRetainedWorktrees(snap, true).length;
+        const isAllActive = !state.worktreeOnly && !state.alertsOnly && !state.todoOnly && !state.cleanupOnly;
 
-        const issueTotal = scopedIssues.length;
+        const pills = [
+          { act: "filter-all", label: tr("全部活跃", "All Active"), cnt: scopedItems.length, active: isAllActive, cls: "" },
+          { act: "toggle-wt", label: tr("施工中", "In Worktree"), cnt: activeWt, active: state.worktreeOnly, cls: "" },
+          { act: "toggle-alerts", label: tr("需关注", "Attention"), cnt: attentionCnt, active: state.alertsOnly, cls: "is-danger" },
+          { act: "toggle-todo", label: tr("待处理 Issue", "Open Issues"), cnt: issueQueued, active: state.todoOnly, cls: "" },
+          { act: "toggle-cleanup", label: tr("可清理目录", "Cleanable"), cnt: retainedCnt, active: state.cleanupOnly, cls: "is-cleanup" }
+        ];
+
         const pct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
-
-        const issueTones = [];
-        const issueDenominator = Math.max(issueTotal, 1);
-        const readySlots = issueTotal > 0 ? Math.round((issueReady / issueDenominator) * 8) : 0;
-        const progSlots = issueTotal > 0 ? Math.round((issueInProg / issueDenominator) * 8) : 0;
-        for (let i = 0; i < 8; i++) {
-          if (i < readySlots) issueTones.push("green");
-          else if (i < readySlots + progSlots) issueTones.push("on");
-          else if (i < issueTotal && i < Math.round((issueTotal / issueDenominator) * 8)) issueTones.push("dim");
-          else issueTones.push("");
-        }
-
         const taskTones = [];
         const doneSlots = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 8) : 0;
         const inProgSlots = totalSteps > 0 ? Math.max(inProgSteps > 0 ? 1 : 0, Math.round((inProgSteps / totalSteps) * 8)) : 0;
@@ -3799,91 +3892,31 @@ BOARD_HTML = r"""<!DOCTYPE html>
           else taskTones.push("");
         }
 
-        const prTones = [];
-        for (let i = 0; i < 8; i++) {
-          if (i < issueReady) prTones.push("green");
-          else if (i < issueReady + ciFailed) prTones.push("red");
-          else if (i < openChanges) prTones.push("amber");
-          else prTones.push("");
-        }
+        const summaryTxt = isEn()
+          ? (issueInProg + " active · " + issueReady + " ready")
+          : ("推进中 " + issueInProg + " · 待合入 " + issueReady);
 
-        const waitingFirstForge = Boolean(snap.forge_syncing) && (snap.repos || []).some((r) => r.forge !== "local" && !r.forge_fetched_at);
-        const issueSub = (waitingFirstForge && issueTotal === 0)
-          ? tr("正在拉取远端开放中的 Issue…", "Fetching open remote Issues…")
-          : (isEn()
-              ? (issueInProg + " active · " + issueQueued + " queued · " + issueReady + " ready")
-              : ("推进中 " + issueInProg + " · 待认领 " + issueQueued + " · 待合入 " + issueReady));
-        const taskSub = isEn()
-          ? ("Done " + doneSteps + "/" + totalSteps + " · Active " + inProgSteps + " · Planned " + plannedSteps + (blockedSteps > 0 ? " · Blocked " + blockedSteps : ""))
-          : ("已完成 " + doneSteps + "/" + totalSteps + " · 进行中 " + inProgSteps + " · 待开始 " + plannedSteps + (blockedSteps > 0 ? " · 受阻 " + blockedSteps : ""));
-        const prSub = isEn()
-          ? ("Open " + openChanges + " · CI failed " + ciFailed + " · " + activeWt + " worktrees")
-          : ("Open " + openChanges + " · CI 失败 " + ciFailed + " · 活跃目录 " + activeWt + (dirtyWt > 0 ? " (" + dirtyWt + " 改)" : ""));
-
-        const cards = [
-          {
-            action: "toggle-wt",
-            ic: "circle",
-            label: tr("Issue 状态", "Issue Status"),
-            val: (waitingFirstForge && issueTotal === 0) ? "…" : String(issueTotal),
-            unit: "Open",
-            bar: renderSegBar(issueTotal, 8, issueTones),
-            sub: issueSub,
-            subCls: issueInProg > 0 ? "live" : "",
-            filtered: state.worktreeOnly,
-            warn: false
-          },
-          {
-            action: "",
-            ic: "layers",
-            label: tr("TASK 拆分进度", "TASK Breakdown"),
-            val: String(pct),
-            unit: "%",
-            bar: renderSegBar(doneSteps > 0 ? Math.max(1, doneSlots) : 0, 8, taskTones),
-            sub: taskSub,
-            subCls: blockedSteps > 0 ? "warn" : "",
-            filtered: false,
-            warn: blockedSteps > 0
-          },
-          {
-            action: "toggle-alerts",
-            ic: "pr",
-            label: tr("PR / MR 与合入", "PR / MR & Land"),
-            val: String(issueReady),
-            unit: tr("待合入", "ready"),
-            bar: renderSegBar(openChanges, 8, prTones),
-            sub: prSub,
-            subCls: (ciFailed + stalled) > 0 ? "warn" : "",
-            filtered: state.alertsOnly,
-            warn: (ciFailed + stalled) > 0
-          }
-        ];
-
-        document.getElementById("kpis").innerHTML = cards.map((c) => {
-          const cls = ["bento-metric", c.filtered ? "is-filtered" : "", c.warn ? "is-warn" : ""].filter(Boolean).join(" ");
-          const tag = c.action ? "button" : "div";
-          const attrs = c.action ? ' type="button" data-kpi-action="' + c.action + '"' : "";
-          return (
-            "<" + tag + ' class="' + cls + '"' + attrs + ">" +
-              '<div class="metric-hdr">' +
-                '<span class="metric-hdr-left">' + icon(c.ic, 12) + "<span>" + escapeHtml(c.label) + "</span></span>" +
-              "</div>" +
-              '<div class="metric-val-row">' +
-                '<span class="metric-num num">' + escapeHtml(c.val) + "</span>" +
-                '<span class="metric-unit">' + escapeHtml(c.unit) + "</span>" +
-              "</div>" +
-              c.bar +
-              '<div class="metric-sub ' + c.subCls + '">' + escapeHtml(c.sub) + "</div>" +
-            "</" + tag + ">"
-          );
-        }).join("");
+        kpisEl.innerHTML =
+          '<div class="filter-pills">' +
+            pills.map((p) =>
+              '<button class="filter-pill ' + p.cls + (p.active ? " active" : "") + '" type="button" data-kpi-action="' + p.act + '">' +
+                "<span>" + escapeHtml(p.label) + "</span>" +
+                '<span class="pill-cnt">' + p.cnt + "</span>" +
+              "</button>"
+            ).join("") +
+          "</div>" +
+          '<div class="progress-strip">' +
+            '<span>TASK <strong class="num" style="color:var(--text);">' + doneSteps + "/" + totalSteps + "</strong> (" + pct + "%)</span>" +
+            renderSegBar(doneSteps > 0 ? Math.max(1, doneSlots) : 0, 8, taskTones) +
+            "<span>" + escapeHtml(summaryTxt) + "</span>" +
+          "</div>";
       }
 
       function renderCockpitConsole(item) {
         if (!item) {
           return (
-            '<section class="bento-card">' +
-              '<div class="bento-hdr"><div class="bento-title-row"><span class="bento-title">' + tr("跨 Agent 接力提示词", "Cross-Agent Handoff Prompt") + '</span><span class="bento-sub">' + tr("请在上方选择一个并行工作树或 Issue", "Select an active worktree or Issue above") + "</span></div></div>" +
+            '<section class="bento-card console-sticky">' +
+              '<div class="bento-hdr"><div class="bento-title-row"><span class="bento-title">' + tr("跨 Agent 接力提示词", "Cross-Agent Handoff Prompt") + '</span><span class="bento-sub">' + tr("请在左侧选择一个任务或 Issue", "Select a task or Issue on the left") + "</span></div></div>" +
               '<div class="console-well">' + tr("暂无选中项。", "No item selected.") + "</div>" +
             "</section>"
           );
@@ -3893,11 +3926,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const tasks = item.tasks || [];
         const pulse = item.pulse || null;
         const changedFiles = (pulse && pulse.changed_files) || [];
-        const targetArg = item.issue_number != null ? String(item.issue_number) : (item.issue || item.issue_dir || "");
-        const startCmd = targetArg && item.repo_path ? ("cd " + item.repo_path + " && idd start " + targetArg) : "";
-        const idLabel = item.issue_number != null ? ("#" + item.issue_number) : tr("本地", "Local");
-
+        const quickCli = getStageQuickCli(item);
+        const idLabel = item.issue_number != null ? ("#" + item.issue_number) : (item._kind === "retained" ? tr("已合入", "Merged") : tr("本地", "Local"));
+        const stInfo = parseStage(item.stage);
         const repoMeta = resolveRepoMeta(item);
+
         let wellHtml = "";
         if (state.consoleTab === "files") {
           if (changedFiles.length === 0) {
@@ -3909,13 +3942,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
               return '<div class="log-line"><span class="log-k ' + cls + '">' + escapeHtml(code) + '</span><span class="log-v">' + escapeHtml(f.path) + "</span></div>";
             }).join("");
           }
+        } else if (state.consoleTab === "handoff") {
+          wellHtml =
+            '<div style="font-size:11.5px;font-weight:600;color:var(--text-dim);margin-bottom:6px;">' + tr("跨 Agent 接力提示词", "Cross-Agent Handoff Prompt") + "</div>" +
+            '<pre class="handoff-block">' + escapeHtml(prompt) + "</pre>";
         } else {
           const metaLines = [
             '<div class="log-line"><span class="log-k">repo</span><span class="log-v" style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;">' + renderRepoChip(item, { compact: true }) + (item.branch ? '<span>·</span><span style="color:var(--accent)">' + escapeHtml(item.branch) + "</span>" : "") + "</span></div>",
-            '<div class="log-line"><span class="log-k">worktree</span><span class="log-v">' + escapeHtml(item.worktree || tr("尚未创建（点击右侧复制开工命令）", "Not created yet (copy CLI Cmd on the right)")) + "</span></div>"
+            '<div class="log-line"><span class="log-k">worktree</span><span class="log-v">' + escapeHtml(item.worktree || tr("尚未创建（点击下方复制开工命令）", "Not created yet (copy CLI Cmd below)")) + "</span></div>"
           ];
           if (pulse && pulse.last_commit_sha) {
             metaLines.push('<div class="log-line"><span class="log-k">commit</span><span class="log-v">' + escapeHtml(pulse.last_commit_sha + "  " + (pulse.last_commit_subject || "")) + "</span></div>");
+          } else if (item.last_commit_sha) {
+            metaLines.push('<div class="log-line"><span class="log-k">commit</span><span class="log-v">' + escapeHtml(item.last_commit_sha) + "</span></div>");
           }
           const taskLines = tasks.map((t) => {
             const st = t.status || "planned";
@@ -3931,23 +3970,29 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
 
         return (
-          '<section class="bento-card">' +
+          '<section class="bento-card console-sticky">' +
             '<div class="bento-hdr">' +
               '<div class="bento-title-row">' +
-                '<span class="bento-title">' + tr("跨 Agent 接力提示词", "Agent Handoff") + "</span>" +
+                '<span class="bento-title">' + tr("跨 Agent 接力提示词", "Cross-Agent Handoff Prompt") + "</span>" +
+                '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" +
                 '<span class="bento-sub">' + escapeHtml(idLabel + " · " + (item.title || item.issue || "")) + "</span>" +
-                '<div class="console-tabs">' +
-                  '<button class="console-tab ' + (state.consoleTab === "handoff" ? "active" : "") + '" data-console-tab="handoff" type="button">' + tr("接力与步骤", "Handoff") + " (" + tasks.length + ")</button>" +
-                  '<button class="console-tab ' + (state.consoleTab === "files" ? "active" : "") + '" data-console-tab="files" type="button">' + tr("改动文件", "Files") + " (" + ((pulse && pulse.dirty_count) || 0) + ")</button>" +
-                "</div>" +
               "</div>" +
               '<div class="bento-actions">' +
-                '<button class="btn btn-sm btn-primary" data-copy-val="' + escapeHtml(prompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" type="button">' + icon("copy", 12) + "<span>" + tr("复制接力词", "Copy Handoff") + "</span></button>" +
-                (item.worktree ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" type="button">' + icon("folder", 12) + "<span>" + tr("复制目录", "Copy Dir") + "</span></button>" : "") +
-                (item.branch ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" type="button">' + icon("branch", 12) + "<span>" + tr("复制分支", "Copy Branch") + "</span></button>" : "") +
-                (startCmd ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="' + tr("已复制终端命令", "Copied CLI command") + '" type="button">' + icon("terminal", 12) + "<span>" + tr("终端命令", "CLI Cmd") + "</span></button>" : "") +
-                (repoMeta.repoUrl ? '<a class="btn btn-sm" href="' + escapeHtml(repoMeta.repoUrl) + '" target="_blank" rel="noopener noreferrer">' + forgeIcon(repoMeta.forgeType, 12) + "<span>" + escapeHtml(forgeLabel(repoMeta.forgeType)) + tr(" 主页", " Home") + "</span></a>" : "") +
-                renderPrimaryLinkBtn(item, "btn-sm", { iconSize: 12, stopOpen: false }) +
+                (repoMeta.repoUrl ? '<a class="btn btn-xs" href="' + escapeHtml(repoMeta.repoUrl) + '" target="_blank" rel="noopener noreferrer">' + forgeIcon(repoMeta.forgeType, 11) + "<span>" + escapeHtml(forgeLabel(repoMeta.forgeType)) + tr(" 主页", " Home") + "</span></a>" : "") +
+                renderPrimaryLinkBtn(item, "btn-xs", { iconSize: 11, stopOpen: false }) +
+              "</div>" +
+            "</div>" +
+            '<div class="bento-actions" style="margin-bottom:10px;">' +
+              '<button class="btn btn-sm btn-primary" data-copy-val="' + escapeHtml(prompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" type="button">' + icon("copy", 12) + "<span>" + tr("复制接力词", "Copy Handoff") + "</span></button>" +
+              (quickCli ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(quickCli.cmd) + '" data-copy-msg="' + escapeHtml(tr("已复制命令: ", "Copied command: ") + quickCli.cmd) + '" type="button">' + icon("terminal", 12) + "<span>" + escapeHtml(quickCli.label) + "</span></button>" : "") +
+              (item.worktree ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" type="button">' + icon("folder", 12) + "<span>" + tr("复制目录", "Copy Dir") + "</span></button>" : "") +
+              (item.branch ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" type="button">' + icon("branch", 12) + "<span>" + tr("复制分支", "Copy Branch") + "</span></button>" : "") +
+            "</div>" +
+            '<div class="bento-hdr" style="margin-bottom:8px;">' +
+              '<div class="console-tabs">' +
+                '<button class="console-tab ' + (state.consoleTab === "tasks" ? "active" : "") + '" data-console-tab="tasks" type="button">' + tr("步骤清单", "Steps") + " (" + tasks.length + ")</button>" +
+                '<button class="console-tab ' + (state.consoleTab === "files" ? "active" : "") + '" data-console-tab="files" type="button">' + tr("改动文件", "Files") + " (" + ((pulse && pulse.dirty_count) || 0) + ")</button>" +
+                '<button class="console-tab ' + (state.consoleTab === "handoff" ? "active" : "") + '" data-console-tab="handoff" type="button">' + tr("接力词", "Handoff") + "</button>" +
               "</div>" +
             "</div>" +
             '<div class="console-well">' + wellHtml + "</div>" +
@@ -4039,6 +4084,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           return 3;
         };
 
+        const retainedRows = collectRetainedWorktrees(state.snapshot, false);
         const issueRows = items.filter((it) => it._kind === "issue").sort((a, b) => {
           const ra = rankStage(a);
           const rb = rankStage(b);
@@ -4046,22 +4092,22 @@ BOARD_HTML = r"""<!DOCTYPE html>
           return Number(b.issue_number || 0) - Number(a.issue_number || 0);
         });
         const localRows = items.filter((it) => it._kind !== "issue");
-        const activeCount = issueRows.filter((it) => it.worktree || it.change || (it.tasks && it.tasks.length > 0)).length;
-        const todoCount = issueRows.filter((it) => !(it.worktree || it.change || (it.tasks && it.tasks.length > 0))).length;
-
         const displayIssues = state.todoOnly
           ? issueRows.filter((it) => !(it.worktree || it.change || (it.tasks && it.tasks.length > 0)))
           : issueRows;
-        const allSelectable = [...displayIssues, ...localRows];
-        let selected = items.find((it) => it._key === state.selectedKey);
+        const allSelectable = state.cleanupOnly
+          ? retainedRows
+          : [...displayIssues, ...localRows, ...retainedRows];
+
+        let selected = allSelectable.find((it) => it._key === state.selectedKey);
         if (!selected) {
-          selected = allSelectable[0] || items[0] || null;
+          selected = state.cleanupOnly ? (retainedRows[0] || null) : (displayIssues[0] || localRows[0] || retainedRows[0] || null);
           if (selected) state.selectedKey = selected._key;
         }
 
         const renderWtRow = (item) => {
           const isSel = selected && selected._key === item._key;
-          const dotCls = itemDotClass(item);
+          const dotCls = item._kind === "retained" ? "quiet" : itemDotClass(item);
           const stInfo = parseStage(item.stage);
           const { total, done } = getProgressNumbers(item);
           const pulseHtml = renderPulseSummary(item.pulse);
@@ -4074,7 +4120,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const subParts = [];
           if (item.branch) subParts.push("<span>" + escapeHtml(item.branch) + "</span>");
           if (item.worktree) subParts.push("<span>" + escapeHtml(shortWorktreePath(item.worktree)) + "</span>");
-          if (pulseHtml) subParts.push("<span>" + pulseHtml + "</span>");
+          if (item._kind === "retained") {
+            subParts.push("<span>" + tr("已合入主干 · 工作区干净", "Merged · Clean") + (item.last_active_ago ? " · " + escapeHtml(localizeAgo(item.last_active_ago)) : "") + "</span>");
+          } else if (pulseHtml) {
+            subParts.push("<span>" + pulseHtml + "</span>");
+          }
 
           return (
             '<div class="wt-row ' + (isSel ? "is-selected" : "") + '" data-select-key="' + escapeHtml(item._key) + '">' +
@@ -4096,26 +4146,50 @@ BOARD_HTML = r"""<!DOCTYPE html>
               '<div class="wt-row-actions" data-stop-open="1">' +
                 primaryLinkBtn +
                 '<button class="btn btn-xs ' + (isSel ? "btn-primary" : "") + '" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button>" +
-                (item.worktree ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" data-stop-open="1" type="button">' + icon("folder", 11) + "<span>" + tr("目录", "Dir") + "</span></button>" : "") +
-                (item.branch ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" data-stop-open="1" type="button">' + icon("branch", 11) + "<span>" + tr("分支", "Branch") + "</span></button>" : "") +
               "</div>" +
             "</div>"
           );
         };
 
-        const wtPill = activeCount > 0
-          ? '<button class="btn btn-xs ' + (state.worktreeOnly ? "btn-primary" : "") + '" data-kpi-action="toggle-wt" type="button">' +
-              icon("sparkle", 11) + "<span>" + tr("进行中", "Active") + " (" + activeCount + ")</span>" +
-            "</button>"
-          : "";
-        const todoPill = todoCount > 0
-          ? '<button class="btn btn-xs ' + (state.todoOnly ? "btn-primary" : "") + '" data-kpi-action="toggle-todo" type="button">' +
-              icon("circle", 11) + "<span>" + tr("待处理 Issue", "Open Issues") + " (" + todoCount + ")</span>" +
-            "</button>"
-          : "";
+        if (state.cleanupOnly) {
+          return (
+            '<div class="workbench-grid">' +
+              '<div class="workbench-left">' +
+                '<section class="bento-card">' +
+                  '<div class="bento-hdr">' +
+                    '<div class="bento-title-row">' +
+                      '<span class="bento-title">' + tr("可清理的已合入工作树", "Cleanable Merged Worktrees") + "</span>" +
+                      '<span class="badge tone-violet num">' + retainedRows.length + "</span>" +
+                    "</div>" +
+                    '<div class="bento-actions">' +
+                      '<button class="btn btn-xs" data-copy-val="idd cleanup" data-copy-msg="' + tr("已复制清理命令 idd cleanup", "Copied idd cleanup") + '" type="button">' + icon("trash", 11) + "<span>" + tr("复制 idd cleanup", "Copy idd cleanup") + "</span></button>" +
+                    "</div>" +
+                  "</div>" +
+                  '<div class="wt-list">' + (retainedRows.length ? retainedRows.map(renderWtRow).join("") : '<div class="col-empty">' + tr("暂无可清理的已合入工作树", "No cleanable merged worktrees") + "</div>") + "</div>" +
+                "</section>" +
+              "</div>" +
+              renderCockpitConsole(selected) +
+            "</div>"
+          );
+        }
+
+        const attentionRows = displayIssues.filter((it) => rankStage(it) === 0);
+        const activeRows = displayIssues.filter((it) => rankStage(it) > 0 && rankStage(it) < 4);
+        const queuedRows = displayIssues.filter((it) => rankStage(it) === 4);
+
+        const groupBlocks = [];
+        if (attentionRows.length) {
+          groupBlocks.push('<div class="stream-group-hdr"><span>' + tr("需要关注（CI 失败 / 受阻）", "Needs Attention") + '</span><span class="num">' + attentionRows.length + "</span></div>" + attentionRows.map(renderWtRow).join(""));
+        }
+        if (activeRows.length) {
+          groupBlocks.push('<div class="stream-group-hdr"><span>' + tr("正在推进 / 待合入", "In Progress / Ready to Land") + '</span><span class="num">' + activeRows.length + "</span></div>" + activeRows.map(renderWtRow).join(""));
+        }
+        if (queuedRows.length) {
+          groupBlocks.push('<div class="stream-group-hdr"><span>' + tr("待处理 Issue", "Open Issues") + '</span><span class="num">' + queuedRows.length + "</span></div>" + queuedRows.map(renderWtRow).join(""));
+        }
 
         const localSection = localRows.length > 0 && !state.todoOnly
-          ? '<section class="bento-card" style="margin-bottom:12px;">' +
+          ? '<section class="bento-card">' +
               '<div class="bento-hdr">' +
                 '<div class="bento-title-row">' +
                   '<span class="bento-title">' + tr("本地未绑定 Issue 工作树", "Local Worktrees (No Issue #)") + "</span>" +
@@ -4126,21 +4200,39 @@ BOARD_HTML = r"""<!DOCTYPE html>
             "</section>"
           : "";
 
+        const cleanupDrawer = retainedRows.length > 0 && !state.todoOnly
+          ? '<section class="cleanup-drawer">' +
+              '<button class="cleanup-hdr" type="button" data-toggle-cleanup-drawer="1">' +
+                '<span style="display:inline-flex;align-items:center;gap:6px;">' +
+                  icon(state.cleanupDrawerOpen ? "chevronDown" : "chevronRight", 13) +
+                  "<span>" + tr("已合入但仍保留的本地工作树", "Merged & Retained Worktrees") + "</span>" +
+                  '<span class="badge tone-violet num">' + retainedRows.length + "</span>" +
+                "</span>" +
+                '<span style="font-weight:400;font-size:11px;color:var(--text-faint);">' + tr("工作区干净 · 运行 idd cleanup 可安全释放空间", "Clean · run idd cleanup when ready") + "</span>" +
+              "</button>" +
+              (state.cleanupDrawerOpen ? '<div class="cleanup-body"><div class="wt-list">' + retainedRows.map(renderWtRow).join("") + "</div></div>" : "") +
+            "</section>"
+          : "";
+
         return (
-          '<section class="bento-card" style="margin-bottom:12px;">' +
-            '<div class="bento-hdr">' +
-              '<div class="bento-title-row">' +
-                '<span class="bento-title">' + (state.todoOnly ? tr("待处理 Issue", "Open Issues") : tr("Issue 进度总览", "Issues & Tasks")) + "</span>" +
-                '<span class="bento-sub num">' + displayIssues.length + (state.todoOnly ? " items" : " issues") + "</span>" +
-              "</div>" +
-              '<div class="bento-actions">' + wtPill + todoPill + "</div>" +
+          '<div class="workbench-grid">' +
+            '<div class="workbench-left">' +
+              '<section class="bento-card">' +
+                '<div class="bento-hdr">' +
+                  '<div class="bento-title-row">' +
+                    '<span class="bento-title">' + (state.todoOnly ? tr("待处理 Issue", "Open Issues") : tr("任务推进流", "Task Stream")) + "</span>" +
+                    '<span class="bento-sub num">' + displayIssues.length + (state.todoOnly ? " items" : " issues") + "</span>" +
+                  "</div>" +
+                "</div>" +
+                '<div class="wt-list">' +
+                  (groupBlocks.length ? groupBlocks.join("") : '<div class="col-empty">' + tr("当前筛选条件下暂无 Issue", "No issues match the current filter") + "</div>") +
+                "</div>" +
+              "</section>" +
+              localSection +
+              cleanupDrawer +
             "</div>" +
-            '<div class="wt-list">' +
-              (displayIssues.length ? displayIssues.map(renderWtRow).join("") : '<div class="col-empty">' + tr("当前筛选条件下暂无 Issue", "No issues match the current filter") + "</div>") +
-            "</div>" +
-          "</section>" +
-          localSection +
-          renderCockpitConsole(selected)
+            renderCockpitConsole(selected) +
+          "</div>"
         );
       }
 
@@ -4324,16 +4416,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
         return (
           statusBar +
-          '<section class="bento-card" style="margin-bottom:12px;">' +
-            '<div class="bento-hdr"><div class="bento-title-row">' + skelBar("108px", 15) + skelBar("48px", 12) + "</div></div>" +
-            '<div class="wt-list">' + wtSkelRows + "</div>" +
-          "</section>" +
-          '<section class="bento-card">' +
-            '<div class="bento-hdr"><div class="bento-title-row">' + skelBar("132px", 15) + skelBar("90px", 12) + "</div></div>" +
-            '<div class="console-well" style="display:flex;flex-direction:column;gap:9px;">' +
-              skelBar("46%", 12) + skelBar("68%", 12) + skelBar("38%", 12) +
-            "</div>" +
-          "</section>"
+          '<div class="workbench-grid">' +
+            '<section class="bento-card">' +
+              '<div class="bento-hdr"><div class="bento-title-row">' + skelBar("108px", 15) + skelBar("48px", 12) + "</div></div>" +
+              '<div class="wt-list">' + wtSkelRows + "</div>" +
+            "</section>" +
+            '<section class="bento-card">' +
+              '<div class="bento-hdr"><div class="bento-title-row">' + skelBar("132px", 15) + skelBar("90px", 12) + "</div></div>" +
+              '<div class="console-well" style="display:flex;flex-direction:column;gap:9px;">' +
+                skelBar("46%", 12) + skelBar("68%", 12) + skelBar("38%", 12) +
+              "</div>" +
+            "</section>" +
+          "</div>"
         );
       }
 
@@ -4351,9 +4445,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
 
         const repoCntEl = document.getElementById("sb-repo-cnt");
-        const wtCntEl = document.getElementById("sb-wt-cnt");
         if (repoCntEl) repoCntEl.textContent = state.initError ? "0" : "…";
-        if (wtCntEl) wtCntEl.textContent = state.initError ? "0" : "…";
 
         const sbSkel = (widths) => widths.map((w) =>
           '<div class="sb-skel-row"><span style="display:inline-flex;align-items:center;gap:8px;">' +
@@ -4361,24 +4453,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
             '<span class="hide-collapsed">' + skelBar(w + "px", 12) + "</span>" +
           '</span><span class="hide-collapsed">' + skelBar("24px", 11) + "</span></div>"
         ).join("");
-        const sbFilters = document.getElementById("sb-filters");
         const repoPills = document.getElementById("repo-pills");
-        const wtList = document.getElementById("wt-rail-list");
-        if (sbFilters) sbFilters.innerHTML = sbSkel([74, 62, 80]);
         if (repoPills) repoPills.innerHTML = sbSkel([82, 96, 68]);
-        if (wtList) wtList.innerHTML = sbSkel([92, 78]);
 
         const kpisEl = document.getElementById("kpis");
         if (kpisEl) {
-          const pills = new Array(8).fill('<span class="seg-pill skel"></span>').join("");
-          kpisEl.innerHTML = [0, 1, 2].map(() =>
-            '<div class="bento-metric is-skel">' +
-              '<div class="metric-hdr"><span class="metric-hdr-left">' + skelBar("88px", 12) + "</span></div>" +
-              '<div class="metric-val-row" style="margin-top:8px;">' + skelBar("48px", 26) + skelBar("34px", 13) + "</div>" +
-              '<div class="seg-bar">' + pills + "</div>" +
-              skelBar("66%", 11) +
-            "</div>"
-          ).join("");
+          kpisEl.innerHTML =
+            '<div class="filter-pills">' + [64, 58, 56, 72, 68].map((w) => skelBar(w + "px", 26)).join("") + "</div>" +
+            '<div class="progress-strip">' + skelBar("140px", 14) + "</div>";
         }
 
         const warnsWrap = document.getElementById("warnings-wrap");
@@ -4428,13 +4510,26 @@ BOARD_HTML = r"""<!DOCTYPE html>
           return;
         }
 
-        const items = collectItems(false);
-        const hasFilters = Boolean(state.search.trim() || state.worktreeOnly || state.alertsOnly || state.todoOnly);
+        const items = state.cleanupOnly ? collectRetainedWorktrees(snap, false) : collectItems(false);
+        const hasFilters = Boolean(state.search.trim() || state.worktreeOnly || state.alertsOnly || state.todoOnly || state.cleanupOnly);
         if (items.length === 0 && snap.forge_syncing && !hasFilters) {
           container.innerHTML = renderMainSkeleton(
             tr("正在从远端同步 " + repos.length + " 个仓库的 Issue 与 PR/MR…", "Syncing open Issues & PR/MRs from " + repos.length + " repository(ies)…"),
             tr("同步完成后将自动展示，无需刷新页面", "Results will appear automatically once sync completes")
           );
+          return;
+        }
+        if (state.viewMode === "cockpit") {
+          if (items.length === 0 && !state.cleanupOnly && collectRetainedWorktrees(snap, false).length === 0) {
+            container.innerHTML =
+              '<div class="empty-state">' +
+                '<h3 style="margin:0 0 6px;font-size:14.5px;color:var(--text);">' + tr("当前筛选条件下没有内容", "No matching items") + "</h3>" +
+                '<p style="margin:0 0 12px;font-size:12.5px;">' + tr("可以切换仓库、清空搜索词或重置筛选。", "Try switching repositories, clearing search, or resetting filters.") + "</p>" +
+                '<button class="btn" type="button" data-kpi-action="clear-filters">' + icon("refresh", 12) + "<span>" + tr("重置筛选", "Reset Filters") + "</span></button>" +
+              "</div>";
+            return;
+          }
+          container.innerHTML = renderCockpitView(items);
           return;
         }
         if (items.length === 0) {
@@ -4447,13 +4542,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
           return;
         }
 
-        if (state.viewMode === "cockpit") {
-          container.innerHTML = renderCockpitView(items);
-          return;
-        }
-
         const showRepoOnCard = state.selectedRepo === "ALL" && repos.length > 1;
-        if (state.viewMode === "kanban") {
+        if (state.viewMode === "kanban" && !state.cleanupOnly) {
           const buckets = {
             todo: { id: "todo", title: tr("待处理 Issue", "Open Issues"), dot: "quiet", items: [] },
             developing: { id: "developing", title: tr("开发中", "In Progress"), dot: "active", items: [] },
@@ -4533,7 +4623,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           return;
         }
 
-        const item = collectItems(true).find((x) => x._key === state.inspectedKey);
+        const item = [...collectItems(true), ...collectRetainedWorktrees(state.snapshot, true)].find((x) => x._key === state.inspectedKey);
         if (!item) {
           state.inspectedKey = null;
           overlay.classList.remove("open");
@@ -5512,6 +5602,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
           wo: state.worktreeOnly,
           ao: state.alertsOnly,
           to: state.todoOnly,
+          co: state.cleanupOnly,
+          cdo: state.cleanupDrawerOpen,
           sk: state.selectedKey,
           ct: state.consoleTab,
           ik: state.inspectedKey,
@@ -5546,7 +5638,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         syncHeaderControls();
         renderWorkspaceHeader(snap);
         renderTopAlerts(snap);
-        renderSidebarFilters(snap);
         renderKpis(snap);
         renderMain();
         renderSidebarReposAndWorktrees(snap);
@@ -5665,23 +5756,43 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const kpiBtn = e.target.closest("[data-kpi-action]");
         if (kpiBtn) {
           const act = kpiBtn.getAttribute("data-kpi-action");
-          if (act === "toggle-wt") {
+          if (act === "filter-all") {
+            state.worktreeOnly = false;
+            state.alertsOnly = false;
+            state.todoOnly = false;
+            state.cleanupOnly = false;
+          } else if (act === "toggle-wt") {
             state.worktreeOnly = !state.worktreeOnly;
-            if (state.worktreeOnly) state.todoOnly = false;
+            if (state.worktreeOnly) {
+              state.todoOnly = false;
+              state.cleanupOnly = false;
+            }
           } else if (act === "toggle-alerts") {
             state.alertsOnly = !state.alertsOnly;
-            if (state.alertsOnly) state.todoOnly = false;
+            if (state.alertsOnly) {
+              state.todoOnly = false;
+              state.cleanupOnly = false;
+            }
           } else if (act === "toggle-todo") {
             state.todoOnly = !state.todoOnly;
             if (state.todoOnly) {
               state.worktreeOnly = false;
               state.alertsOnly = false;
+              state.cleanupOnly = false;
+            }
+          } else if (act === "toggle-cleanup") {
+            state.cleanupOnly = !state.cleanupOnly;
+            if (state.cleanupOnly) {
+              state.worktreeOnly = false;
+              state.alertsOnly = false;
+              state.todoOnly = false;
             }
           } else if (act === "clear-filters") {
             state.selectedRepo = "ALL";
             state.worktreeOnly = false;
             state.alertsOnly = false;
             state.todoOnly = false;
+            state.cleanupOnly = false;
             state.search = "";
             document.getElementById("search-input").value = "";
             document.getElementById("search-wrap").classList.remove("has-value");
@@ -5692,7 +5803,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return false;
       }
 
-      document.getElementById("sb-filters").addEventListener("click", handleActionClick);
       document.getElementById("kpis").addEventListener("click", handleActionClick);
       document.getElementById("warnings-wrap").addEventListener("click", handleActionClick);
 
@@ -5922,19 +6032,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
         renderAll(true);
       });
 
-      document.getElementById("wt-rail-list").addEventListener("click", (e) => {
-        const btn = e.target.closest("[data-jump-key]");
-        if (!btn) return;
-        const key = btn.getAttribute("data-jump-key");
-        state.selectedKey = key;
-        if (state.viewMode !== "cockpit") {
-          state.inspectedKey = key;
-        }
-        renderAll(true);
-      });
-
       document.getElementById("main-content").addEventListener("click", (e) => {
         if (handleActionClick(e)) return;
+        const toggleDrawer = e.target.closest("[data-toggle-cleanup-drawer]");
+        if (toggleDrawer) {
+          state.cleanupDrawerOpen = !state.cleanupDrawerOpen;
+          renderAll(true);
+          return;
+        }
         const applyBtn = e.target.closest("[data-apply-repo-init]");
         if (applyBtn) {
           applyRepoInit(applyBtn.getAttribute("data-apply-repo-init") || "");
@@ -5949,7 +6054,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
         const ctab = e.target.closest("[data-console-tab]");
         if (ctab) {
-          state.consoleTab = ctab.getAttribute("data-console-tab") || "handoff";
+          state.consoleTab = ctab.getAttribute("data-console-tab") || "tasks";
           renderAll(true);
           return;
         }
@@ -6080,15 +6185,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
       const searchInput = document.getElementById("search-input");
       const searchWrap = document.getElementById("search-wrap");
-      searchWrap.addEventListener("click", () => {
-        if (state.sidebarCollapsed) {
-          state.sidebarCollapsed = false;
-          localStorage.setItem("idd_sidebar_collapsed", "0");
-          applySidebarState();
-          renderAll(true);
-          setTimeout(() => searchInput.focus(), 40);
-        }
-      });
       searchInput.addEventListener("input", (e) => {
         state.search = e.target.value || "";
         searchWrap.classList.toggle("has-value", state.search.length > 0);
@@ -6145,12 +6241,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
           renderAll(true);
         } else if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
           e.preventDefault();
-          if (state.sidebarCollapsed) {
-            state.sidebarCollapsed = false;
-            localStorage.setItem("idd_sidebar_collapsed", "0");
-            applySidebarState();
-            renderAll(true);
-          }
           searchInput.focus();
           searchInput.select();
         } else if ((e.key === "r" || e.key === "R") && !e.metaKey && !e.ctrlKey && !e.altKey) {
