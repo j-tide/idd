@@ -1845,6 +1845,120 @@ class TestMonitorAndBoard(unittest.TestCase):
             self.assertEqual(ui_proc.returncode, 0, ui_proc.stderr or ui_proc.stdout)
             self.assertIn("JS_PR_AUTO_APPROVE_MODAL_OK", ui_proc.stdout)
 
+    def test_board_top_alert_box_uses_soft_amber_outline_and_warn_icon_badge(self) -> None:
+        html_doc = board_ui.BOARD_HTML
+        self.assertNotIn("border-left: 3px solid var(--amber)", html_doc)
+        alert_match = re.search(r"\.auth-alert-box\s*\{([^}]*)\}", html_doc)
+        self.assertIsNotNone(alert_match)
+        alert_block = alert_match.group(1)
+        self.assertNotIn("border-left:", alert_block)
+        self.assertIn("border: 1px solid var(--amber-border);", alert_block)
+        self.assertIn("border-radius: 14px;", alert_block)
+
+        self.assertIn("--amber-border: rgba(251, 191, 36, 0.26);", html_doc)
+        self.assertIn("--amber-border: rgba(217, 119, 6, 0.28);", html_doc)
+        self.assertIn(".alert-warn-ic {", html_doc)
+        self.assertIn(".auth-alert-box .policy-repo-row {", html_doc)
+        self.assertIn("#top-alerts-wrap {", html_doc)
+
+        node_bin = shutil.which("node")
+        if node_bin:
+            script_match = re.search(r"<script>\s*([\s\S]*?)\s*</script>", html_doc)
+            self.assertIsNotNone(script_match)
+            js_src = script_match.group(1)
+            with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=True) as js_tmp:
+                js_tmp.write(js_src)
+                js_tmp.flush()
+                chk = subprocess.run([node_bin, "--check", js_tmp.name], capture_output=True, text=True, check=False)
+                self.assertEqual(chk.returncode, 0, chk.stderr or chk.stdout)
+
+            def _extract_js_fn(name: str) -> str:
+                marker = f"function {name}("
+                start = js_src.index(marker)
+                brace_start = js_src.index("{", start)
+                depth = 0
+                for idx in range(brace_start, len(js_src)):
+                    ch = js_src[idx]
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            return js_src[start : idx + 1]
+                raise AssertionError(f"Unclosed JS function: {name}")
+
+            harness = "\n".join(
+                [
+                    """
+                    const topWrap = { innerHTML: '' };
+                    const document = { getElementById: (id) => (id === 'top-alerts-wrap' ? topWrap : null) };
+                    const ICONS = {
+                      github: '<gh/>',
+                      gitlab: '<gl/>',
+                      terminal: '<tm/>',
+                      externalLink: '<ext/>',
+                      compass: '<cmp/>',
+                      alertTriangle: '<warn/>',
+                      check: '<ok/>',
+                      refresh: '<rf/>'
+                    };
+                    const state = {
+                      lang: 'zh',
+                      authSavingHost: '',
+                      authErrors: {},
+                      tokenDrafts: {},
+                      repoInitRunning: {},
+                      repoInitErrors: {},
+                      repoInitBannerDismissed: false,
+                      lastTopAlertsSig: ''
+                    };
+                    """,
+                    *(
+                        _extract_js_fn(fn_name)
+                        for fn_name in (
+                            "isEn",
+                            "tr",
+                            "escapeHtml",
+                            "safeUrl",
+                            "icon",
+                            "forgeIcon",
+                            "renderTopAlerts",
+                        )
+                    ),
+                    """
+                    const assert = require('assert');
+                    renderTopAlerts({
+                      auth_alerts: [
+                        {
+                          forge: 'gitlab',
+                          host: 'gitlab.example.com',
+                          api_base: 'https://gitlab.example.com',
+                          token_url: 'https://gitlab.example.com/-/user_settings/personal_access_tokens',
+                          repos: ['core-api']
+                        }
+                      ],
+                      repos: [
+                        {
+                          repo_path: '/repos/core-api',
+                          repo_name: 'core-api',
+                          repo_url: 'https://gitlab.example.com/g/core-api',
+                          forge: 'gitlab',
+                          forge_connected: true,
+                          repo_init: { state: 'pending', mismatches: ['merge_method=merge'] }
+                        }
+                      ]
+                    });
+                    assert.strictEqual((topWrap.innerHTML.match(/class="auth-alert-box"/g) || []).length, 2);
+                    assert(topWrap.innerHTML.includes('<span class="alert-warn-ic"><svg'));
+                    assert(topWrap.innerHTML.includes('<warn/>'));
+                    console.log('JS_TOP_ALERT_BOX_OK');
+                    """,
+                ]
+            )
+            ui_proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, check=False)
+            self.assertEqual(ui_proc.returncode, 0, ui_proc.stderr or ui_proc.stdout)
+            self.assertIn("JS_TOP_ALERT_BOX_OK", ui_proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
