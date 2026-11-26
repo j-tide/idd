@@ -155,6 +155,45 @@ idd board
 > [!NOTE]
 > `idd` 每 6 小时会在后台安全检查 `origin/main`，仅当本地技能仓库位于干净的 `main` 分支时自动快进同步（也可随时手动运行 `idd upgrade [--check]`）。需要卸载时执行 `idd uninstall`（或兜底命令 `curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh -s -- --uninstall -y`），绝不影响你的任何业务仓库。
 
+<details>
+<summary><strong>可选：将 IDD 设为默认工作流</strong>（个人全局规则 / 项目 <code>AGENTS.md</code> 模板，安装脚本绝不自动写入）</summary>
+
+`install.sh` 仅挂载 Skill 与 `idd` 全局命令，`idd repo-init` 仅配置远端合入策略，**两者都不会自动创建或修改任何全局规则或项目 `AGENTS.md`**。如希望默认启用 IDD，可按需复制下方模板：
+
+### 方式一：个人全局默认（推荐，不污染项目仓库）
+
+将下方片段添加到你所使用的工具的全局规则文件中：
+
+- **Claude Code**：`~/.claude/CLAUDE.md`
+- **Codex**：`~/.codex/AGENTS.md`
+- **Antigravity**：全局用户规则（User Rules / `~/.gemini/GEMINI.md`）
+
+```markdown
+# 全局开发工作流约定（IDD）
+
+所有非只读代码、配置与文档开发任务默认使用全局 `idd` 技能（`~/.agents/skills/idd/SKILL.md`）。
+
+- **先建 Issue 再建 Worktree**：仓库已配置 GitHub / GitLab 远端且未关联 Issue 时，先运行 `idd issue create` 建单，再运行 `idd start <issue#>` 创建或复用独立 Worktree 与 `<type>/<id>-<slug>` 分支并立即推送 `origin`（禁止在 `main` 上直接修改）。
+- **逐 TASK 验证与立即推送**：在 `TASK/<issue>/TASK-XX-*.md` 中拆解范围与测试映射，逐项实现、运行真实测试并提交；每次提交后立即执行 `idd sync`（或 `git push -u origin HEAD`）推送到远端开发分支。
+- **PR/MR、CI 与直线合入**：完成后运行 `idd pr` / `idd mr` 与 `idd ci --watch`；验收通过（或已开启 `auto_merge` 开关）后运行 `idd land` 清理 `TASK/<issue>/` 并 Squash 直线合入 `main`。
+- **安全边界**：仅纯本地无远端仓库使用无编号 `<slug>` 流程；保护未提交修改，未经授权不强推 `main`、不擅自合入主线、不执行部署或生产变更。
+```
+
+### 方式二：项目级强制（团队共享）
+
+希望某仓库对所有协作者生效时，在仓库根目录 `AGENTS.md` 中加入以下约定（若团队同时使用 Claude Code，可在根目录 `CLAUDE.md` 写入 `@AGENTS.md` 引入），并建议配合 `idd repo-init --apply` 与远端 `main` 分支保护使用：
+
+```markdown
+# 协作开发规范（IDD）
+
+本仓库统一使用 `idd` 技能（Issue-Driven Development）进行开发交付：
+- 有 GitHub / GitLab 远端时，新需求先通过 `idd issue create` 建单，再通过 `idd start <issue#>` 在独立 Worktree 与 `<type>/<id>-<slug>` 分支中开发，禁止直接提交 `main`。
+- 在 `TASK/<issue>/` 拆解任务并记录真实测试验证；每完成一项即提交并运行 `idd sync` 推送。
+- 通过 `idd pr` / `idd mr` 发起合入并等待 CI 通过，验收后使用 `idd land` 清理临时 `TASK/` 目录并 Squash 直线合入 `main`。
+```
+
+</details>
+
 ---
 
 ## 支持生态
