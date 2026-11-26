@@ -22,6 +22,9 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from forge import (  # noqa: E402
     ForgeError,
+    evaluate_repo_init_settings,
+    get_forge,
+    inspect_remote_origin,
     load_hosts_config,
     normalize_host_input,
     save_hosts_config,
@@ -1482,6 +1485,77 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--red);
       margin-top: 2px;
     }
+    .policy-check-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      color: var(--text-dim);
+      cursor: pointer;
+      user-select: none;
+      margin-top: 2px;
+    }
+    .policy-check-row input[type="checkbox"] {
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .policy-section {
+      padding: 12px 14px;
+      border-radius: 13px;
+      border: 1px solid var(--border);
+      background: var(--bg-well);
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+    .policy-section-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .policy-repo-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .policy-repo-row {
+      padding: 8px 10px;
+      border-radius: 9px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-card);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .btn-warn {
+      background: var(--amber-soft);
+      border-color: rgba(251, 191, 36, 0.36);
+      color: var(--amber);
+    }
+    .btn-warn:hover {
+      background: rgba(251, 191, 36, 0.22);
+    }
+    .sb-policy-btn {
+      appearance: none;
+      border: 1px solid rgba(251, 191, 36, 0.38);
+      background: var(--amber-soft);
+      color: var(--amber);
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-size: 10px;
+      font-weight: 650;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      flex-shrink: 0;
+    }
+    .sb-policy-btn:hover { background: rgba(251, 191, 36, 0.24); }
+    .sb-policy-btn:disabled { opacity: 0.55; cursor: wait; }
 
     /* Setup & Quickstart Onboarding Wizard Modal (Clean Minimalist Hierarchy) */
     .modal-overlay {
@@ -2021,6 +2095,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
         customHostForge: "gitlab",
         customHostUrl: "",
         customHostToken: "",
+        autoRepoInit: true,
+        repoInitRunning: {},
+        repoInitErrors: {},
+        repoInitBannerDismissed: false,
         lastTopAlertsSig: "",
         consoleTab: "handoff",
         inspectorTab: "tasks",
@@ -2731,6 +2809,17 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const extBtn = repoHref
             ? '<a class="sb-ext-link hide-collapsed" href="' + escapeHtml(repoHref) + '" target="_blank" rel="noopener noreferrer" data-stop-repo="1" title="' + escapeHtml(tr("打开 " + platFull + " 主页: ", "Open " + platFull + " home: ") + repoHref) + '">' + icon("externalLink", 11) + "</a>"
             : "";
+          const ri = r.repo_init || {};
+          const isPolicyPending = (r.forge === "github" || r.forge === "gitlab") && (ri.state === "pending" || ri.state === "prompted");
+          const riBusy = Boolean(state.repoInitRunning[r.repo_path]);
+          const policyTitle = ri.error
+            ? tr("自动初始化失败：" + ri.error + "（点击重试）", "Auto-init failed: " + ri.error + " (Click to retry)")
+            : tr("点击一键初始化仓库线性 Squash 策略与提交模板", "Click to initialize linear Squash policy & commit templates");
+          const policyBtn = isPolicyPending
+            ? '<button class="sb-policy-btn hide-collapsed" type="button" data-stop-repo="1" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" title="' + escapeHtml(policyTitle) + '" ' + (riBusy ? "disabled" : "") + ">" +
+                (riBusy ? tr("执行中", "...") : (ri.error ? tr("重试", "Retry") : tr("待初始化", "Init"))) +
+              "</button>"
+            : "";
           repoHtml.push(
             '<div class="sb-item ' + (isAct ? "active" : "") + '" role="button" tabindex="0" data-repo="' + escapeHtml(r.repo_path) + '" title="' + escapeHtml("[" + platFull + "] " + r.repo_name + " (" + wtCnt + "/" + items.length + ")") + '">' +
               '<span class="sb-item-left">' +
@@ -2738,6 +2827,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 '<span class="hide-collapsed">' + escapeHtml(r.repo_name) + "</span>" +
               "</span>" +
               '<span class="sb-right-group hide-collapsed">' +
+                policyBtn +
                 (platShort ? '<span class="sb-plat-tag ' + forgeCls + '">' + platShort + "</span>" : "") +
                 '<span class="sb-meta">' + wtCnt + "/" + items.length + "</span>" +
                 extBtn +
@@ -2792,7 +2882,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           }
           if (linkWrap) {
             const repoHref = safeUrl(activeRepo.repo_url);
-            linkWrap.innerHTML = repoHref
+            const chipHtml = repoHref
               ? renderRepoChip({
                   forgeType: activeRepo.forge,
                   repoUrl: repoHref,
@@ -2802,6 +2892,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
                   customLabel: forgeLabel(activeRepo.forge) + tr(" 主页", " Home")
                 })
               : "";
+            const ari = activeRepo.repo_init || {};
+            const activePending = (activeRepo.forge === "github" || activeRepo.forge === "gitlab") && (ari.state === "pending" || ari.state === "prompted");
+            const activeBusy = Boolean(state.repoInitRunning[activeRepo.repo_path]);
+            const policyHdrBtn = activePending
+              ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="' + escapeHtml(activeRepo.repo_path) + '" ' + (activeBusy ? "disabled" : "") + ">" +
+                  icon(activeBusy ? "refresh" : "alertTriangle", 11) +
+                  "<span>" + (activeBusy ? tr("初始化中...", "Applying...") : (ari.error ? tr("策略初始化失败 · 点击重试", "Policy Init Failed · Retry") : tr("待初始化策略 · 点击执行", "Policy Pending · Apply"))) + "</span>" +
+                "</button>"
+              : "";
+            linkWrap.innerHTML = chipHtml + policyHdrBtn;
           }
         } else {
           if (titleEl) titleEl.textContent = tr("全局工作区", "Global Workspace");
@@ -3555,30 +3655,51 @@ BOARD_HTML = r"""<!DOCTYPE html>
             "</section>"
           ).join("") + "</div>";
         } else if (state.viewMode === "repos") {
+          const repoByPath = new Map((snap.repos || []).map((r) => [r.repo_path, r]));
           const byRepo = new Map();
           for (const item of items) {
             const meta = resolveRepoMeta(item);
             const key = item.repo_path || item.repo_name || "unknown";
             if (!byRepo.has(key)) {
-              byRepo.set(key, { name: meta.repoName || key, path: key, forge: meta.forgeType, repoUrl: meta.repoUrl, items: [] });
+              const rMeta = repoByPath.get(key) || {};
+              byRepo.set(key, {
+                name: meta.repoName || key,
+                path: key,
+                forge: meta.forgeType,
+                repoUrl: meta.repoUrl,
+                repoInit: rMeta.repo_init || {},
+                items: []
+              });
             }
             byRepo.get(key).items.push(item);
           }
-          container.innerHTML = Array.from(byRepo.values()).map((grp) =>
-            '<section class="repo-section">' +
-              '<div class="repo-hdr">' +
-                '<div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
-                  renderRepoChip({ forgeType: grp.forge, repoUrl: grp.repoUrl, repoName: "" }, { hideName: true, customLabel: forgeLabel(grp.forge) + (grp.repoUrl ? tr(" 主页", " Home") : "") }) +
-                  "<strong>" + escapeHtml(grp.name) + "</strong>" +
-                '</div><div class="mono" style="font-size:11px;color:var(--text-faint);margin-top:3px;">' + escapeHtml(grp.path) + "</div></div>" +
-                '<div style="display:inline-flex;align-items:center;gap:8px;">' +
-                  (grp.repoUrl ? '<a class="btn btn-xs" href="' + escapeHtml(grp.repoUrl) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>" + tr("进入仓库主页", "Open Repo Home") + "</span></a>" : "") +
-                  '<span class="col-count">' + grp.items.length + tr(" 项", " items") + "</span>" +
+          container.innerHTML = Array.from(byRepo.values()).map((grp) => {
+            const gri = grp.repoInit || {};
+            const gPending = (grp.forge === "github" || grp.forge === "gitlab") && (gri.state === "pending" || gri.state === "prompted");
+            const gBusy = Boolean(state.repoInitRunning[grp.path]);
+            const gPolicyBtn = gPending
+              ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="' + escapeHtml(grp.path) + '" ' + (gBusy ? "disabled" : "") + ">" +
+                  icon(gBusy ? "refresh" : "alertTriangle", 11) +
+                  "<span>" + (gBusy ? tr("初始化中...", "Applying...") : (gri.error ? tr("初始化失败 · 重试", "Init Failed · Retry") : tr("待初始化策略 · 一键执行", "Policy Pending · Apply"))) + "</span>" +
+                "</button>"
+              : "";
+            return (
+              '<section class="repo-section">' +
+                '<div class="repo-hdr">' +
+                  '<div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                    renderRepoChip({ forgeType: grp.forge, repoUrl: grp.repoUrl, repoName: "" }, { hideName: true, customLabel: forgeLabel(grp.forge) + (grp.repoUrl ? tr(" 主页", " Home") : "") }) +
+                    "<strong>" + escapeHtml(grp.name) + "</strong>" +
+                  '</div><div class="mono" style="font-size:11px;color:var(--text-faint);margin-top:3px;">' + escapeHtml(grp.path) + "</div></div>" +
+                  '<div style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                    gPolicyBtn +
+                    (grp.repoUrl ? '<a class="btn btn-xs" href="' + escapeHtml(grp.repoUrl) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>" + tr("进入仓库主页", "Open Repo Home") + "</span></a>" : "") +
+                    '<span class="col-count">' + grp.items.length + tr(" 项", " items") + "</span>" +
+                  "</div>" +
                 "</div>" +
-              "</div>" +
-              '<div class="repo-grid">' + grp.items.map((it) => renderCard(it, { showRepo: false })).join("") + "</div>" +
-            "</section>"
-          ).join("");
+                '<div class="repo-grid">' + grp.items.map((it) => renderCard(it, { showRepo: false })).join("") + "</div>" +
+              "</section>"
+            );
+          }).join("");
         } else {
           container.innerHTML = renderListTable(items);
         }
@@ -3762,7 +3883,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
               host: targetHost,
               forge: forgeType,
               token: cleaned,
-              no_verify: Boolean(skipVerify)
+              no_verify: Boolean(skipVerify),
+              auto_repo_init: Boolean(state.autoRepoInit)
             })
           });
           const data = await res.json();
@@ -3776,7 +3898,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
           state.customHostUrl = "";
           state.customHostToken = "";
           const who = data.username ? (" (@" + data.username + ")") : "";
-          showToast(tr("令牌已保存并验证成功" + who + "，正在同步远端数据...", "Token verified & saved" + who + "; syncing remote data..."));
+          const riRes = Array.isArray(data.repo_init_results) ? data.repo_init_results : [];
+          const riAlignedCnt = riRes.filter((x) => x && x.ok && x.aligned).length;
+          const riFailCnt = riRes.filter((x) => x && !x.ok).length;
+          let toastMsg = tr("令牌已保存并验证成功" + who + "，正在同步远端数据...", "Token verified & saved" + who + "; syncing remote data...");
+          if (riAlignedCnt > 0 && riFailCnt === 0) {
+            toastMsg = tr("令牌已保存" + who + "，已自动初始化 " + riAlignedCnt + " 个仓库的线性 Squash 策略", "Saved" + who + " & auto-initialized " + riAlignedCnt + " repo(s)");
+          } else if (riFailCnt > 0) {
+            toastMsg = tr("令牌已保存" + who + "；" + riFailCnt + " 个仓库自动初始化未完成，可点击重试", "Saved" + who + "; " + riFailCnt + " repo(s) pending retry");
+          }
+          showToast(toastMsg, riFailCnt > 0 ? "err" : "ok");
           await fetchSnapshot(false);
           await fetchAuthStatus();
           state.lastTopAlertsSig = "";
@@ -3791,6 +3922,59 @@ BOARD_HTML = r"""<!DOCTYPE html>
           return false;
         } finally {
           state.authSavingHost = "";
+        }
+      }
+
+      async function applyRepoInit(repoPathOrAll) {
+        const key = repoPathOrAll || "__all__";
+        if (state.repoInitRunning[key]) return false;
+        state.repoInitRunning[key] = true;
+        delete state.repoInitErrors[key];
+        state.lastTopAlertsSig = "";
+        renderAll(true);
+        renderTopAlerts(state.snapshot);
+        if (state.setupOpen) renderSetupModal();
+        try {
+          const payload = key === "__all__" ? { all: true } : { repo_path: key };
+          const res = await fetch("/api/repo/init", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-IDD-Request": "1"
+            },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || ("HTTP " + res.status));
+          }
+          if (!data.ok) {
+            const errMsg = data.error || tr("初始化策略未完成", "Failed to apply repo merge policy");
+            state.repoInitErrors[key] = errMsg;
+            showToast(tr("初始化未完成: ", "Init incomplete: ") + errMsg, "err");
+          } else {
+            const cnt = Number(data.applied_count || 0);
+            showToast(
+              cnt > 1
+                ? tr("已完成 " + cnt + " 个仓库线性 Squash 策略与模板初始化", "Initialized " + cnt + " repositories")
+                : tr("已完成仓库线性 Squash 策略与提交模板初始化", "Initialized linear Squash policy & commit templates")
+            );
+          }
+          await fetchSnapshot(false);
+          state.lastTopAlertsSig = "";
+          renderAll(true);
+          renderTopAlerts(state.snapshot);
+          if (state.setupOpen) renderSetupModal();
+          return Boolean(data.ok);
+        } catch (err) {
+          state.repoInitErrors[key] = err.message || tr("请求失败", "Request failed");
+          showToast(tr("初始化失败: ", "Init failed: ") + state.repoInitErrors[key], "err");
+          return false;
+        } finally {
+          delete state.repoInitRunning[key];
+          renderAll(true);
+          renderTopAlerts(state.snapshot);
+          if (state.setupOpen) renderSetupModal();
         }
       }
 
@@ -4042,7 +4226,70 @@ BOARD_HTML = r"""<!DOCTYPE html>
               "</div>"
             : '<div><button class="ghost-link-btn" type="button" data-toggle-custom-host="1">+ ' + tr("添加其他 GitLab / GitHub 主机", "Add Another GitLab / GitHub Host") + "</button></div>";
 
-          bodyHtml = hostCards + customForm;
+          const autoCheckHtml =
+            '<label class="policy-check-row">' +
+              '<input type="checkbox" data-auto-repo-init-toggle="1" ' + (state.autoRepoInit ? "checked" : "") + " />" +
+              "<span>" + tr("连接成功后自动初始化仓库线性 Squash 策略与提交模板（`idd repo-init --apply`）", "Auto-apply linear Squash policy & commit templates after connecting") + "</span>" +
+            "</label>";
+
+          const remoteRepos = ((state.snapshot && state.snapshot.repos) || []).filter((r) => r.forge === "github" || r.forge === "gitlab");
+          const pendingRemoteRepos = remoteRepos.filter((r) => {
+            const ri = r.repo_init || {};
+            return ri.state === "pending" || ri.state === "prompted";
+          });
+          const allBusy = Boolean(state.repoInitRunning.__all__);
+          const policyRowsHtml = remoteRepos.length === 0
+            ? ""
+            : '<div class="policy-section">' +
+                '<div class="policy-section-hdr">' +
+                  '<span style="font-size:12.5px;font-weight:600;color:var(--text);">' + tr("仓库合入策略与模板状态", "Repository Merge Policy & Templates") + "</span>" +
+                  (pendingRemoteRepos.length > 1
+                    ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="__all__" ' + (allBusy ? "disabled" : "") + ">" +
+                        icon(allBusy ? "refresh" : "check", 11) +
+                        "<span>" + (allBusy ? tr("全部初始化中...", "Applying All...") : tr("全部一键初始化 (" + pendingRemoteRepos.length + ")", "Apply All (" + pendingRemoteRepos.length + ")")) + "</span>" +
+                      "</button>"
+                    : "") +
+                "</div>" +
+                '<div class="policy-repo-list">' +
+                  remoteRepos.map((r) => {
+                    const ri = r.repo_init || {};
+                    const st = ri.state || "";
+                    const isAligned = st === "aligned";
+                    const isPending = st === "pending" || st === "prompted";
+                    const busy = Boolean(state.repoInitRunning[r.repo_path]);
+                    const errText = state.repoInitErrors[r.repo_path] || ri.error || "";
+                    const mmList = Array.isArray(ri.mismatches) ? ri.mismatches : [];
+                    const subText = errText
+                      ? tr("失败原因：", "Error: ") + errText
+                      : (mmList.length ? mmList.join(" · ") : (isAligned ? tr("已锁定线性 Squash 与默认提交模板", "Linear Squash & commit templates aligned") : tr("等待首次检测或初始化", "Pending initial check")));
+                    const badgeHtml = isAligned
+                      ? '<span class="badge tone-success">' + icon("check", 11) + "<span>" + tr("已对齐", "Aligned") + "</span></span>"
+                      : (isPending
+                          ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
+                              icon(busy ? "refresh" : "alertTriangle", 11) +
+                              "<span>" + (busy ? tr("初始化中...", "Applying...") : (errText ? tr("重试初始化", "Retry Init") : tr("一键初始化", "Apply Now"))) + "</span>" +
+                            "</button>"
+                          : '<button class="btn btn-xs" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
+                              icon("refresh", 11) +
+                              "<span>" + (busy ? tr("检测中...", "Checking...") : tr("立即初始化", "Initialize")) + "</span>" +
+                            "</button>");
+                    return (
+                      '<div class="policy-repo-row">' +
+                        '<div style="min-width:0;flex:1;">' +
+                          '<div style="display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;">' +
+                            '<span class="host-ic sm ' + (r.forge === "gitlab" ? "is-gitlab" : "is-github") + '">' + forgeIcon(r.forge, 12) + "</span>" +
+                            "<span>" + escapeHtml(r.repo_name) + "</span>" +
+                          "</div>" +
+                          '<div style="font-size:11px;color:' + (errText ? "var(--red)" : "var(--text-faint)") + ';margin-top:2px;word-break:break-word;">' + escapeHtml(subText) + "</div>" +
+                        "</div>" +
+                        badgeHtml +
+                      "</div>"
+                    );
+                  }).join("") +
+                "</div>" +
+              "</div>";
+
+          bodyHtml = hostCards + autoCheckHtml + policyRowsHtml + customForm;
         }
 
         const hdrTitle = isGuide
@@ -4083,21 +4330,32 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const topWrap = document.getElementById("top-alerts-wrap");
         if (!topWrap || !snap) return;
         const authAlerts = snap.auth_alerts || [];
+        const pendingPolicyRepos = (snap.repos || []).filter((r) => {
+          if (r.forge !== "github" && r.forge !== "gitlab") return false;
+          if (!r.forge_connected) return false;
+          const ri = r.repo_init || {};
+          return ri.state === "pending" || ri.state === "prompted";
+        });
         const sig = JSON.stringify({
           aa: authAlerts,
+          pr: pendingPolicyRepos.map((r) => [r.repo_path, r.repo_init]),
           lg: state.lang,
           sv: state.authSavingHost,
-          er: state.authErrors
+          er: state.authErrors,
+          ri: state.repoInitRunning,
+          rie: state.repoInitErrors,
+          ribd: state.repoInitBannerDismissed
         });
         if (sig === state.lastTopAlertsSig) return;
         state.lastTopAlertsSig = sig;
 
-        if (!authAlerts.length) {
+        const showPolicyBanner = pendingPolicyRepos.length > 0 && !state.repoInitBannerDismissed;
+        if (!authAlerts.length && !showPolicyBanner) {
           topWrap.innerHTML = "";
           return;
         }
 
-        topWrap.innerHTML = authAlerts.map((a) => {
+        const authHtml = authAlerts.map((a) => {
           const target = a.api_base || a.host || "";
           const fg = a.forge || "gitlab";
           const isGitLab = fg === "gitlab";
@@ -4142,6 +4400,56 @@ BOARD_HTML = r"""<!DOCTYPE html>
             "</div>"
           );
         }).join("");
+
+        let policyHtml = "";
+        if (showPolicyBanner) {
+          const allBusy = Boolean(state.repoInitRunning.__all__);
+          const repoPills = pendingPolicyRepos.map((r) => {
+            const ri = r.repo_init || {};
+            const busy = Boolean(state.repoInitRunning[r.repo_path]);
+            const errMsg = state.repoInitErrors[r.repo_path] || ri.error || "";
+            const mm = Array.isArray(ri.mismatches) ? ri.mismatches : [];
+            const detail = errMsg ? errMsg : (mm.length ? mm.join(" · ") : tr("尚未锁定线性 Squash 策略与提交模板", "Merge policy not initialized"));
+            return (
+              '<div class="policy-repo-row" style="width:100%;">' +
+                '<div style="min-width:0;flex:1;">' +
+                  '<div style="display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;">' +
+                    '<span class="host-ic sm ' + (r.forge === "gitlab" ? "is-gitlab" : "is-github") + '">' + forgeIcon(r.forge, 12) + "</span>" +
+                    "<span>" + escapeHtml(r.repo_name) + "</span>" +
+                  "</div>" +
+                  '<div style="font-size:11px;color:' + (errMsg ? "var(--red)" : "var(--text-dim)") + ';margin-top:2px;word-break:break-word;">' + escapeHtml(detail) + "</div>" +
+                "</div>" +
+                '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
+                  icon(busy ? "refresh" : "check", 11) +
+                  "<span>" + (busy ? tr("初始化中...", "Applying...") : (errMsg ? tr("重试初始化", "Retry") : tr("立即初始化", "Apply Now"))) + "</span>" +
+                "</button>" +
+              "</div>"
+            );
+          }).join("");
+
+          policyHtml =
+            '<div class="auth-alert-box">' +
+              '<div class="auth-alert-top">' +
+                '<div class="auth-alert-main">' +
+                  icon("alertTriangle", 14) +
+                  "<strong>" + tr("待初始化仓库线性 Squash 合入策略 (" + pendingPolicyRepos.length + ")", "Repository Linear Squash Policy Pending (" + pendingPolicyRepos.length + ")") + "</strong>" +
+                  '<span style="font-size:11.5px;color:var(--text-dim);">' + tr("暂跳过或失败时仍可在左侧仓库栏与设置向导点击执行", "You can still trigger initialization anytime from the sidebar or Setup") + "</span>" +
+                "</div>" +
+                '<div style="display:inline-flex;align-items:center;gap:6px;">' +
+                  (pendingPolicyRepos.length > 1
+                    ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="__all__" ' + (allBusy ? "disabled" : "") + ">" +
+                        icon(allBusy ? "refresh" : "check", 11) +
+                        "<span>" + (allBusy ? tr("全部初始化中...", "Applying...") : tr("全部一键初始化", "Apply All")) + "</span>" +
+                      "</button>"
+                    : "") +
+                  '<button class="btn btn-xs" type="button" data-dismiss-repo-init-banner="1">' + tr("稍后", "Later") + "</button>" +
+                "</div>" +
+              "</div>" +
+              '<div class="policy-repo-list">' + repoPills + "</div>" +
+            "</div>";
+        }
+
+        topWrap.innerHTML = authHtml + policyHtml;
       }
 
       function computeRenderSignature(snap) {
@@ -4170,7 +4478,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
           sk: state.selectedKey,
           ct: state.consoleTab,
           ik: state.inspectedKey,
-          it: state.inspectorTab
+          it: state.inspectorTab,
+          ri: state.repoInitRunning,
+          rie: state.repoInitErrors,
+          ribd: state.repoInitBannerDismissed
         });
       }
 
@@ -4371,6 +4682,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
       });
 
       document.getElementById("top-alerts-wrap").addEventListener("click", (e) => {
+        const dismissBanner = e.target.closest("[data-dismiss-repo-init-banner]");
+        if (dismissBanner) {
+          state.repoInitBannerDismissed = true;
+          state.lastTopAlertsSig = "";
+          renderTopAlerts(state.snapshot);
+          return;
+        }
+        const applyBtn = e.target.closest("[data-apply-repo-init]");
+        if (applyBtn) {
+          applyRepoInit(applyBtn.getAttribute("data-apply-repo-init") || "");
+          return;
+        }
         const openBtn = e.target.closest("[data-open-setup]");
         if (openBtn) {
           openSetupModal(openBtn.getAttribute("data-open-setup") || "auth");
@@ -4384,6 +4707,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
           return;
         }
         handleActionClick(e);
+      });
+
+      document.getElementById("setup-modal").addEventListener("change", (e) => {
+        if (e.target && e.target.matches("[data-auto-repo-init-toggle]")) {
+          state.autoRepoInit = Boolean(e.target.checked);
+        }
       });
 
       document.getElementById("setup-modal").addEventListener("input", (e) => {
@@ -4413,6 +4742,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
       document.getElementById("setup-modal").addEventListener("click", async (e) => {
         if (e.target.closest("[data-setup-close]")) {
           closeSetupModal(true);
+          return;
+        }
+        const applyPolicyBtn = e.target.closest("[data-apply-repo-init]");
+        if (applyPolicyBtn) {
+          await applyRepoInit(applyPolicyBtn.getAttribute("data-apply-repo-init") || "");
           return;
         }
         const tabBtn = e.target.closest("[data-setup-tab]");
@@ -4481,7 +4815,20 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
       });
 
+      document.getElementById("ws-repo-link-wrap").addEventListener("click", (e) => {
+        const applyBtn = e.target.closest("[data-apply-repo-init]");
+        if (applyBtn) {
+          applyRepoInit(applyBtn.getAttribute("data-apply-repo-init") || "");
+        }
+      });
+
       document.getElementById("repo-pills").addEventListener("click", (e) => {
+        const applyBtn = e.target.closest("[data-apply-repo-init]");
+        if (applyBtn) {
+          e.stopPropagation();
+          applyRepoInit(applyBtn.getAttribute("data-apply-repo-init") || "");
+          return;
+        }
         if (e.target.closest("[data-stop-repo]")) return;
         const btn = e.target.closest("[data-repo]");
         if (!btn) return;
@@ -4503,6 +4850,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
       document.getElementById("main-content").addEventListener("click", (e) => {
         if (handleActionClick(e)) return;
+        const applyBtn = e.target.closest("[data-apply-repo-init]");
+        if (applyBtn) {
+          applyRepoInit(applyBtn.getAttribute("data-apply-repo-init") || "");
+          return;
+        }
         if (e.target.closest("[data-retry-init]")) {
           state.initError = "";
           state.slowInit = false;
@@ -4705,6 +5057,59 @@ def _is_client_disconnect(exc: BaseException) -> bool:
     return isinstance(exc, OSError) and getattr(exc, "errno", None) in _CLIENT_DISCONNECT_ERRNOS
 
 
+def _apply_repo_init_for_path(repo_path: Path, *, apply: bool = True) -> dict[str, object]:
+    """Run or probe `repo_init` for `repo_path` and persist its status in `repos.json`."""
+    resolved = repo_path.expanduser().resolve()
+    try:
+        forge = get_forge(resolved)
+        result = forge.repo_init(apply=apply)
+        aligned, mismatches = evaluate_repo_init_settings(result)
+        if aligned:
+            monitor.set_repo_init_meta(resolved, "aligned")
+            state = "aligned"
+        else:
+            monitor.set_repo_init_meta(resolved, "pending", mismatches=mismatches, error="")
+            state = "pending"
+        return {
+            "repo_path": str(resolved),
+            "repo_name": resolved.name,
+            "forge": str(result.get("forge") or ""),
+            "repo": str(result.get("repo") or ""),
+            "ok": True,
+            "aligned": aligned,
+            "state": state,
+            "mismatches": mismatches,
+            "error": "",
+        }
+    except Exception as exc:
+        err_msg = str(exc)
+        prev_meta = monitor.get_repo_init_meta(resolved)
+        monitor.set_repo_init_meta(
+            resolved,
+            "pending",
+            mismatches=list(prev_meta.get("mismatches") or []),
+            error=err_msg,
+        )
+        return {
+            "repo_path": str(resolved),
+            "repo_name": resolved.name,
+            "ok": False,
+            "aligned": False,
+            "state": "pending",
+            "mismatches": list(prev_meta.get("mismatches") or []),
+            "error": err_msg,
+        }
+
+
+def _repo_matches_host(repo_path: Path, host_key: str) -> bool:
+    """Return True when `repo_path`'s origin remote points at `host_key`."""
+    spec, _ = inspect_remote_origin(repo_path)
+    if spec is None:
+        return False
+    target = host_key.strip().lower()
+    return spec.host.lower() == target or spec.hostname.lower() == target
+
+
 class BoardHTTPServer(ThreadingHTTPServer):
     """Threaded HTTP server configured for clean local port reuse and shutdown."""
 
@@ -4891,6 +5296,22 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
                 "username": username,
             }
             save_hosts_config(hosts)
+            auto_repo_init = payload.get("auto_repo_init", True)
+            if isinstance(auto_repo_init, str):
+                auto_repo_init = auto_repo_init.strip().lower() not in ("0", "false", "no")
+            else:
+                auto_repo_init = bool(auto_repo_init)
+            repo_init_results: list[dict[str, object]] = []
+            for repo_path in self._target_repos():
+                resolved_repo = repo_path.expanduser().resolve()
+                has_origin, _ = monitor._detect_repo_meta_ro(resolved_repo)  # noqa: SLF001
+                if not has_origin or not _repo_matches_host(resolved_repo, host_key):
+                    continue
+                if monitor.get_repo_init_meta(resolved_repo)["state"] == "aligned":
+                    continue
+                repo_init_results.append(
+                    _apply_repo_init_for_path(resolved_repo, apply=auto_repo_init)
+                )
             self._refresh_cached_repos(timeout=2.0)
             auth_status = monitor.collect_auth_hosts_status(root=self.root, global_mode=self.global_mode)
             self._send_json(
@@ -4901,7 +5322,54 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
                     "api_base": api_base,
                     "forge": forge_type,
                     "username": username,
+                    "repo_init_results": repo_init_results,
                     "auth": auth_status,
+                },
+            )
+            return
+
+        if parsed.path == "/api/repo/init":
+            payload = self._read_json_body()
+            if payload is None:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "请求格式无效"})
+                return
+            apply_all = bool(payload.get("all"))
+            raw_repo_path = str(payload.get("repo_path") or "").strip()
+            target_repos = [p.expanduser().resolve() for p in self._target_repos()]
+            results: list[dict[str, object]] = []
+            if apply_all:
+                for rp in target_repos:
+                    has_origin, _ = monitor._detect_repo_meta_ro(rp)  # noqa: SLF001
+                    if not has_origin:
+                        continue
+                    if monitor.get_repo_init_meta(rp)["state"] == "aligned":
+                        continue
+                    results.append(_apply_repo_init_for_path(rp, apply=True))
+            else:
+                if not raw_repo_path:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "缺少 repo_path 参数"})
+                    return
+                try:
+                    req_path = Path(raw_repo_path).expanduser().resolve()
+                except OSError:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "无效的仓库路径"})
+                    return
+                if req_path not in target_repos:
+                    self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "仓库不在当前监控白名单内"})
+                    return
+                results.append(_apply_repo_init_for_path(req_path, apply=True))
+
+            self._refresh_cached_repos(timeout=1.5)
+            applied_count = sum(1 for r in results if r.get("ok") and r.get("aligned"))
+            failed = [r for r in results if not r.get("ok")]
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "ok": len(failed) == 0,
+                    "results": results,
+                    "applied_count": applied_count,
+                    "failed_count": len(failed),
+                    "error": str(failed[0].get("error") or "") if failed else "",
                 },
             )
             return
