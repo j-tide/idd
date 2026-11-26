@@ -47,6 +47,10 @@ LAND_MERGE_MAX_RETRIES = 3
 LAND_MERGE_RETRY_DELAY_SECONDS = 1.5
 
 ALLOWED_TYPES = ("feat", "fix", "refactor", "perf", "docs", "test", "ci", "chore")
+CONVENTIONAL_TITLE_RE = re.compile(
+    rf"^({'|'.join(ALLOWED_TYPES)})(\([^)\r\n]+\))?(!)?[:：]\s*(.+)$",
+    re.IGNORECASE,
+)
 ISSUE_BRANCH_RE = re.compile(r"^(feat|fix|refactor|perf|docs|test|ci|chore)/(\d+)-[a-z0-9]+(?:-[a-z0-9]+)*$")
 LOCAL_BRANCH_RE = re.compile(r"^(feat|fix|refactor|perf|docs|test|ci|chore)/[a-z0-9]+(?:-[a-z0-9]+)*$")
 FORBIDDEN_PREFIXES = {
@@ -506,6 +510,19 @@ def _collect_commit_task_records(worktree: Path, issue_dir: str, base_ref: str) 
     return records
 
 
+def _format_conventional_title(default_type: str, raw_title: str) -> str:
+    """Ensure a PR / Squash commit title has a single normalized Conventional Commit prefix."""
+    cleaned = raw_title.strip()
+    match = CONVENTIONAL_TITLE_RE.match(cleaned)
+    if match:
+        prefix_type = match.group(1).lower()
+        scope = match.group(2) or ""
+        bang = match.group(3) or ""
+        subject = match.group(4).strip()
+        return f"{prefix_type}{scope}{bang}: {subject}"
+    return f"{default_type}: {cleaned}"
+
+
 def build_issue_summary(
     worktree: Path,
     issue_dir: str,
@@ -564,12 +581,12 @@ def build_issue_summary(
             blocks.append("\n".join(block_lines))
 
     if issue_title:
-        suggested_title = f"{dominant_type}: {issue_title}"
+        suggested_title = _format_conventional_title(dominant_type, issue_title)
     elif len(tasks) == 1:
         only_change = blocks[0].splitlines()[0].split(" ", 1)[1] if blocks else issue_dir
-        suggested_title = f"{dominant_type}: {only_change}"
+        suggested_title = _format_conventional_title(dominant_type, only_change)
     elif len(commits) == 1 and commits[0]["change"]:
-        suggested_title = f"{dominant_type}: {commits[0]['change']}"
+        suggested_title = _format_conventional_title(dominant_type, commits[0]["change"])
     else:
         suggested_title = f"{dominant_type}: 完成 {issue_dir}"
 

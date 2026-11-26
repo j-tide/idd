@@ -16,8 +16,8 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from version import parse_skill_version  # noqa: E402
 import idd_cli  # noqa: E402
+from version import parse_skill_version  # noqa: E402
 
 
 IDD_BIN = SCRIPTS_DIR / "idd"
@@ -1101,6 +1101,55 @@ class TestIddCli(unittest.TestCase):
             self.assertIn("⚠️ 合入已成功，但自动更新 Issue #42 验收标准失败", warn_res.stdout)
             self.assertIn("本地 `main` 已快进至：", warn_res.stdout)
             self.assertTrue((h.repo / "export.py").is_file())
+
+    def test_pr_and_land_avoid_duplicate_conventional_title_prefixes(self) -> None:
+        self.assertEqual(idd_cli._format_conventional_title("fix", "修复断连"), "fix: 修复断连")
+        self.assertEqual(idd_cli._format_conventional_title("fix", "fix: 修复断连"), "fix: 修复断连")
+        self.assertEqual(idd_cli._format_conventional_title("fix", "Feat(ui)!: 支持筛选"), "feat(ui)!: 支持筛选")
+        self.assertEqual(idd_cli._format_conventional_title("fix", "FIX：修复中文冒号"), "fix: 修复中文冒号")
+        self.assertEqual(idd_cli._format_conventional_title("feat", "API: 新增接口"), "feat: API: 新增接口")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            h.state["issues"]["43"]["title"] = "fix: 过滤遗留任务"
+            h.save_state()
+
+            wt = Path(
+                json.loads(h.run_idd("start", "43", "--prefix", "fix", "--slug", "legacy-tasks", "--json").stdout)[
+                    "worktree"
+                ]
+            )
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+
+            self._write_task(wt, "43-legacy-tasks", 1, "过滤遗留任务", "done", issue="#43")
+            (wt / "legacy.py").write_text("clean = True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(wt),
+                    "commit",
+                    "-m",
+                    "fix: 过滤遗留任务\n\nTask: 43-legacy-tasks/TASK-01\nRefs: #43\nTest: pytest — 1 passed",
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+            dry_pr = h.run_idd("pr", "43", "--dry-run").stdout
+            self.assertIn("Title: fix: 过滤遗留任务 (#43)", dry_pr)
+            self.assertNotIn("fix: fix:", dry_pr)
+
+            h.run_idd("pr", "43")
+            prs = list(h.load_state()["prs"].values())
+            self.assertEqual(len(prs), 1)
+            self.assertEqual(prs[0]["title"], "fix: 过滤遗留任务 (#43)")
+
+            dry_land = h.run_idd("land", "43", "--dry-run").stdout
+            self.assertIn("Squash 提交标题: fix: 过滤遗留任务 (#43)", dry_land)
+            self.assertNotIn("fix: fix:", dry_land)
 
 
 if __name__ == "__main__":
