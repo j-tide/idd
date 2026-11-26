@@ -506,6 +506,10 @@ def _collect_commit_task_records(worktree: Path, issue_dir: str, base_ref: str) 
                 continue
             elif line:
                 extra_lines.append(raw_line.rstrip())
+            elif extra_lines and extra_lines[-1] != "":
+                extra_lines.append("")
+        while extra_lines and extra_lines[-1] == "":
+            extra_lines.pop()
 
         records.append(
             {
@@ -519,6 +523,50 @@ def _collect_commit_task_records(worktree: Path, issue_dir: str, base_ref: str) 
             }
         )
     return records
+
+
+def _wrap_inline_code(text: str) -> str:
+    """Wrap command text in a safe CommonMark inline code span."""
+    cleaned = text.strip()
+    if not cleaned:
+        return ""
+    unwrapped = re.fullmatch(r"`([^`]+)`", cleaned)
+    if unwrapped:
+        cleaned = unwrapped.group(1).strip()
+    if not cleaned:
+        return ""
+    runs = re.findall(r"`+", cleaned)
+    max_ticks = max((len(r) for r in runs), default=0)
+    fence = "`" * (max_ticks + 1)
+    if cleaned.startswith("`") or cleaned.endswith("`"):
+        return f"{fence} {cleaned} {fence}"
+    return f"{fence}{cleaned}{fence}"
+
+
+def _format_test_summary_line(test_text: str) -> str:
+    """Format a Test summary bullet item with inline-coded command(s)."""
+    cleaned = test_text.strip()
+    if not cleaned:
+        return "- **Test:** 未记录"
+
+    def _fmt_segment(seg: str) -> str:
+        if " — " not in seg:
+            return seg.strip()
+        cmd, result = seg.split(" — ", 1)
+        cmd_s = cmd.strip()
+        res_s = result.strip()
+        if not cmd_s:
+            return res_s or seg.strip()
+        return f"{_wrap_inline_code(cmd_s)} — {res_s}" if res_s else _wrap_inline_code(cmd_s)
+
+    segments = [s.strip() for s in cleaned.split("; ") if s.strip()]
+    if len(segments) > 1 and all(" — " in seg for seg in segments):
+        formatted = "; ".join(_fmt_segment(seg) for seg in segments)
+    elif " — " in cleaned:
+        formatted = _fmt_segment(cleaned)
+    else:
+        formatted = cleaned
+    return f"- **Test:** {formatted}"
 
 
 def _format_conventional_title(default_type: str, raw_title: str) -> str:
@@ -561,6 +609,7 @@ def build_issue_summary(
     commit_types = [c["type"] for c in commits if c["type"] and c["type"] != "chore"]
     dominant_type = commit_types[0] if commit_types else "feat"
 
+    first_change = ""
     blocks: list[str] = []
     if tasks:
         for task in tasks:
@@ -569,32 +618,38 @@ def build_issue_summary(
             details = task["_details"]
             raw_title = re.sub(rf"^{re.escape(tid)}[：:\s]+", "", task["title"]).strip()
             change = commit_rec.get("change") or raw_title or task["title"]
+            if not first_change:
+                first_change = change
             test_text = (
                 commit_rec.get("test")
                 or details.get("latest_result")
                 or (f"{details['command']} — {details['outcome']}" if details.get("command") else "")
                 or (f"{task['test']} — {details['outcome'] or task['status']}" if task.get("test") else "未记录")
             )
-            block_lines = [f"{tid} {change}"]
-            if commit_rec.get("extra"):
-                block_lines.append(commit_rec["extra"])
-            block_lines.append(f"Test: {test_text}")
-            blocks.append("\n".join(block_lines))
+            block_parts = [f"### {tid} {change}"]
+            extra = commit_rec.get("extra", "")
+            if extra:
+                block_parts.append(extra)
+            block_parts.append(_format_test_summary_line(test_text))
+            blocks.append("\n\n".join(block_parts))
     elif commits:
         for idx, rec in enumerate(commits, start=1):
             if rec["subject"].startswith("chore: 清理已汇总的任务记录"):
                 continue
             tid = rec["task_id"] or f"TASK-{idx:02d}"
-            block_lines = [f"{tid} {rec['change']}"]
+            change = rec["change"]
+            if not first_change:
+                first_change = change
+            block_parts = [f"### {tid} {change}"]
             if rec["extra"]:
-                block_lines.append(rec["extra"])
-            block_lines.append(f"Test: {rec['test'] or '未在提交中记录'}")
-            blocks.append("\n".join(block_lines))
+                block_parts.append(rec["extra"])
+            block_parts.append(_format_test_summary_line(rec["test"] or "未在提交中记录"))
+            blocks.append("\n\n".join(block_parts))
 
     if issue_title:
         suggested_title = _format_conventional_title(dominant_type, issue_title)
     elif len(tasks) == 1:
-        only_change = blocks[0].splitlines()[0].split(" ", 1)[1] if blocks else issue_dir
+        only_change = first_change or issue_dir
         suggested_title = _format_conventional_title(dominant_type, only_change)
     elif len(commits) == 1 and commits[0]["change"]:
         suggested_title = _format_conventional_title(dominant_type, commits[0]["change"])
