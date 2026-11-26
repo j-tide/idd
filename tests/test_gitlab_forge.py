@@ -505,7 +505,17 @@ class TestGitLabForge(unittest.TestCase):
 
                 # 2. Create Issue on self-hosted GitLab
                 created = json.loads(
-                    run_idd("issue", "create", "--title", "Export CSV", "--body", "Need CSV", "--label", "feat", "--json").stdout
+                    run_idd(
+                        "issue",
+                        "create",
+                        "--title",
+                        "Export CSV",
+                        "--body",
+                        "## 验收标准\n\n- [ ] 支持 CSV 下载\n- [ ] 单测通过\n\n## 后续计划\n\n- [ ] 支持 Excel",
+                        "--label",
+                        "feat",
+                        "--json",
+                    ).stdout
                 )
                 self.assertEqual(created["number"], 1)
                 self.assertIn("/dept/sub/demo/-/issues/1", created["url"])
@@ -582,6 +592,7 @@ class TestGitLabForge(unittest.TestCase):
                 land_res = run_idd("land", "1")
                 self.assertIn("已通过 Squash Merge 直线合入 MR !10", land_res.stdout)
                 self.assertIn("已保留本地与远端分支：feat/1-export-csv", land_res.stdout)
+                self.assertIn("已自动勾选 Issue #1 验收标准（2 项）", land_res.stdout)
                 self.assertTrue(wt.exists())
 
                 # Verify GitLab merge payload & linear main without TASK/1-export-csv
@@ -590,6 +601,9 @@ class TestGitLabForge(unittest.TestCase):
                 self.assertEqual(state.last_merge_payload.get("sha"), wt_head)
                 self.assertFalse(state.last_merge_payload["should_remove_source_branch"])
                 self.assertEqual(state.issues[1]["state"], "closed")
+                self.assertIn("- [x] 支持 CSV 下载", state.issues[1]["description"])
+                self.assertIn("- [x] 单测通过", state.issues[1]["description"])
+                self.assertIn("- [ ] 支持 Excel", state.issues[1]["description"])
                 self.assertEqual(
                     subprocess.check_output(["git", "-C", str(repo), "rev-list", "--merges", "--count", "main"], text=True).strip(),
                     "0",

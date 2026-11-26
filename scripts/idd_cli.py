@@ -605,6 +605,103 @@ def merge_progress_block(original_body: str, block: str) -> str:
     return f"{stripped}\n\n{block}\n"
 
 
+_ACCEPTANCE_PREFIX_RE = re.compile(
+    r"^\s*(?:[（(](?:\d+|[一二三四五六七八九十]+)[）)]|(?:\d+(?:\.\d+)*|[一二三四五六七八九十]+)\s*[.)、:：])\s*"
+)
+_ACCEPTANCE_ZH_START_RE = re.compile(r"^验收(?:$|[\s:：(\[（\-—·])")
+_ACCEPTANCE_EN_START_RE = re.compile(r"^acceptance(?:$|[\s:：(\[\-])")
+_ATX_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
+_FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+_FENCE_CLOSE_RE = re.compile(r"^\s*(`{3,}|~{3,})\s*$")
+_UNCHECKED_TASK_RE = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+\[) (\](?:\s+.*|\s*))$")
+
+
+def _is_acceptance_heading(title: str) -> bool:
+    """Return True when a Markdown heading represents an acceptance criteria section."""
+    cleaned = _ACCEPTANCE_PREFIX_RE.sub("", title.strip()).strip().casefold()
+    if not cleaned:
+        return False
+    if any(kw in cleaned for kw in ("验收标准", "验收条件", "验收清单", "需求验收")):
+        return True
+    if _ACCEPTANCE_ZH_START_RE.match(cleaned):
+        return True
+    if any(kw in cleaned for kw in ("acceptance criteria", "acceptance checklist")):
+        return True
+    return bool(_ACCEPTANCE_EN_START_RE.match(cleaned))
+
+
+def check_acceptance_criteria(body: str) -> tuple[str, int]:
+    """Check unchecked Markdown task boxes inside acceptance sections; return (new_body, checked_count)."""
+    if not body:
+        return body, 0
+
+    out_lines: list[str] = []
+    checked_count = 0
+    active_level: int | None = None
+    in_progress_block = False
+    fence_char: str | None = None
+    fence_len = 0
+
+    for raw_line in body.splitlines(keepends=True):
+        line_no_eol = raw_line.rstrip("\r\n")
+        eol = raw_line[len(line_no_eol):]
+
+        if PROGRESS_START in line_no_eol:
+            active_level = None
+            if PROGRESS_END not in line_no_eol:
+                in_progress_block = True
+            out_lines.append(raw_line)
+            continue
+
+        if in_progress_block:
+            if PROGRESS_END in line_no_eol:
+                in_progress_block = False
+            out_lines.append(raw_line)
+            continue
+
+        if fence_char is not None:
+            close_m = _FENCE_CLOSE_RE.match(line_no_eol)
+            if close_m and close_m.group(1)[0] == fence_char and len(close_m.group(1)) >= fence_len:
+                fence_char = None
+                fence_len = 0
+            out_lines.append(raw_line)
+            continue
+
+        open_m = _FENCE_OPEN_RE.match(line_no_eol)
+        if open_m:
+            seq = open_m.group(1)
+            rest = open_m.group(2)
+            # CommonMark: backtick info strings cannot contain backticks.
+            if not (seq[0] == "`" and "`" in rest):
+                fence_char = seq[0]
+                fence_len = len(seq)
+                out_lines.append(raw_line)
+                continue
+
+        heading_m = _ATX_HEADING_RE.match(line_no_eol)
+        if heading_m:
+            level = len(heading_m.group(1))
+            heading_text = heading_m.group(2)
+            if active_level is None:
+                if _is_acceptance_heading(heading_text):
+                    active_level = level
+            elif level <= active_level:
+                active_level = level if _is_acceptance_heading(heading_text) else None
+            out_lines.append(raw_line)
+            continue
+
+        if active_level is not None:
+            task_m = _UNCHECKED_TASK_RE.match(line_no_eol)
+            if task_m:
+                out_lines.append(f"{task_m.group(1)}x{task_m.group(2)}{eol}")
+                checked_count += 1
+                continue
+
+        out_lines.append(raw_line)
+
+    return "".join(out_lines), checked_count
+
+
 def _require_clean_worktree(worktree: Path) -> None:
     st = run_cmd(["git", "-C", str(worktree), "status", "--porcelain"])
     if st.stdout.strip():
@@ -1868,9 +1965,23 @@ def cmd_land(args: argparse.Namespace) -> int:
                         exit_code=2,
                     )
 
-    # Step B: Build summary BEFORE removing TASK/<issue_dir>/
+    # Step B: Collect TASK snapshot & build summary BEFORE removing TASK/<issue_dir>/
+    landed_tasks: list[dict[str, Any]] = []
+    task_root = wt_path / "TASK"
+    if issue_dir and task_root.is_dir() and (task_root / issue_dir).is_dir():
+        try:
+            collected = task_status.collect(task_root, issue_dir, open_only=False)
+            if collected.get("issues"):
+                landed_tasks = list(collected["issues"][0].get("tasks", []))
+        except Exception:
+            landed_tasks = []
+
     issue_data = forge.get_issue(issue_num, check=False) if issue_num is not None else None
     issue_title = issue_data.get("title") if issue_data else None
+    pending_acceptance_count = 0
+    if issue_num is not None and issue_data and not args.no_check_acceptance:
+        _, pending_acceptance_count = check_acceptance_criteria(issue_data.get("body", ""))
+
     suggested_title, summary = build_issue_summary(
         wt_path,
         issue_dir or branch,
@@ -1905,6 +2016,17 @@ def cmd_land(args: argparse.Namespace) -> int:
 
     # Step D: Dry-run short-circuit
     if args.dry_run:
+        if issue_num is None:
+            acceptance_preview = "无关联远端 Issue（跳过）"
+        elif args.no_check_acceptance:
+            acceptance_preview = "否（已传 --no-check-acceptance）"
+        elif args.auto:
+            acceptance_preview = "暂不勾选（--auto 等待 CI 期间不提前勾选）"
+        elif pending_acceptance_count > 0:
+            acceptance_preview = f"是（将勾选 {pending_acceptance_count} 项）"
+        else:
+            acceptance_preview = "无需更新（未发现未勾选的验收标准）"
+
         lines = [
             "=== IDD Land Dry-Run 预览 ===",
             f"Forge: {forge.forge_type} | {forge.mr_label}: {forge.mr_prefix}{change_num} ({change.get('url', '')})",
@@ -1912,6 +2034,7 @@ def cmd_land(args: argparse.Namespace) -> int:
             f"分支: {branch} -> {base_branch} (基于 {base_ref})",
             f"是否需要 Rebase: {'是' if needs_rebase else '否'}",
             f"合入前清理 TASK/{issue_dir}/: {'是' if will_clean_tasks else '否'}",
+            f"合入后勾选 Issue 验收标准: {acceptance_preview}",
             f"Squash 提交标题: {final_title}",
             "Squash 提交正文:",
             summary.rstrip(),
@@ -1965,6 +2088,26 @@ def cmd_land(args: argparse.Namespace) -> int:
         expected_sha=local_head,
     )
 
+    acceptance_note = ""
+    if issue_num is not None:
+        try:
+            fresh_issue = forge.get_issue(issue_num, check=False) or issue_data
+            orig_body = (fresh_issue or {}).get("body", "")
+            updated_body = orig_body
+            checked_count = 0
+            if not args.no_check_acceptance:
+                updated_body, checked_count = check_acceptance_criteria(orig_body)
+            if landed_tasks and PROGRESS_START in updated_body and PROGRESS_END in updated_body:
+                updated_body = merge_progress_block(updated_body, build_progress_block(landed_tasks))
+            if updated_body != orig_body:
+                forge.update_issue_body(issue_num, updated_body)
+                if checked_count > 0:
+                    acceptance_note = f"已自动勾选 Issue #{issue_num} 验收标准（{checked_count} 项）"
+                else:
+                    acceptance_note = f"已同步更新 Issue #{issue_num} 执行进度"
+        except (IddError, ForgeError) as exc:
+            acceptance_note = f"⚠️ 合入已成功，但自动更新 Issue #{issue_num} 验收标准失败：{exc}"
+
     # Step G: Retain branches & worktree by default; optionally remove worktree; fast-forward main
     in_removed_wt = False
     if args.rm_worktree:
@@ -1984,6 +2127,8 @@ def cmd_land(args: argparse.Namespace) -> int:
         f"已通过 Squash Merge 直线合入 {forge.mr_label} {forge.mr_prefix}{change_num}（无 Merge 节点）：{change.get('url', '')}",
         f"已保留本地与远端分支：{branch}",
     ]
+    if acceptance_note:
+        lines.append(acceptance_note)
     if args.rm_worktree:
         lines.append(f"已移除本地工作树：{wt_path}")
     else:
@@ -2810,6 +2955,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_land.add_argument("--rm-worktree", action="store_true", help="合入后顺带移除本地工作树目录（仍保留本地与远端分支）")
     p_land.add_argument("--auto", action="store_true", help="等待 CI 通过后自动 Squash 合并")
     p_land.add_argument("--no-rebase", action="store_true", help="跳过合入前自动 rebase")
+    p_land.add_argument("--no-check-acceptance", action="store_true", help="合入后跳过自动勾选 Issue 正文中的验收标准复选框")
     p_land.add_argument("--dry-run", action="store_true", help="仅预览合入计划与清理清单")
     p_land.set_defaults(func=cmd_land)
 
