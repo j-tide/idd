@@ -19,6 +19,7 @@ SCRIPT_FILES = (
     "scripts/forge.py",
     "scripts/monitor.py",
     "scripts/board_ui.py",
+    "scripts/preview_ui.py",
     "scripts/task_status.py",
     "scripts/version.py",
 )

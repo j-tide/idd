@@ -36,6 +36,7 @@ from forge import (  # noqa: E402
 )
 import board_ui  # noqa: E402
 import monitor  # noqa: E402
+import preview_ui  # noqa: E402
 import task_status  # noqa: E402
 from version import get_version  # noqa: E402
 
@@ -1379,6 +1380,21 @@ def cmd_board(args: argparse.Namespace) -> int:
         no_open=args.no_open,
         version=__version__,
     )
+
+
+def cmd_preview(args: argparse.Namespace) -> int:
+    try:
+        return preview_ui.run_preview_server(
+            targets=list(args.targets),
+            title=args.title,
+            compare=bool(args.compare),
+            host=args.host,
+            port=args.port,
+            no_open=bool(args.no_open),
+            version=__version__,
+        )
+    except preview_ui.PreviewError as exc:
+        raise IddError(str(exc)) from exc
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
@@ -3216,6 +3232,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_board.add_argument("--forge-ttl", type=float, default=30.0, help="远端 Issue/PR/MR 缓存秒数（默认 30）")
     p_board.add_argument("--no-open", action="store_true", help="启动服务后不自动打开浏览器")
     p_board.set_defaults(func=cmd_board)
+
+    # preview (local HTML prototype workbench)
+    p_preview = sub.add_parser("preview", help="启动本地交互原型预览工作台（支持热更新、A/B 并排对比与视口切换）")
+    p_preview.add_argument("targets", nargs="+", help="HTML 文件路径（支持 `标签=路径`）或目录路径")
+    p_preview.add_argument("--title", default=None, help="自定义预览工作台标题")
+    p_preview.add_argument("--compare", action="store_true", help="默认开启 A/B 并排对比（需至少 2 个目标）")
+    p_preview.add_argument("--host", default="127.0.0.1", help="监听主机地址（默认 127.0.0.1）")
+    p_preview.add_argument("--port", type=int, default=None, help="监听端口（默认优先 17891，占用时自动分配）")
+    p_preview.add_argument("--no-open", action="store_true", help="启动服务后不自动打开浏览器")
+    p_preview.set_defaults(func=cmd_preview)
 
     # watch (terminal live monitor)
     p_watch = sub.add_parser("watch", help="启动终端实时监控面板（默认跨全部已注册仓库，每 2 秒刷新）")
