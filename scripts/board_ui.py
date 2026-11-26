@@ -3276,10 +3276,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
           list.push(Object.assign({ _kind: "issue", _key: row.repo_path + "#issue#" + row.issue_number }, row));
         }
         for (const loc of snap.local_only_items || []) {
-          const blockedCnt = (loc.counts && loc.counts.blocked) || 0;
+          const counts = loc.counts || {};
+          const blockedCnt = Number(counts.blocked || 0);
+          const unfinishedCnt = Number(counts.planned || 0) + Number(counts.in_progress || 0) + Number(counts.unknown || 0);
           const locTotal = Number(loc.total || 0);
           const locDone = Number(loc.done || 0);
-          const allDone = locTotal > 0 && locDone === locTotal;
+          const locPulse = loc.pulse || null;
+          const locDirty = Boolean(locPulse && (Number(locPulse.dirty_count || 0) > 0 || Boolean(locPulse.git_op)));
+          const allDone = locTotal > 0 && locDone > 0 && unfinishedCnt === 0 && blockedCnt === 0 && !locDirty;
           const mrLbl = loc.mr_label || (loc.forge_type === "gitlab" ? "MR" : (loc.forge_type === "github" ? "PR" : ""));
           const locStage = blockedCnt > 0
             ? "受阻"
@@ -3627,11 +3631,20 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const num = ch.number != null ? ch.number : "";
         const prLabel = mrLabel + (num !== "" ? " " + mrPrefix + num : "");
         const overall = ch.checks_overall || "NONE";
+        const pulse = item.pulse || null;
+        const isStale = Boolean(
+          item.change_stale ||
+          (pulse && (Number(pulse.dirty_count || 0) > 0 || Number(pulse.unpushed_commits || 0) > 0 || Boolean(pulse.git_op)))
+        );
         const toneMap = {
-          PASS: { cls: "tone-success", text: prLabel + " · " + tr("CI 全绿", "CI PASS") },
+          PASS: isStale
+            ? { cls: "tone-warning", text: prLabel + " · " + tr("CI 全绿（待同步）", "CI PASS (stale)") }
+            : { cls: "tone-success", text: prLabel + " · " + tr("CI 全绿", "CI PASS") },
           FAIL: { cls: "tone-danger", text: prLabel + " · " + tr("CI 失败", "CI FAIL") },
           PENDING: { cls: "tone-warning", text: prLabel + " · " + tr("CI 运行中", "CI Running") },
-          NONE: { cls: "tone-muted", text: prLabel }
+          NONE: isStale
+            ? { cls: "tone-warning", text: prLabel + " · " + tr("待同步", "Out of sync") }
+            : { cls: "tone-muted", text: prLabel }
         };
         const cfg = toneMap[overall] || toneMap.NONE;
         const chUrl = safeUrl(ch.url);

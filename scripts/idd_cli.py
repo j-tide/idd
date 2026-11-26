@@ -1018,29 +1018,37 @@ def _style_pulse(pulse: dict[str, Any] | None, use_color: bool) -> tuple[str, st
     return dot, sep.join(parts), is_stalled
 
 
-def _style_ci_badge(change: dict[str, Any], use_color: bool) -> str:
+def _style_ci_badge(change: dict[str, Any], use_color: bool, *, stale: bool = False) -> str:
     """Format CI rollup status and mergeability conflict indicator."""
     overall = change.get("checks_overall") or "NONE"
-    ci_badges = {
-        "PASS": _ansi("32", "✓ CI 全绿", use_color),
-        "FAIL": _ansi("1;31", "✗ CI 失败", use_color),
-        "PENDING": _ansi("33", "◔ CI 运行中", use_color),
-        "NONE": _ansi("2", "○ 无 CI", use_color),
-    }
+    if stale:
+        ci_badges = {
+            "PASS": _ansi("33", "✓ CI 全绿 (待同步)", use_color),
+            "FAIL": _ansi("1;31", "✗ CI 失败", use_color),
+            "PENDING": _ansi("33", "◔ CI 运行中", use_color),
+            "NONE": _ansi("33", "○ 无 CI (待同步)", use_color),
+        }
+    else:
+        ci_badges = {
+            "PASS": _ansi("32", "✓ CI 全绿", use_color),
+            "FAIL": _ansi("1;31", "✗ CI 失败", use_color),
+            "PENDING": _ansi("33", "◔ CI 运行中", use_color),
+            "NONE": _ansi("2", "○ 无 CI", use_color),
+        }
     ci_txt = ci_badges.get(overall, str(overall))
     mstate = change.get("mergeStateStatus") or ""
     extra = _ansi("1;31", " (落后/冲突)", use_color) if mstate in {"BEHIND", "DIRTY"} else ""
     return f"{ci_txt}{extra}"
 
 
-def _style_change(change: dict[str, Any], mr_label: str, mr_prefix: str, use_color: bool) -> str:
+def _style_change(change: dict[str, Any], mr_label: str, mr_prefix: str, use_color: bool, *, stale: bool = False) -> str:
     """Format PR/MR reference, Draft tag, CI status, and mergeability state."""
     num = change.get("number")
     ref_raw = f"{mr_label} {mr_prefix}{num}" if num else mr_label
     ref = _ansi("1", ref_raw, use_color)
     if change.get("isDraft"):
         ref += _ansi("35", " (Draft)", use_color)
-    ci_txt = _style_ci_badge(change, use_color)
+    ci_txt = _style_ci_badge(change, use_color, stale=stale)
     sep = _ansi("2", " · ", use_color)
     return f"{ref}{sep}{ci_txt}"
 
@@ -1104,6 +1112,7 @@ def _render_status_card(
     current_task: str,
     pulse: dict[str, Any] | None,
     change: dict[str, Any] | None,
+    change_stale: bool = False,
     mr_label: str,
     mr_prefix: str,
     width: int,
@@ -1128,7 +1137,7 @@ def _render_status_card(
         br_txt = branch or Path(worktree).name
         meta_parts.append(_ansi("36", _truncate_display(br_txt, 42), use_color))
     if change:
-        meta_parts.append(_style_change(change, mr_label, mr_prefix, use_color))
+        meta_parts.append(_style_change(change, mr_label, mr_prefix, use_color, stale=change_stale))
     if meta_parts:
         lines.append(f"{indent}{sep.join(meta_parts)}")
 
@@ -1197,6 +1206,7 @@ def _render_repo_status_body(snap: dict[str, Any], *, width: int, use_color: boo
                 current_task=str(row.get("current_task") or ""),
                 pulse=row.get("pulse"),
                 change=row.get("change"),
+                change_stale=bool(row.get("change_stale")),
                 mr_label=mr_label,
                 mr_prefix=mr_prefix,
                 width=width,

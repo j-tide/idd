@@ -2186,6 +2186,298 @@ class TestMonitorAndBoard(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
         self.assertIn("JS_REDESIGNED_LAYOUT_OK", proc.stdout)
 
+    def test_status_row_stage_and_stale_badge_matrix(self) -> None:
+        base_kwargs = {
+            "issue_number": 44,
+            "title": "docs(readme): rewrite",
+            "url": "https://github.com/acme/idd/issues/44",
+            "mr_label": "PR",
+            "mr_prefix": "#",
+            "repo_name": "idd",
+            "repo_path": "/repos/idd",
+            "repo_url": "https://github.com/acme/idd",
+            "forge_type": "github",
+            "forge_connected": True,
+        }
+
+        def _make_item(counts: dict[str, int], *, total: int | None = None, done: int | None = None, pulse: dict | None = None) -> dict:
+            full_counts = {s: 0 for s in monitor.task_status.STATUSES}
+            full_counts.update(counts)
+            t_total = total if total is not None else sum(full_counts.values())
+            t_done = done if done is not None else full_counts["done"]
+            return {
+                "issue": "44-readme",
+                "worktree": "/repos/idd-worktrees/44-readme",
+                "branch": "docs/44-readme",
+                "total": t_total,
+                "done": t_done,
+                "counts": full_counts,
+                "tasks": [],
+                "pulse": pulse or {"dirty_count": 0, "unpushed_commits": 0, "git_op": ""},
+            }
+
+        pr_pass = {"number": 46, "checks_overall": "PASS", "isDraft": False, "url": "https://github.com/acme/idd/pull/46"}
+        pr_fail = {"number": 46, "checks_overall": "FAIL", "isDraft": False, "url": "https://github.com/acme/idd/pull/46"}
+        pr_none = {"number": 46, "checks_overall": "NONE", "isDraft": False, "url": "https://github.com/acme/idd/pull/46"}
+
+        # 1. PR PASS + TASK-01 done + TASK-02 in_progress + dirty & unpushed -> developing + stale badge
+        row1 = monitor._build_status_row(
+            item=_make_item({"done": 1, "in_progress": 1}, pulse={"dirty_count": 11, "unpushed_commits": 3, "git_op": ""}),
+            change=pr_pass,
+            **base_kwargs,
+        )
+        self.assertEqual(row1["stage"], "🟡 开发中")
+        self.assertTrue(row1["change_stale"])
+        self.assertIn("CI 全绿 (待同步)", row1["change_summary"])
+
+        # 2. PR PASS + unfinished TASK + clean & synced -> developing, not stale
+        row2 = monitor._build_status_row(
+            item=_make_item({"done": 1, "in_progress": 1}),
+            change=pr_pass,
+            **base_kwargs,
+        )
+        self.assertEqual(row2["stage"], "🟡 开发中")
+        self.assertFalse(row2["change_stale"])
+        self.assertIn("✅ CI 全绿", row2["change_summary"])
+
+        # 3. PR PASS + all tasks done (1/1) + dirty / unpushed / git_op -> developing + stale
+        for pulse_case in (
+            {"dirty_count": 1, "unpushed_commits": 0, "git_op": ""},
+            {"dirty_count": 0, "unpushed_commits": 2, "git_op": ""},
+            {"dirty_count": 0, "unpushed_commits": 0, "git_op": "rebasing"},
+        ):
+            row_u = monitor._build_status_row(
+                item=_make_item({"done": 1}, pulse=pulse_case),
+                change=pr_pass,
+                **base_kwargs,
+            )
+            self.assertEqual(row_u["stage"], "🟡 开发中", pulse_case)
+            self.assertTrue(row_u["change_stale"], pulse_case)
+            self.assertIn("待同步", row_u["change_summary"], pulse_case)
+
+        # 4. PR PASS + blocked=1 -> 受阻
+        row_blk = monitor._build_status_row(
+            item=_make_item({"done": 1, "blocked": 1}),
+            change=pr_pass,
+            **base_kwargs,
+        )
+        self.assertEqual(row_blk["stage"], "⛔ 受阻")
+
+        # 5. PR FAIL + in_progress=1 + dirty=1 -> 修 CI still wins
+        row_fail = monitor._build_status_row(
+            item=_make_item({"done": 1, "in_progress": 1}, pulse={"dirty_count": 2, "unpushed_commits": 0, "git_op": ""}),
+            change=pr_fail,
+            **base_kwargs,
+        )
+        self.assertEqual(row_fail["stage"], "🛠️ 修 CI")
+        self.assertTrue(row_fail["change_stale"])
+        self.assertIn("CI 失败 (待同步)", row_fail["change_summary"])
+
+        # 6. PR PASS + done + cancelled + clean & synced -> 待合入
+        row_can = monitor._build_status_row(
+            item=_make_item({"done": 1, "cancelled": 1}),
+            change=pr_pass,
+            **base_kwargs,
+        )
+        self.assertEqual(row_can["stage"], "🔵 待合入")
+        self.assertFalse(row_can["change_stale"])
+
+        # 7. PR PASS + total=0 (TASK cleaned before land) + clean & synced -> 待合入
+        row_empty_tasks = monitor._build_status_row(
+            item=_make_item({}, total=0, done=0),
+            change=pr_pass,
+            **base_kwargs,
+        )
+        self.assertEqual(row_empty_tasks["stage"], "🔵 待合入")
+        self.assertFalse(row_empty_tasks["change_stale"])
+
+        # 8. PR PASS + item=None (no local worktree) -> 待合入
+        row_no_item = monitor._build_status_row(item=None, change=pr_pass, **base_kwargs)
+        self.assertEqual(row_no_item["stage"], "🔵 待合入")
+        self.assertFalse(row_no_item["change_stale"])
+
+        # 9. PR NONE + stale -> format_change_badge indicates 待同步
+        row_none_stale = monitor._build_status_row(
+            item=_make_item({"done": 1}, pulse={"dirty_count": 1, "unpushed_commits": 0, "git_op": ""}),
+            change=pr_none,
+            **base_kwargs,
+        )
+        self.assertEqual(row_none_stale["stage"], "🟡 开发中")
+        self.assertIn("无 CI (待同步)", row_none_stale["change_summary"])
+
+        # 10. No PR + done=1 + dirty=1 -> 开发中; clean + unpushed=1 -> 待提 PR
+        row_no_pr_dirty = monitor._build_status_row(
+            item=_make_item({"done": 1}, pulse={"dirty_count": 1, "unpushed_commits": 0, "git_op": ""}),
+            change=None,
+            **base_kwargs,
+        )
+        self.assertEqual(row_no_pr_dirty["stage"], "🟡 开发中")
+
+        row_no_pr_unpushed = monitor._build_status_row(
+            item=_make_item({"done": 1}, pulse={"dirty_count": 0, "unpushed_commits": 1, "git_op": ""}),
+            change=None,
+            **base_kwargs,
+        )
+        self.assertEqual(row_no_pr_unpushed["stage"], "🟢 待提 PR")
+
+    def test_board_ui_stale_badge_and_handoff_js(self) -> None:
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node binary not available for board_ui JS verification")
+
+        html = board_ui.BOARD_HTML
+        script_match = re.search(r"<script>\s*([\s\S]*?)\s*</script>", html)
+        self.assertIsNotNone(script_match)
+        assert script_match is not None
+        js_src = script_match.group(1)
+
+        def _extract_js_fn(name: str) -> str:
+            marker = f"function {name}("
+            start = js_src.index(marker)
+            brace_start = js_src.index("{", start)
+            depth = 0
+            for idx in range(brace_start, len(js_src)):
+                ch = js_src[idx]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return js_src[start : idx + 1]
+            raise AssertionError(f"Unclosed JS function: {name}")
+
+        harness = "\n".join(
+            [
+                """
+                const state = { lang: 'zh' };
+                """,
+                *(
+                    _extract_js_fn(fn_name)
+                    for fn_name in (
+                        "isEn",
+                        "tr",
+                        "escapeHtml",
+                        "safeUrl",
+                        "parseStage",
+                        "getProgressNumbers",
+                        "renderChangeInline",
+                        "buildHandoffPrompt",
+                    )
+                ),
+                """
+                const assert = require('assert');
+                const stalePassItem = {
+                  _kind: 'issue',
+                  issue_number: 44,
+                  title: 'rewrite README',
+                  stage: '🟡 开发中',
+                  worktree: '/wt/44',
+                  branch: 'docs/44-readme',
+                  done: 1,
+                  total: 2,
+                  current_task: 'TASK-02',
+                  change_stale: true,
+                  pulse: { dirty_count: 0, unpushed_commits: 3, git_op: '' },
+                  change: { number: 46, checks_overall: 'PASS', url: 'https://github.com/acme/idd/pull/46' }
+                };
+                const zhStale = renderChangeInline(stalePassItem);
+                assert(zhStale.includes('tone-warning'), zhStale);
+                assert(zhStale.includes('CI 全绿（待同步）'), zhStale);
+
+                const handoff = buildHandoffPrompt(stalePassItem);
+                assert(!handoff.includes('idd land'), handoff);
+                assert(handoff.includes('TASK-02'), handoff);
+
+                const cleanPass = renderChangeInline({
+                  forge_type: 'github',
+                  change_stale: false,
+                  pulse: { dirty_count: 0, unpushed_commits: 0, git_op: '' },
+                  change: { number: 46, checks_overall: 'PASS', url: 'https://github.com/acme/idd/pull/46' }
+                });
+                assert(cleanPass.includes('tone-success'), cleanPass);
+                assert(cleanPass.includes('CI 全绿'), cleanPass);
+                assert(!cleanPass.includes('待同步'), cleanPass);
+
+                const failStale = renderChangeInline({
+                  forge_type: 'github',
+                  change_stale: true,
+                  pulse: { dirty_count: 1, unpushed_commits: 0, git_op: '' },
+                  change: { number: 46, checks_overall: 'FAIL', url: 'https://github.com/acme/idd/pull/46' }
+                });
+                assert(failStale.includes('tone-danger'), failStale);
+
+                state.lang = 'en';
+                const enStalePass = renderChangeInline({
+                  forge_type: 'github',
+                  pulse: { dirty_count: 0, unpushed_commits: 2, git_op: '' },
+                  change: { number: 46, checks_overall: 'PASS', url: 'https://github.com/acme/idd/pull/46' }
+                });
+                assert(enStalePass.includes('tone-warning'), enStalePass);
+                assert(enStalePass.includes('CI PASS (stale)'), enStalePass);
+
+                const enStaleNone = renderChangeInline({
+                  forge_type: 'github',
+                  change_stale: true,
+                  change: { number: 46, checks_overall: 'NONE', url: 'https://github.com/acme/idd/pull/46' }
+                });
+                assert(enStaleNone.includes('tone-warning'), enStaleNone);
+                assert(enStaleNone.includes('Out of sync'), enStaleNone);
+
+                console.log('JS_STALE_BADGE_AND_HANDOFF_OK');
+                """,
+            ]
+        )
+        proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        self.assertIn("JS_STALE_BADGE_AND_HANDOFF_OK", proc.stdout)
+
+    def test_e2e_appended_task_after_green_pr_returns_to_developing_and_marks_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            repo, _, _, env = _create_repo_harness(root / "h", "demo-app", cfg)
+
+            wt = Path(json.loads(self._run(env, repo, "start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            tdir = wt / "TASK/42-export-csv"
+            tdir.mkdir(parents=True)
+            (tdir / "TASK-01-impl.md").write_text(
+                "# TASK-01：实现导出\n\n- Issue: #42\n- Status: done\n- Depends on: none\n- Test: pytest\n",
+                encoding="utf-8",
+            )
+            (wt / "export.py").write_text("ok = True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(wt), "commit", "-m", "feat: 实现导出\n\nTask: 42-export-csv/TASK-01\nRefs: #42\nTest: pytest — 1 passed"],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(["git", "-C", str(wt), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
+            self._run(env, repo, "pr", "42")
+
+            snap_ready = json.loads(self._run(env, repo, "status", "-g", "--json").stdout)
+            row_ready = next(r for r in snap_ready["issues"] if r["issue_number"] == 42)
+            self.assertEqual(row_ready["stage"], "🔵 待合入")
+            self.assertFalse(row_ready["change_stale"])
+            self.assertEqual(snap_ready["summary"]["ready_to_land_count"], 1)
+
+            # Append TASK-02 in_progress and make local dirty edits without pushing
+            (tdir / "TASK-02-docs.md").write_text(
+                "# TASK-02：补充截图\n\n- Issue: #42\n- Status: in_progress\n- Depends on: TASK-01\n- Test: pytest\n",
+                encoding="utf-8",
+            )
+            (wt / "export.py").write_text("ok = True\nv = 2\n", encoding="utf-8")
+
+            snap_dev = json.loads(self._run(env, repo, "status", "-g", "--json").stdout)
+            row_dev = next(r for r in snap_dev["issues"] if r["issue_number"] == 42)
+            self.assertEqual(row_dev["stage"], "🟡 开发中")
+            self.assertTrue(row_dev["change_stale"])
+            self.assertIn("待同步", row_dev["change_summary"])
+            self.assertEqual(snap_dev["summary"]["ready_to_land_count"], 0)
+
+            term_out = self._run(env, repo, "status").stdout
+            self.assertIn("待同步", term_out)
+            self.assertIn("开发中", term_out)
+
 
 if __name__ == "__main__":
     unittest.main()
