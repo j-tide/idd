@@ -2538,6 +2538,23 @@ def _format_ci_failure_error(forge: Any, change: dict[str, Any], *, context: str
     return IddError("\n".join(lines), exit_code=3)
 
 
+UNFINISHED_LAND_TASK_STATUSES = {"planned", "in_progress", "blocked", "unknown"}
+
+
+def _find_unfinished_tasks(wt_path: Path, issue_dir: str | None) -> list[dict[str, Any]]:
+    """Return unfinished TASK entries under `TASK/<issue_dir>/` that block `idd land`."""
+    task_root = wt_path / "TASK"
+    if not issue_dir or not task_root.is_dir() or not (task_root / issue_dir).is_dir():
+        return []
+    try:
+        collected = task_status.collect(task_root, issue_dir, open_only=False)
+    except Exception:
+        return []
+    issues = collected.get("issues") or []
+    tasks = issues[0].get("tasks", []) if issues else []
+    return [t for t in tasks if t.get("status") in UNFINISHED_LAND_TASK_STATUSES]
+
+
 def _execute_land(
     *,
     caller_cwd: Path,
@@ -2546,6 +2563,7 @@ def _execute_land(
     title_override: str | None = None,
     keep_tasks: bool = False,
     force_clean_evidence: bool = False,
+    force_unfinished_tasks: bool = False,
     rm_worktree: bool = False,
     auto: bool = False,
     wait_ci: bool = False,
@@ -2557,6 +2575,19 @@ def _execute_land(
     wt_path, branch, issue_dir, issue_num = _resolve_target_worktree(repo, target)
     validate_branch_name(branch, issue_num, wt_path)
     _require_clean_worktree(wt_path)
+    if not force_unfinished_tasks:
+        unfinished_tasks = _find_unfinished_tasks(wt_path, issue_dir)
+        if unfinished_tasks:
+            listed = "\n".join(
+                f"  - {t.get('id') or Path(t['path']).stem} [{t.get('status')}] {t.get('title') or ''} ({t.get('path')})"
+                for t in unfinished_tasks
+            )
+            raise IddError(
+                f"检测到 `TASK/{issue_dir}/` 含未完成任务，为防提前合入已暂停：\n{listed}\n"
+                "请先完成并验证上述 TASK（更新状态为 `done` / `cancelled` / `deferred`）后再执行 `idd land`，"
+                "或确认无误后传 `--force-unfinished-tasks` 强制继续。",
+                exit_code=2,
+            )
 
     forge = get_forge(repo.main_worktree)
     change = forge.get_change(branch=branch, check=False)
@@ -2807,6 +2838,7 @@ def cmd_land(args: argparse.Namespace) -> int:
         title_override=args.title,
         keep_tasks=args.keep_tasks,
         force_clean_evidence=args.force_clean_evidence,
+        force_unfinished_tasks=bool(getattr(args, "force_unfinished_tasks", False)),
         rm_worktree=args.rm_worktree,
         auto=args.auto,
         wait_ci=bool(getattr(args, "wait_ci", False)),
@@ -3808,6 +3840,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_land.add_argument("--title", help="自定义 Squash 提交标题")
     p_land.add_argument("--keep-tasks", action="store_true", help="保留 TASK/<issue>/ 目录不清理")
     p_land.add_argument("--force-clean-evidence", action="store_true", help="强制一并清理 evidence/ 下附件")
+    p_land.add_argument("--force-unfinished-tasks", action="store_true", help="跳过未完成 TASK 状态校验并强制继续合入")
     p_land.add_argument("--rm-worktree", action="store_true", help="合入后顺带移除本地工作树目录（仍保留本地与远端分支）")
     p_land.add_argument("--auto", action="store_true", help="开启平台 Auto-Merge 后立即返回")
     p_land.add_argument("--wait-ci", action="store_true", help="推送清理或变基提交后阻塞等待远端 CI 结算再执行 Squash 合入")
