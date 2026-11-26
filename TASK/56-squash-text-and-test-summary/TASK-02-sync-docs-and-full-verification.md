@@ -1,7 +1,7 @@
 # TASK-02：同步规范文档并完成全量回归与发布校验
 
 - Issue: 56-squash-text-and-test-summary
-- Status: planned
+- Status: done
 - Depends on: TASK-01
 - Test: `tests/` 全量测试与 `scripts/release.py --check`
 
@@ -11,8 +11,8 @@
 
 ## 验收标准
 
-- [ ] `SKILL.md` 与 `references/git-issue-workflow.md` 准确反映双格式汇总行为
-- [ ] `python3 -m unittest discover -s tests -v && python3 scripts/release.py --check` 全部通过
+- [x] `SKILL.md` 与 `references/git-issue-workflow.md` 准确反映双格式汇总行为
+- [x] `python3 -m unittest discover -s tests -v && python3 scripts/release.py --check` 全部通过
 
 ## 实现注意事项
 
@@ -25,8 +25,8 @@
 
 ## 执行结果
 
-- Outcome: pending
-- Notes: 等待 TASK-01 完成。
+- Outcome: passed
+- Notes: 已同步 `SKILL.md` 与 `references/git-issue-workflow.md`，全量 89 项测试与版本一致性检查全部通过。
 
 ### 当前阻塞
 
@@ -34,4 +34,6 @@
 
 ### 验证记录
 
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-26 | `python3 -m unittest discover -s tests -v && python3 scripts/release.py --check` | 89 passed; v0.0.3 一致性校验通过 | `tests/` 全量套件与 `scripts/release.py` |
