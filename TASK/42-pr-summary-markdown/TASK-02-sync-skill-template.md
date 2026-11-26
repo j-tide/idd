@@ -1,7 +1,7 @@
 # TASK-02：同步 SKILL 汇总正文模板并完成全量回归
 
 - Issue: 42-pr-summary-markdown
-- Status: planned
+- Status: done
 - Depends on: TASK-01
 - Test: python3 -m unittest discover -s tests -v && python3 scripts/release.py --check
 
@@ -10,8 +10,8 @@
 - 在工作树执行全量单元测试与版本一致性校验。
 
 ## 验收标准
-- [ ] `SKILL.md` 模板与 `build_issue_summary` 实际输出结构完全一致
-- [ ] 全量单元测试与 `scripts/release.py --check` 通过
+- [x] `SKILL.md` 模板与 `build_issue_summary` 实际输出结构完全一致
+- [x] 全量单元测试与 `scripts/release.py --check` 通过
 
 ## 实现注意事项
 - 保持 `SKILL.md` 其余内容和版本号不变。
@@ -21,11 +21,13 @@
 - Expected: 全量测试通过且版本一致性校验通过。
 
 ## 执行结果
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已同步 `SKILL.md` 汇总正文模板，全量 83 个单元测试与版本一致性校验全部通过。
 
 ### 当前阻塞
 无。
 
 ### 验证记录
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-26 | `python3 -m unittest discover -s tests -v && python3 scripts/release.py --check` | passed (83 tests; v0.0.3 一致性通过) | `SKILL.md`, `tests/` |
