@@ -334,7 +334,6 @@ class TestMonitorAndBoard(unittest.TestCase):
                     self.assertNotIn("cdn.", html.lower())
                     for element_id in (
                         "top-progress",
-                        "sync-banner-wrap",
                         "status-cluster",
                         "forge-status-group",
                         "forge-status-popover",
@@ -362,6 +361,12 @@ class TestMonitorAndBoard(unittest.TestCase):
                     self.assertIn("shortDirSlug(it.worktree, it.repo_name, it.branch)", html)
                     self.assertIn("display: none !important;", html)
                     self.assertIn("body.sidebar-collapsed .show-collapsed { display: inline-grid !important; }", html)
+                    self.assertNotIn("sync-banner-wrap", html)
+                    self.assertNotIn("renderSyncBanner", html)
+                    self.assertNotIn("本地工作树已就绪，正在后台同步", html)
+                    self.assertNotIn("已快速恢复上次视图，正在拉取最新状态", html)
+                    self.assertIn(".workspace > #top-alerts-wrap:empty", html)
+                    self.assertIn("#sync-btn { min-width: 88px; justify-content: center; }", html)
                     node_bin = shutil.which("node")
                     if node_bin:
                         script_match = re.search(r"<script>(.*)</script>", html, re.S)

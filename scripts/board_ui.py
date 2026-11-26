@@ -460,6 +460,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
       flex-direction: column;
       gap: 12px;
     }
+    .workspace > #top-alerts-wrap:empty,
+    .workspace > #warnings-wrap:empty {
+      display: none;
+    }
 
     .ws-header {
       display: flex;
@@ -706,6 +710,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       border-color: rgba(74, 222, 128, 0.35) !important;
       color: var(--green) !important;
     }
+    #sync-btn { min-width: 88px; justify-content: center; }
     .btn.spin svg { animation: spin 0.8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -998,27 +1003,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       100% { transform: translateX(360%); }
     }
 
-    /* Sync Banner & Skeleton Loading Primitives */
-    .sync-banner {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 8px 13px;
-      border-radius: 11px;
-      background: var(--accent-soft);
-      border: 1px solid var(--accent-ring);
-      color: var(--accent);
-      font-size: 12px;
-      font-weight: 500;
-    }
-    .sync-banner-left {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      min-width: 0;
-    }
-    .sync-banner-left svg,
+    /* Skeleton Loading Primitives */
     .init-status-left svg {
       animation: spin 1s linear infinite;
       flex-shrink: 0;
@@ -1087,7 +1072,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
       .top-progress-bar,
       .skel-block,
       .seg-pill.skel,
-      .sync-banner-left svg,
       .init-status-left svg,
       .btn.spin svg {
         animation: none !important;
@@ -2249,8 +2233,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
       <section id="kpis" class="telemetry-grid"></section>
 
-      <div id="sync-banner-wrap"></div>
-
       <main id="main-content"></main>
       <div id="warnings-wrap"></div>
       <footer id="footer" class="footer"></footer>
@@ -2853,7 +2835,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
         if (!state.hasLiveSnapshot && state.fromCache) {
           tag.className = "live-pill is-syncing";
-          tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("更新中...", "Refreshing...") + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + clock + "</span>";
+          tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("更新中", "Updating") + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + clock + "</span>";
           return;
         }
         if (state.snapshot && state.snapshot.local_only) {
@@ -2863,7 +2845,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
         const syncingRemote = Boolean(state.snapshot && state.snapshot.forge_syncing);
         tag.className = syncingRemote ? "live-pill is-syncing" : "live-pill is-live";
-        tag.innerHTML = '<span class="dot-pulse"></span><span>' + (syncingRemote ? tr("同步远端...", "Syncing Forge...") : tr("实时", "Live")) + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + clock + "</span>";
+        tag.innerHTML = '<span class="dot-pulse"></span><span>' + (syncingRemote ? tr("同步中", "Syncing") : tr("实时", "Live")) + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + clock + "</span>";
       }
 
       function parseStage(rawStage) {
@@ -4074,8 +4056,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
           ).join("");
         }
 
-        const syncBannerWrap = document.getElementById("sync-banner-wrap");
-        if (syncBannerWrap) syncBannerWrap.innerHTML = "";
         const warnsWrap = document.getElementById("warnings-wrap");
         if (warnsWrap) warnsWrap.innerHTML = "";
 
@@ -4105,32 +4085,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
             "<span>" + tr("正在连接本地 IDD 看板服务…", "Connecting to local IDD dashboard server…") + "</span>" +
             "<span>" + tr("快捷键 <code>[</code> 收起侧栏 · <code>/</code> 搜索 · <code>r</code> 同步远端", "Shortcuts: <code>[</code> sidebar · <code>/</code> search · <code>r</code> sync") + "</span>";
         }
-      }
-
-      function renderSyncBanner(snap) {
-        const wrap = document.getElementById("sync-banner-wrap");
-        if (!wrap) return;
-        if (!snap) {
-          wrap.innerHTML = "";
-          return;
-        }
-        const items = collectItems(true);
-        if (snap.forge_syncing && items.length > 0) {
-          wrap.innerHTML =
-            '<div class="sync-banner">' +
-              '<span class="sync-banner-left">' + icon("refresh", 13) + "<span>" + tr("本地工作树已就绪，正在后台同步 GitHub / GitLab 远端 Issue、PR/MR 与 CI…", "Local worktrees ready — syncing remote Issues, PR/MR & CI in background…") + "</span></span>" +
-              '<span class="num" style="font-size:11px;opacity:0.85;">' + tr("自动更新", "Auto-updating") + "</span>" +
-            "</div>";
-          return;
-        }
-        if (state.fromCache && !state.hasLiveSnapshot) {
-          wrap.innerHTML =
-            '<div class="sync-banner">' +
-              '<span class="sync-banner-left">' + icon("refresh", 13) + "<span>" + tr("已快速恢复上次视图，正在拉取最新状态…", "Restored previous view instantly — fetching latest status…") + "</span></span>" +
-            "</div>";
-          return;
-        }
-        wrap.innerHTML = "";
       }
 
       function renderMain() {
@@ -5048,7 +5002,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         renderTopAlerts(snap);
         renderSidebarFilters(snap);
         renderKpis(snap);
-        renderSyncBanner(snap);
         renderMain();
         renderSidebarReposAndWorktrees(snap);
         renderInspector();
