@@ -1690,17 +1690,160 @@ class TestMonitorAndBoard(unittest.TestCase):
         self.assertIn("data-am-repo-val", html_doc)
         self.assertIn("data-am-quick-global", html_doc)
         self.assertIn("data-am-quick-repo", html_doc)
+        self.assertIn("am-confirm-overlay", html_doc)
+        self.assertIn("am-confirm-modal", html_doc)
+        self.assertIn("openAutoMergeConfirm", html_doc)
+        self.assertIn("PR 自动准入", html_doc)
+        self.assertNotIn("全局自动合入", html_doc)
         self.assertIn("/api/config/auto-merge", html_doc)
 
         node_bin = shutil.which("node")
         if node_bin:
             script_match = re.search(r"<script>\s*([\s\S]*?)\s*</script>", html_doc)
             self.assertIsNotNone(script_match)
+            js_src = script_match.group(1)
             with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=True) as js_tmp:
-                js_tmp.write(script_match.group(1))
+                js_tmp.write(js_src)
                 js_tmp.flush()
                 chk = subprocess.run([node_bin, "--check", js_tmp.name], capture_output=True, text=True, check=False)
                 self.assertEqual(chk.returncode, 0, chk.stderr or chk.stdout)
+
+            def _extract_js_fn(name: str) -> str:
+                marker = f"function {name}("
+                start = js_src.index(marker)
+                brace_start = js_src.index("{", start)
+                depth = 0
+                for idx in range(brace_start, len(js_src)):
+                    ch = js_src[idx]
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            return js_src[start : idx + 1]
+                raise AssertionError(f"Unclosed JS function: {name}")
+
+            ui_harness = "\n".join(
+                [
+                    """
+                    const els = {};
+                    function mkEl(id) {
+                      return {
+                        id,
+                        textContent: '',
+                        innerHTML: '',
+                        className: '',
+                        style: {},
+                        attrs: {},
+                        classList: {
+                          set: new Set(),
+                          add(c) { this.set.add(c); },
+                          remove(c) { this.set.delete(c); },
+                          contains(c) { return this.set.has(c); }
+                        },
+                        setAttribute(k, v) { this.attrs[k] = String(v); }
+                      };
+                    }
+                    ['ws-title','ws-logo','scope-tag','ws-repo-link-wrap','am-confirm-overlay','am-confirm-modal'].forEach((id) => {
+                      els[id] = mkEl(id);
+                    });
+                    const document = { getElementById: (id) => els[id] || null };
+                    const ICONS = { branch: '<b/>', github: '<gh/>', gitlab: '<gl/>', externalLink: '<ext/>', alertTriangle: '<w/>', pr: '<pr/>', x: '<x/>', check: '<c/>' };
+                    const state = {
+                      lang: 'zh',
+                      selectedRepo: 'ALL',
+                      repoInitRunning: {},
+                      autoMergeSaving: {},
+                      amConfirm: null,
+                      snapshot: {
+                        global: true,
+                        config: { auto_merge: false },
+                        repos: [
+                          {
+                            repo_path: '/repos/gh',
+                            repo_name: 'gh-repo',
+                            repo_url: 'https://github.com/o/gh-repo',
+                            forge: 'github',
+                            repo_init: { state: 'aligned' },
+                            auto_merge: { enabled: false, source: 'global', global_default: false, repo_override: null }
+                          },
+                          {
+                            repo_path: '/repos/gl',
+                            repo_name: 'gl-repo',
+                            repo_url: 'https://gitlab.example.com/g/gl-repo',
+                            forge: 'gitlab',
+                            repo_init: { state: 'aligned' },
+                            auto_merge: { enabled: true, source: 'repo', global_default: false, repo_override: true }
+                          }
+                        ]
+                      }
+                    };
+                    """,
+                    *(
+                        _extract_js_fn(fn_name)
+                        for fn_name in (
+                            "isEn",
+                            "tr",
+                            "escapeHtml",
+                            "safeUrl",
+                            "icon",
+                            "forgeIcon",
+                            "forgeLabel",
+                            "renderRepoChip",
+                            "renderWorkspaceHeader",
+                            "openAutoMergeConfirm",
+                            "closeAutoMergeConfirm",
+                            "renderAutoMergeConfirmModal",
+                        )
+                    ),
+                    """
+                    const assert = require('assert');
+
+                    // 1. Global workspace hides redundant #scope-tag and displays "PR 自动准入"
+                    renderWorkspaceHeader(state.snapshot);
+                    assert.strictEqual(els['scope-tag'].style.display, 'none');
+                    assert(els['ws-repo-link-wrap'].innerHTML.includes('PR 自动准入: 关'));
+                    assert(!els['ws-repo-link-wrap'].innerHTML.includes('全局自动合入'));
+
+                    state.snapshot.config.auto_merge = true;
+                    renderWorkspaceHeader(state.snapshot);
+                    assert(els['ws-repo-link-wrap'].innerHTML.includes('PR 自动准入: 开'));
+
+                    // 2. Single GitHub & GitLab repo headers show PR/MR 自动准入
+                    state.selectedRepo = '/repos/gh';
+                    renderWorkspaceHeader(state.snapshot);
+                    assert(els['ws-repo-link-wrap'].innerHTML.includes('PR 自动准入: 关'));
+                    state.selectedRepo = '/repos/gl';
+                    renderWorkspaceHeader(state.snapshot);
+                    assert(els['ws-repo-link-wrap'].innerHTML.includes('MR 自动准入: 开 (仓库)'));
+
+                    // 3. Confirmation warning modal opens before any mutation & closes on cancel
+                    state.snapshot.config.auto_merge = false;
+                    openAutoMergeConfirm('global', '', true);
+                    assert.ok(state.amConfirm);
+                    assert.strictEqual(els['am-confirm-overlay'].attrs['aria-hidden'], 'false');
+                    assert(els['am-confirm-overlay'].classList.contains('open'));
+                    assert(els['am-confirm-modal'].innerHTML.includes('确认开启 PR 自动准入？'));
+                    assert(els['am-confirm-modal'].innerHTML.includes('确认开启 PR 自动准入'));
+                    assert(els['am-confirm-modal'].innerHTML.includes('Squash 直线合入'));
+
+                    closeAutoMergeConfirm();
+                    assert.strictEqual(state.amConfirm, null);
+                    assert.strictEqual(els['am-confirm-overlay'].attrs['aria-hidden'], 'true');
+                    assert(!els['am-confirm-overlay'].classList.contains('open'));
+
+                    // 4. Disable modal renders restore-manual explanation
+                    openAutoMergeConfirm('repo', '/repos/gl', false);
+                    assert.ok(state.amConfirm);
+                    assert(els['am-confirm-modal'].innerHTML.includes('确认关闭 MR 自动准入？'));
+                    assert(els['am-confirm-modal'].innerHTML.includes('恢复人工把关'));
+                    console.log('JS_PR_AUTO_APPROVE_MODAL_OK');
+                    """,
+                ]
+            )
+            ui_proc = subprocess.run([node_bin, "-e", ui_harness], capture_output=True, text=True, check=False)
+            self.assertEqual(ui_proc.returncode, 0, ui_proc.stderr or ui_proc.stdout)
+            self.assertIn("JS_PR_AUTO_APPROVE_MODAL_OK", ui_proc.stdout)
 
     def test_board_ui_motion_contracts_and_tokens(self) -> None:
         html_doc = board_ui.BOARD_HTML

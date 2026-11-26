@@ -154,6 +154,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
     html.theme-transitioning .console-well,
     html.theme-transitioning .inspector-panel,
     html.theme-transitioning .setup-modal,
+    html.theme-transitioning .am-confirm-modal,
     html.theme-transitioning .status-popover,
     html.theme-transitioning .btn,
     html.theme-transitioning .sb-item,
@@ -2307,6 +2308,139 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: var(--green);
     }
 
+    /* PR Auto-Approve Confirmation Warning Modal */
+    .am-confirm-overlay {
+      z-index: 95;
+    }
+    .am-confirm-modal {
+      width: 480px;
+      max-width: 100%;
+      background: var(--bg-card);
+      border: 1px solid var(--border-strong);
+      border-radius: 16px;
+      box-shadow: var(--shadow-panel);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      opacity: 0;
+      transform: translate3d(0, 12px, 0) scale(0.975);
+      transition: transform var(--dur-surface) var(--ease-spring), opacity var(--dur-state) var(--ease-out);
+    }
+    .am-confirm-overlay.open .am-confirm-modal {
+      opacity: 1;
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+    .am-confirm-hdr {
+      padding: 16px 20px 14px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .am-confirm-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .am-confirm-icon.is-warn {
+      background: var(--amber-soft);
+      border: 1px solid rgba(251, 191, 36, 0.36);
+      color: var(--amber);
+    }
+    .am-confirm-icon.is-info {
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-ring);
+      color: var(--accent);
+    }
+    .am-confirm-title {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 650;
+      color: var(--text);
+      line-height: 1.35;
+    }
+    .am-confirm-sub {
+      margin: 3px 0 0;
+      font-size: 12px;
+      color: var(--text-dim);
+      line-height: 1.45;
+    }
+    .am-confirm-body {
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      font-size: 12.5px;
+      color: var(--text-dim);
+      line-height: 1.55;
+    }
+    .am-confirm-scope {
+      padding: 8px 11px;
+      border-radius: 9px;
+      background: var(--bg-well);
+      border: 1px solid var(--border-subtle);
+      color: var(--text);
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .am-confirm-list {
+      margin: 0;
+      padding-left: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .am-confirm-list strong {
+      color: var(--text);
+    }
+    .am-confirm-note {
+      padding: 9px 11px;
+      border-radius: 9px;
+      font-size: 11.5px;
+      line-height: 1.5;
+    }
+    .am-confirm-note.is-warn {
+      background: var(--amber-soft);
+      border: 1px solid rgba(251, 191, 36, 0.28);
+      color: var(--text);
+    }
+    .am-confirm-note.is-info {
+      background: var(--bg-well);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-dim);
+    }
+    .am-confirm-ftr {
+      padding: 12px 20px;
+      border-top: 1px solid var(--border-subtle);
+      background: var(--bg-well);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .btn-danger-warn {
+      background: var(--amber);
+      border-color: var(--amber);
+      color: #111827;
+      font-weight: 650;
+    }
+    .btn-danger-warn:hover:not(:disabled) {
+      filter: brightness(0.95);
+    }
+    html[data-theme="light"] .btn-danger-warn {
+      background: #d97706;
+      border-color: #d97706;
+      color: #ffffff;
+    }
+
     /* Setup & Quickstart Onboarding Wizard Modal (Clean Minimalist Hierarchy) */
     .modal-overlay {
       position: fixed;
@@ -2796,7 +2930,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             </svg>
           </div>
           <h1 id="ws-title" class="ws-title">全局工作区</h1>
-          <span id="scope-tag" class="ws-scope">全局</span>
+          <span id="scope-tag" class="ws-scope" style="display:none;"></span>
           <span id="ws-repo-link-wrap"></span>
         </div>
         <div class="ws-controls">
@@ -2831,6 +2965,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
   <div id="setup-modal-overlay" class="modal-overlay" aria-hidden="true">
     <div id="setup-modal" class="setup-modal" role="dialog" aria-modal="true" aria-label="初始化配置与上手指南"></div>
+  </div>
+  <div id="am-confirm-overlay" class="modal-overlay am-confirm-overlay" aria-hidden="true">
+    <div id="am-confirm-modal" class="am-confirm-modal" role="alertdialog" aria-modal="true" aria-label="确认切换 PR 自动准入"></div>
   </div>
   <div id="inspector-overlay" class="inspector-overlay" aria-hidden="true"></div>
   <aside id="inspector-panel" class="inspector-panel" aria-label="任务详情抽屉" aria-hidden="true">
@@ -2919,6 +3056,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         repoInitErrors: {},
         repoInitBannerDismissed: false,
         autoMergeSaving: {},
+        amConfirm: null,
         statusPopoverOpen: false,
         statusPopoverForge: "",
         lastForgeStatusSig: "",
@@ -4260,10 +4398,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
             const amEnabled = Boolean(am.enabled);
             const amBusy = Boolean(state.autoMergeSaving[activeRepo.repo_path]);
             const amSrc = am.source === "repo" ? tr("仓库", "Repo") : tr("全局", "Global");
+            const mrTag = activeRepo.forge === "gitlab" ? "MR" : "PR";
             const amHdrBtn = (activeRepo.forge === "github" || activeRepo.forge === "gitlab")
-              ? '<button class="am-header-pill ' + (amEnabled ? "is-on" : "") + '" type="button" data-am-quick-repo="' + escapeHtml(activeRepo.repo_path) + '" data-am-next="' + (amEnabled ? "0" : "1") + '" ' + (amBusy ? "disabled" : "") + ' title="' + escapeHtml(tr("切换当前仓库 PR/MR 自动准入与自动合入开关（可在设置中恢复跟随全局）", "Toggle repo PR/MR auto-merge (or reset to Inherit in Setup)")) + '">' +
+              ? '<button class="am-header-pill ' + (amEnabled ? "is-on" : "") + '" type="button" data-am-quick-repo="' + escapeHtml(activeRepo.repo_path) + '" data-am-next="' + (amEnabled ? "0" : "1") + '" ' + (amBusy ? "disabled" : "") + ' title="' + escapeHtml(tr("点击查看影响说明并切换当前仓库 " + mrTag + " 自动准入开关", "Review impact and toggle " + mrTag + " Auto-Approve for this repo")) + '">' +
                   '<span class="am-dot"></span>' +
-                  "<span>" + (amEnabled ? tr("自动合入: 开 (" + amSrc + ")", "Auto-Merge: ON (" + amSrc + ")") : tr("自动合入: 关", "Auto-Merge: OFF")) + "</span>" +
+                  "<span>" + (amEnabled ? tr(mrTag + " 自动准入: 开 (" + amSrc + ")", mrTag + " Auto-Approve: ON (" + amSrc + ")") : tr(mrTag + " 自动准入: 关", mrTag + " Auto-Approve: OFF")) + "</span>" +
                 "</button>"
               : "";
             linkWrap.innerHTML = chipHtml + amHdrBtn + policyHdrBtn;
@@ -4275,16 +4414,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
             logoEl.innerHTML = icon("branch", 15);
           }
           if (scopeEl) {
-            scopeEl.style.display = "inline-flex";
-            scopeEl.textContent = snap.global ? tr("全局", "Global") : tr("单仓库", "Single Repo");
+            scopeEl.style.display = snap.global ? "none" : "inline-flex";
+            if (!snap.global) scopeEl.textContent = tr("单仓库", "Single Repo");
           }
           if (linkWrap) {
             const globalAm = Boolean(snap.config && snap.config.auto_merge);
             const gBusy = Boolean(state.autoMergeSaving.__global__);
             linkWrap.innerHTML =
-              '<button class="am-header-pill ' + (globalAm ? "is-on" : "") + '" type="button" data-am-quick-global="1" data-am-next="' + (globalAm ? "0" : "1") + '" ' + (gBusy ? "disabled" : "") + ' title="' + escapeHtml(tr("切换全局默认 PR/MR 自动准入与自动合入开关", "Toggle global default PR/MR auto-merge switch")) + '">' +
+              '<button class="am-header-pill ' + (globalAm ? "is-on" : "") + '" type="button" data-am-quick-global="1" data-am-next="' + (globalAm ? "0" : "1") + '" ' + (gBusy ? "disabled" : "") + ' title="' + escapeHtml(tr("点击查看影响说明并切换全局默认 PR 自动准入开关", "Review impact and toggle global default PR Auto-Approve")) + '">' +
                 '<span class="am-dot"></span>' +
-                "<span>" + (globalAm ? tr("全局自动合入: 开", "Global Auto-Merge: ON") : tr("全局自动合入: 关", "Global Auto-Merge: OFF")) + "</span>" +
+                "<span>" + (globalAm ? tr("PR 自动准入: 开", "PR Auto-Approve: ON") : tr("PR 自动准入: 关", "PR Auto-Approve: OFF")) + "</span>" +
               "</button>";
           }
         }
@@ -4959,8 +5098,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
         if (titleEl) titleEl.textContent = tr("全局工作区", "Global Workspace");
         if (scopeEl) {
-          scopeEl.style.display = "inline-flex";
-          scopeEl.textContent = tr("初始化", "Booting");
+          scopeEl.style.display = "none";
         }
 
         const repoCntEl = document.getElementById("sb-repo-cnt");
@@ -5581,16 +5719,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
           if (scope === "global") {
             showToast(
               data.auto_merge
-                ? tr("已开启全局默认 PR/MR 自动准入合入", "Enabled global default PR/MR auto-merge")
-                : tr("已关闭全局默认 PR/MR 自动准入合入", "Disabled global default PR/MR auto-merge")
+                ? tr("已开启全局默认 PR 自动准入", "Enabled global default PR Auto-Approve")
+                : tr("已关闭全局默认 PR 自动准入", "Disabled global default PR Auto-Approve")
             );
           } else if (value === null) {
-            showToast(tr("已恢复跟随全局自动合入开关", "Repository auto-merge reset to inherit global"));
+            showToast(tr("已恢复跟随全局 PR 自动准入设置", "Repository PR Auto-Approve reset to inherit global"));
           } else {
             showToast(
               value
-                ? tr("已为该仓库开启自动准入合入", "Enabled auto-merge for repository")
-                : tr("已为该仓库关闭自动准入合入", "Disabled auto-merge for repository")
+                ? tr("已为该仓库开启 PR/MR 自动准入", "Enabled PR/MR Auto-Approve for repository")
+                : tr("已为该仓库关闭 PR/MR 自动准入", "Disabled PR/MR Auto-Approve for repository")
             );
           }
           await fetchSnapshot(false);
@@ -5605,6 +5743,122 @@ BOARD_HTML = r"""<!DOCTYPE html>
           renderAll(true);
           if (state.setupOpen) renderSetupModal();
         }
+      }
+
+      function openAutoMergeConfirm(scope, repoPath, nextValue) {
+        const snap = state.snapshot || {};
+        const globalDefault = Boolean(snap.config && snap.config.auto_merge);
+        const repos = snap.repos || [];
+        if (scope === "global") {
+          const nextBool = Boolean(nextValue);
+          if (nextBool === globalDefault) return;
+          state.amConfirm = {
+            scope: "global",
+            repoPath: "",
+            repoName: tr("全局默认（未单独覆盖的仓库）", "Global Default (all inheriting repos)"),
+            mrTag: "PR",
+            nextValue: nextBool,
+            nextEffective: nextBool,
+            globalDefault: globalDefault,
+            currentOverride: null
+          };
+          renderAutoMergeConfirmModal();
+          return;
+        }
+        const targetRepo = repos.find((r) => r.repo_path === repoPath);
+        if (!targetRepo) return;
+        const am = targetRepo.auto_merge || {};
+        const currentOverride = typeof am.repo_override === "boolean" ? am.repo_override : null;
+        if (nextValue === currentOverride) return;
+        const nextEffective = nextValue === null ? globalDefault : Boolean(nextValue);
+        state.amConfirm = {
+          scope: "repo",
+          repoPath: targetRepo.repo_path,
+          repoName: targetRepo.repo_name || targetRepo.repo_path,
+          mrTag: targetRepo.forge === "gitlab" ? "MR" : "PR",
+          nextValue: nextValue,
+          nextEffective: nextEffective,
+          globalDefault: globalDefault,
+          currentOverride: currentOverride
+        };
+        renderAutoMergeConfirmModal();
+      }
+
+      function closeAutoMergeConfirm() {
+        state.amConfirm = null;
+        renderAutoMergeConfirmModal();
+      }
+
+      function renderAutoMergeConfirmModal() {
+        const overlay = document.getElementById("am-confirm-overlay");
+        const modal = document.getElementById("am-confirm-modal");
+        if (!overlay || !modal) return;
+        const pending = state.amConfirm;
+        if (!pending) {
+          overlay.classList.remove("open");
+          overlay.setAttribute("aria-hidden", "true");
+          return;
+        }
+        overlay.classList.add("open");
+        overlay.setAttribute("aria-hidden", "false");
+
+        const isGlobal = pending.scope === "global";
+        const isOn = Boolean(pending.nextEffective);
+        const tag = pending.mrTag || "PR";
+        const titleText = isOn
+          ? tr("确认开启 " + tag + " 自动准入？", "Enable " + tag + " Auto-Approve?")
+          : tr("确认关闭 " + tag + " 自动准入？", "Disable " + tag + " Auto-Approve?");
+        const subText = isOn
+          ? tr("开启后将跳过人工口头确认，由 CI 决定是否直接合入主干分支。", "Skips verbal approval and lets CI gate direct Squash merges into main.")
+          : tr("关闭后将恢复为「提交 PR/MR 后等待你人工确认才合入」。", "Restores manual confirmation before any PR/MR is merged into main.");
+
+        const scopeLabel = isGlobal
+          ? tr("全局默认设置（作用于所有未单独覆盖的仓库）", "Global default (applies to all repos without overrides)")
+          : (pending.nextValue === null
+              ? tr("仓库「" + pending.repoName + "」· 恢复跟随全局（当前全局为" + (pending.globalDefault ? "开" : "关") + "）", "Repo \"" + pending.repoName + "\" · Inherit global (currently " + (pending.globalDefault ? "ON" : "OFF") + ")")
+              : tr("仓库「" + pending.repoName + "」（仅对当前仓库生效）", "Repo \"" + pending.repoName + "\" (repo-only override)"));
+
+        const bulletsHtml = isOn
+          ? '<ul class="am-confirm-list">' +
+              "<li><strong>" + tr("自动进入 CI 流水线：", "Auto-enter CI:") + "</strong>" + tr("Agent 运行 `idd pr` / `idd mr` 创建或更新变更后，不再停下来等你口头说「准入 / 合入」，直接阻塞等待远端 CI 结算（失败仍保留最多 2 轮自愈）。", "After `idd pr` / `idd mr`, the agent stops pausing for verbal approval and immediately waits for CI (keeping the 2-round self-heal limit).") + "</li>" +
+              "<li><strong>" + tr("自动清理并直线合入 main：", "Auto-clean & Squash merge:") + "</strong>" + tr("CI 全部通过（或仓库未配置远端 CI 且本地测试已通过）后，自动清理临时 `TASK/` 目录、执行 Squash 直线合入 `main`、勾选 Issue 验收框并快进本地 `main`。", "Once CI passes (or no remote CI exists and local tests pass), it cleans `TASK/`, Squash-merges linearly into `main`, checks Issue acceptance boxes, and fast-forwards local `main`.") + "</li>" +
+              "<li><strong>" + tr("安全暂停兜底：", "Safety pause guards:") + "</strong>" + tr("`--draft` 草稿、CI 经 2 轮修复仍失败、Rebase 冲突或 `TASK/evidence/` 含附件时，仍会立刻暂停并保留现场交由人工处理。", "Still pauses safely for `--draft` PRs, 2-round CI failures, rebase conflicts, or `TASK/evidence/` attachments.") + "</li>" +
+            "</ul>"
+          : '<ul class="am-confirm-list">' +
+              "<li><strong>" + tr("恢复人工把关：", "Restore manual approval:") + "</strong>" + tr("Agent 提交 `idd pr` / `idd mr` 并完成 CI 检查后，将停在「待验收」状态，等待你明确同意或运行 `idd land` 后才会合入 `main`。", "After `idd pr` / `idd mr` and CI checks, the workflow pauses at Pending Review until you explicitly approve or run `idd land`.") + "</li>" +
+              "<li><strong>" + tr("单仓库覆盖说明：", "Override behavior:") + "</strong>" + (isGlobal
+                ? tr("关闭全局开关不会影响你曾单独设为「开」的仓库。", "Disabling the global default does not alter repositories explicitly set to ON.")
+                : tr("仅覆盖当前仓库，可随时在设置弹窗切回「跟随全局」或「开」。", "Overrides only this repository; you can switch back to Inherit or ON anytime in Setup.")) + "</li>" +
+            "</ul>";
+
+        const noteHtml = isOn
+          ? '<div class="am-confirm-note is-warn">' + tr("⚠ 注意：一旦开启，满足条件的 " + tag + " 将自动进入主干分支 `main`（默认仍保留开发分支与工作树目录）。请确认对应分支保护与测试门禁符合团队要求。", "⚠ Notice: Eligible " + tag + "s will merge into `main` automatically without extra confirmation (branches and worktrees remain preserved).") + "</div>"
+          : '<div class="am-confirm-note is-info">' + tr("提示：你也可以单次使用 `idd pr --auto-merge` 或 `idd pr --no-auto-merge` 临时覆盖。", "Tip: You can still override per command with `idd pr --auto-merge` or `--no-auto-merge`.") + "</div>";
+
+        const submitLabel = isOn
+          ? tr("确认开启 " + tag + " 自动准入", "Confirm & Enable " + tag + " Auto-Approve")
+          : tr("确认关闭 " + tag + " 自动准入", "Confirm & Disable " + tag + " Auto-Approve");
+        const submitCls = isOn ? "btn btn-danger-warn" : "btn btn-primary";
+
+        modal.setAttribute("aria-label", titleText);
+        modal.innerHTML =
+          '<div class="am-confirm-hdr">' +
+            '<div class="am-confirm-icon ' + (isOn ? "is-warn" : "is-info") + '">' + icon(isOn ? "alertTriangle" : "pr", 18) + "</div>" +
+            '<div style="min-width:0;flex:1;">' +
+              '<h3 class="am-confirm-title">' + escapeHtml(titleText) + "</h3>" +
+              '<p class="am-confirm-sub">' + escapeHtml(subText) + "</p>" +
+            "</div>" +
+            '<button class="icon-btn" type="button" data-am-confirm-cancel="1" aria-label="' + escapeHtml(tr("取消", "Cancel")) + '">' + icon("x", 15) + "</button>" +
+          "</div>" +
+          '<div class="am-confirm-body">' +
+            '<div class="am-confirm-scope"><span>' + tr("生效范围", "Scope") + "</span><strong>" + escapeHtml(scopeLabel) + "</strong></div>" +
+            bulletsHtml +
+            noteHtml +
+          "</div>" +
+          '<div class="am-confirm-ftr">' +
+            '<button class="btn" type="button" data-am-confirm-cancel="1">' + tr("取消", "Cancel") + "</button>" +
+            '<button class="' + submitCls + '" type="button" data-am-confirm-submit="1">' + icon("check", 13) + "<span>" + escapeHtml(submitLabel) + "</span></button>" +
+          "</div>";
       }
 
       async function removeHostToken(targetHost) {
@@ -5727,10 +5981,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
               step: "04",
               title: tr("CI 全绿后线性 Squash 合入", "CI Self-Healing & Squash Land"),
               desc: tr(
-                "自动提 PR / MR 并监控流水线（失败会自动拉取日志修复），全绿后清理临时 TASK 并以直线历史合入 main；可在顶栏或配置开启「自动合入」免口头确认。",
-                "Opens PR/MR, auto-fetches failing CI logs for fixes, cleans temporary TASK files, and squash-merges linearly into main. Enable Auto-Merge to skip manual confirmation."
+                "自动提 PR / MR 并监控流水线（失败会自动拉取日志修复），全绿后清理临时 TASK 并以直线历史合入 main；可在顶栏或配置开启「PR 自动准入」免口头确认。",
+                "Opens PR/MR, auto-fetches failing CI logs for fixes, cleans temporary TASK files, and squash-merges linearly into main. Enable PR Auto-Approve to skip manual confirmation."
               ),
-              cmd: tr('对 Agent 说："合入 #42" 或开启自动合入开关', 'Say: "Land #42" or toggle Auto-Merge')
+              cmd: tr('对 Agent 说："合入 #42" 或开启 PR 自动准入', 'Say: "Land #42" or enable PR Auto-Approve')
             }
           ];
           bodyHtml =
@@ -5957,7 +6211,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const autoMergeSectionHtml =
             '<div class="policy-section">' +
               '<div class="policy-section-hdr">' +
-                '<span style="font-size:12.5px;font-weight:600;color:var(--text);">' + tr("PR/MR 自动准入与自动合入（auto_merge）", "PR/MR Auto-Merge Switch (auto_merge)") + "</span>" +
+                '<span style="font-size:12.5px;font-weight:600;color:var(--text);">' + tr("PR 自动准入（auto_merge）", "PR Auto-Approve (auto_merge)") + "</span>" +
                 '<label class="am-toggle-switch">' +
                   '<input type="checkbox" data-am-global-toggle="1" ' + (globalAm ? "checked" : "") + " " + (gAmBusy ? "disabled" : "") + " />" +
                   '<span class="am-toggle-track"></span>' +
@@ -5966,8 +6220,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
               "</div>" +
               '<div style="font-size:11.5px;color:var(--text-dim);line-height:1.45;">' +
                 tr(
-                  "默认关闭。开启后，Agent 运行 `idd pr` / `idd mr` 将自动等待 CI 结算并在通过（或无远端 CI 且本地测试通过）后直接 Squash 直线合入；遇 CI 2 轮修复失败、Rebase 冲突或 evidence/ 含附件时自动暂停。",
-                  "Disabled by default. When enabled, `idd pr` / `idd mr` waits for CI settlement and squash-lands linearly (including repos without remote CI after local tests pass). Pauses safely on CI failure, rebase conflicts, or evidence attachments."
+                  "默认关闭。开启后，Agent 运行 `idd pr` / `idd mr` 将跳过口头确认直接等待 CI 结算，通过（或无远端 CI 且本地测试通过）后自动清理 `TASK/` 并 Squash 直线合入；遇 CI 2 轮修复失败、Rebase 冲突或 evidence/ 含附件时自动暂停。",
+                  "Disabled by default. When enabled, `idd pr` / `idd mr` skips verbal approval, waits for CI settlement, and squash-lands linearly (including repos without remote CI after local tests pass). Pauses safely on CI failure, rebase conflicts, or evidence attachments."
                 ) +
               "</div>" +
               autoMergeRepoRows +
@@ -6446,7 +6700,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
           return;
         }
         if (e.target && e.target.matches("[data-am-global-toggle]")) {
-          setAutoMergeSetting("global", "", Boolean(e.target.checked));
+          const nextChecked = Boolean(e.target.checked);
+          e.target.checked = !nextChecked;
+          openAutoMergeConfirm("global", "", nextChecked);
         }
       });
 
@@ -6489,7 +6745,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const rp = amSegBtn.getAttribute("data-am-repo-path") || "";
           const rawVal = amSegBtn.getAttribute("data-am-repo-val") || "inherit";
           const nextVal = rawVal === "on" ? true : (rawVal === "off" ? false : null);
-          await setAutoMergeSetting("repo", rp, nextVal);
+          openAutoMergeConfirm("repo", rp, nextVal);
           return;
         }
         const tabBtn = e.target.closest("[data-setup-tab]");
@@ -6565,6 +6821,26 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
       });
 
+      document.getElementById("am-confirm-overlay").addEventListener("click", (e) => {
+        if (e.target.id === "am-confirm-overlay") {
+          closeAutoMergeConfirm();
+        }
+      });
+
+      document.getElementById("am-confirm-modal").addEventListener("click", async (e) => {
+        if (e.target.closest("[data-am-confirm-cancel]")) {
+          closeAutoMergeConfirm();
+          return;
+        }
+        const submitBtn = e.target.closest("[data-am-confirm-submit]");
+        if (submitBtn && state.amConfirm) {
+          const pending = state.amConfirm;
+          submitBtn.disabled = true;
+          await setAutoMergeSetting(pending.scope, pending.repoPath, pending.nextValue);
+          closeAutoMergeConfirm();
+        }
+      });
+
       document.getElementById("ws-repo-link-wrap").addEventListener("click", (e) => {
         const applyBtn = e.target.closest("[data-apply-repo-init]");
         if (applyBtn) {
@@ -6574,14 +6850,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const qGlobal = e.target.closest("[data-am-quick-global]");
         if (qGlobal) {
           const nextOn = qGlobal.getAttribute("data-am-next") === "1";
-          setAutoMergeSetting("global", "", nextOn);
+          openAutoMergeConfirm("global", "", nextOn);
           return;
         }
         const qRepo = e.target.closest("[data-am-quick-repo]");
         if (qRepo) {
           const rp = qRepo.getAttribute("data-am-quick-repo") || "";
           const nextOn = qRepo.getAttribute("data-am-next") === "1";
-          setAutoMergeSetting("repo", rp, nextOn);
+          openAutoMergeConfirm("repo", rp, nextOn);
         }
       });
 
@@ -6844,7 +7120,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const tag = (e.target && e.target.tagName) || "";
         const inInput = tag === "INPUT" || tag === "TEXTAREA" || (e.target && e.target.isContentEditable);
         if (e.key === "Escape") {
-          if (state.setupOpen) {
+          if (state.amConfirm) {
+            closeAutoMergeConfirm();
+          } else if (state.setupOpen) {
             closeSetupModal(true);
           } else if (state.statusPopoverOpen) {
             state.statusPopoverOpen = false;
