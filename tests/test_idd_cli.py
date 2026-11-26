@@ -594,7 +594,7 @@ class TestIddCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             h = GitHubHarness(Path(tmp))
             created = json.loads(
-                h.run_idd("issue", "create", "--title", "Add webhook", "--body", "Details", "--label", "feat", "--json").stdout
+                h.run_idd("issue", "create", "--title", "feat: Add webhook", "--body", "Details", "--label", "feat", "--json").stdout
             )
             self.assertEqual(created["number"], 50)
             self.assertIn("/issues/50", created["url"])
@@ -1177,7 +1177,7 @@ class TestIddCli(unittest.TestCase):
         # 1. Unaligned GitHub repo prompts once on first onboarding command, then stops repeating and updates on apply
         with tempfile.TemporaryDirectory() as tmp:
             h = GitHubHarness(Path(tmp))
-            first_out = h.run_idd("issue", "create", "--title", "Test onboarding", "--body", "desc").stdout
+            first_out = h.run_idd("issue", "create", "--title", "feat: Test onboarding", "--body", "desc").stdout
             self.assertIn("💡 首次接管提示", first_out)
             self.assertIn("allow_merge_commit=true（建议 false）", first_out)
             self.assertIn("idd repo-init --apply", first_out)
@@ -1209,7 +1209,7 @@ class TestIddCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             h3 = GitHubHarness(Path(tmp))
             created_json = json.loads(
-                h3.run_idd("issue", "create", "--title", "JSON onboarding", "--body", "desc", "--json").stdout
+                h3.run_idd("issue", "create", "--title", "feat: JSON onboarding", "--body", "desc", "--json").stdout
             )
             self.assertEqual(created_json["repo_init_hint"]["command"], "idd repo-init --apply")
             self.assertIn("allow_merge_commit=true（建议 false）", created_json["repo_init_hint"]["mismatches"])
@@ -1311,6 +1311,144 @@ class TestIddCli(unittest.TestCase):
             self.assertIn("- [x] 保留正文各节并勾选验收框", final_body)
             self.assertIn("- [x] 刷新 `<!-- idd:progress:start -->` 进度条", final_body)
             self.assertIn("- [x] TASK-01：修复进度块匹配", final_body)
+
+    def test_issue_title_validation_short_scope_and_flags(self) -> None:
+        # Valid normalized formats
+        self.assertEqual(
+            idd_cli.validate_and_format_issue_title("feat: 支持导出 CSV"),
+            "feat: 支持导出 CSV",
+        )
+        self.assertEqual(
+            idd_cli.validate_and_format_issue_title("fix(sync): 避免误匹配行内标记"),
+            "fix(sync): 避免误匹配行内标记",
+        )
+        self.assertEqual(
+            idd_cli.validate_and_format_issue_title("Feat(Repo-Init)!：中文冒号"),
+            "feat(repo-init)!: 中文冒号",
+        )
+
+        # --type / --scope assembly & idempotency
+        self.assertEqual(
+            idd_cli.validate_and_format_issue_title("补齐校验", issue_type="fix", scope="land"),
+            "fix(land): 补齐校验",
+        )
+        self.assertEqual(
+            idd_cli.validate_and_format_issue_title("fix: 补齐校验", issue_type="fix", scope="land"),
+            "fix(land): 补齐校验",
+        )
+        self.assertEqual(
+            idd_cli.validate_and_format_issue_title("fix(land): 补齐校验", issue_type="fix", scope="LAND"),
+            "fix(land): 补齐校验",
+        )
+
+        # Escape hatch --raw
+        self.assertEqual(
+            idd_cli.validate_and_format_issue_title("Tracking Q4 roadmap", raw=True),
+            "Tracking Q4 roadmap",
+        )
+        with self.assertRaises(idd_cli.IddError):
+            idd_cli.validate_and_format_issue_title("Tracking Q4", issue_type="feat", raw=True)
+        with self.assertRaises(idd_cli.IddError):
+            idd_cli.validate_and_format_issue_title("Tracking Q4", scope="ui", raw=True)
+
+        # Invalid or missing prefixes, conflicts, empty/multiline
+        for bad_title in (
+            "",
+            "   ",
+            "line1\nline2",
+            "修复导出空指针",
+            "feat(): 空括号",
+            "feat(repo-init-and-templates): 太长的括号作用域",
+            "fix(sync land): 含空格",
+            "fix(sync,land): 含逗号",
+            "fix(cli/sync): 含斜杠",
+            "fix(同步): 含中文",
+        ):
+            with self.assertRaises(idd_cli.IddError, msg=f"should reject {bad_title!r}"):
+                idd_cli.validate_and_format_issue_title(bad_title)
+
+        with self.assertRaises(idd_cli.IddError):
+            idd_cli.validate_and_format_issue_title("fix: 描述", issue_type="feat")
+        with self.assertRaises(idd_cli.IddError):
+            idd_cli.validate_and_format_issue_title("fix(sync): 描述", scope="land")
+        with self.assertRaises(idd_cli.IddError):
+            idd_cli.validate_and_format_issue_title("描述", scope="sync")
+
+    def test_issue_create_cli_validation_and_start_title_inference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+
+            # Unprefixed title without --type or --raw is rejected cleanly
+            bad_res = h.run_idd("issue", "create", "--title", "修复进度块匹配", check=False)
+            self.assertNotEqual(bad_res.returncode, 0)
+            self.assertIn("不符合 IDD 命名规范", bad_res.stderr)
+            self.assertIn("--raw", bad_res.stderr)
+
+            # Overlong scope (>16 chars) is rejected cleanly
+            long_scope_res = h.run_idd(
+                "issue",
+                "create",
+                "--title",
+                "feat(very-long-module-name): 过长作用域",
+                check=False,
+            )
+            self.assertNotEqual(long_scope_res.returncode, 0)
+            self.assertIn("最多 16 字符", long_scope_res.stderr)
+
+            # --type + --scope succeeds and stores normalized title
+            created = json.loads(
+                h.run_idd(
+                    "issue",
+                    "create",
+                    "--type",
+                    "fix",
+                    "--scope",
+                    "sync",
+                    "--title",
+                    "避免误匹配行内标记",
+                    "--json",
+                ).stdout
+            )
+            self.assertEqual(created["title"], "fix(sync): 避免误匹配行内标记")
+            issue_id_1 = str(created["number"])
+            self.assertEqual(h.load_state()["issues"][issue_id_1]["title"], "fix(sync): 避免误匹配行内标记")
+
+            # --raw bypasses validation
+            raw_created = json.loads(
+                h.run_idd("issue", "create", "--title", "Q4 Milestone Tracker", "--raw", "--json").stdout
+            )
+            self.assertEqual(raw_created["title"], "Q4 Milestone Tracker")
+
+            # idd start infers prefix from title even with no labels, and avoids `fix-sync` duplication
+            h.state["issues"]["60"] = {
+                "number": 60,
+                "title": "fix(sync): 避免误匹配行内标记",
+                "body": "",
+                "labels": [],
+                "state": "OPEN",
+                "url": "https://github.com/acme/demo/issues/60",
+            }
+            h.state["issues"]["61"] = {
+                "number": 61,
+                "title": "refactor(land): 拆分合入流程",
+                "body": "",
+                "labels": [],
+                "state": "OPEN",
+                "url": "https://github.com/acme/demo/issues/61",
+            }
+            h.save_state()
+
+            started_60 = json.loads(h.run_idd("start", "60", "--json").stdout)
+            self.assertEqual(started_60["branch"], "fix/60-sync")
+            self.assertEqual(started_60["issue"], "60-sync")
+
+            # Explicit --prefix overrides title <type>
+            started_61 = json.loads(h.run_idd("start", "61", "--prefix", "perf", "--json").stdout)
+            self.assertEqual(started_61["branch"], "perf/61-land")
+
+            # Legacy unprefixed Issue with bug label still falls back to fix/
+            started_43 = json.loads(h.run_idd("start", "43", "--json").stdout)
+            self.assertEqual(started_43["branch"], "fix/43-fix-dark-mode-flicker")
 
 
 if __name__ == "__main__":
