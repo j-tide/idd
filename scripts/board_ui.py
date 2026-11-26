@@ -66,6 +66,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       --green-soft: rgba(74, 222, 128, 0.12);
       --amber: #fbbf24;
       --amber-soft: rgba(251, 191, 36, 0.12);
+      --amber-border: rgba(251, 191, 36, 0.26);
       --red: #f87171;
       --red-soft: rgba(248, 113, 113, 0.13);
       --purple: #a78bfa;
@@ -109,6 +110,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       --green-soft: rgba(5, 150, 105, 0.10);
       --amber: #d97706;
       --amber-soft: rgba(217, 119, 6, 0.10);
+      --amber-border: rgba(217, 119, 6, 0.28);
       --red: #dc2626;
       --red-soft: rgba(220, 38, 38, 0.10);
       --purple: #7c3aed;
@@ -459,6 +461,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       gap: 12px;
+    }
+    #top-alerts-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
     .workspace > #top-alerts-wrap:empty,
     .workspace > #warnings-wrap:empty {
@@ -1657,13 +1664,36 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       gap: 10px;
-      padding: 12px 16px;
-      border-radius: 12px;
-      border: 1px solid var(--border-strong);
-      border-left: 3px solid var(--amber);
-      background: var(--bg-card);
+      padding: 13px 16px;
+      border-radius: 14px;
+      border: 1px solid var(--amber-border);
+      background:
+        linear-gradient(180deg, rgba(251, 191, 36, 0.065) 0%, rgba(251, 191, 36, 0.015) 100%),
+        var(--bg-card);
       color: var(--text);
       font-size: 12.5px;
+    }
+    html[data-theme="light"] .auth-alert-box {
+      background:
+        linear-gradient(180deg, rgba(217, 119, 6, 0.055) 0%, rgba(217, 119, 6, 0.012) 100%),
+        var(--bg-card);
+    }
+    .alert-warn-ic {
+      width: 26px;
+      height: 26px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+      background: var(--amber-soft);
+      border: 1px solid rgba(251, 191, 36, 0.32);
+      color: var(--amber);
+    }
+    html[data-theme="light"] .alert-warn-ic {
+      border-color: rgba(217, 119, 6, 0.28);
+    }
+    .auth-alert-box .policy-repo-row {
+      background: var(--bg-well);
     }
     .auth-alert-top {
       display: flex;
@@ -5435,7 +5465,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             '<div class="auth-alert-box">' +
               '<div class="auth-alert-top">' +
                 '<div class="auth-alert-main">' +
-                  icon("alertTriangle", 14) +
+                  '<span class="alert-warn-ic">' + icon("alertTriangle", 13) + "</span>" +
                   "<strong>" + tr("待初始化仓库线性 Squash 合入策略 (" + pendingPolicyRepos.length + ")", "Repository Linear Squash Policy Pending (" + pendingPolicyRepos.length + ")") + "</strong>" +
                   '<span style="font-size:11.5px;color:var(--text-dim);">' + tr("暂跳过或失败时仍可在左侧仓库栏与设置向导点击执行", "You can still trigger initialization anytime from the sidebar or Setup") + "</span>" +
                 "</div>" +
