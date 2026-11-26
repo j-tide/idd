@@ -8,18 +8,21 @@
 
 | 维度 | 命名规范 | 示例（Issue #42） |
 | :--- | :--- | :--- |
-| Issue | GitHub / GitLab 仓库 Issue 编号 | `#42` |
+| Issue 标题 | `<type>: <简明描述>` 或 `<type>(<scope>): <简明描述>`（≤ 50 字符，不重复动词；可选 `scope` 须简短 ≤ 16 字符小写标识，跨模块省去括号） | `feat(export): 支持导出 CSV` |
+| Issue 编号 | GitHub / GitLab 仓库 Issue 编号 | `#42` |
 | 目录名 / 任务目录 | `<issue>-<slug>` | `42-export-csv` / `TASK/42-export-csv/` |
 | 独立工作树路径 | `<主仓库同级>/<仓库名>-worktrees/<issue-dir>`（可用 `IDD_WORKTREE_ROOT` 覆盖） | `../my-app-worktrees/42-export-csv` |
 | 开发分支 | `<type>/<issue-dir>`（纯本地无 Issue 为 `<type>/<slug>`） | `feat/42-export-csv` |
 | PR / MR 关联 | PR / MR 正文自动带 `Closes #<issue>` | `Closes #42` |
 
-### 允许的 8 类分支与提交 `<type>`
+### 允许的 8 类 Issue / 分支 / 提交 `<type>`
+
+> `idd issue create` 默认校验标题前缀与简短 `scope`（≤ 16 字符，支持 `--type`/`--scope` 拼接或 `--raw` 放行）；`idd start` 推断分支前缀时优先读取 `--prefix`，其次读取 Issue 标题中的 `<type>`，最后回退到 Issue Labels 与默认 `feat`。
 
 | `type` | 适用场景 | 分支示例（带 Issue） |
 | :--- | :--- | :--- |
 | `feat` | 新增功能、UI 页面/样式/动效迭代（默认项） | `feat/42-export-csv` |
-| `fix` | 修复 Bug 或异常问题（Issue 含 `bug` 标签自动采用） | `fix/43-dark-mode-flicker` |
+| `fix` | 修复 Bug 或异常问题（Issue 标题带 `fix:` 或含 `bug` 标签自动采用） | `fix/43-dark-mode-flicker` |
 | `refactor` | 重构代码结构（不改变外部业务行为） | `refactor/44-auth-token` |
 | `perf` | 专项性能优化（耗时、内存、包体积、帧率） | `perf/45-table-virtual-scroll` |
 | `docs` | 纯文档、注释或说明更新 | `docs/46-setup-guide` |

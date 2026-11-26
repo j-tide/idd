@@ -499,7 +499,7 @@ class TestGitLabForge(unittest.TestCase):
                     )
 
                 # 0. Missing token error includes full http:// scheme for idd auth login
-                unauth_res = run_idd("issue", "create", "--title", "No token yet", check=False)
+                unauth_res = run_idd("issue", "create", "--title", "feat: No token yet", check=False)
                 self.assertNotEqual(unauth_res.returncode, 0)
                 self.assertIn(f"idd auth login http://127.0.0.1:{port} --token", unauth_res.stderr)
 
@@ -518,7 +518,7 @@ class TestGitLabForge(unittest.TestCase):
                         "issue",
                         "create",
                         "--title",
-                        "Export CSV",
+                        "feat: Export CSV",
                         "--body",
                         "## 验收标准\n\n- [ ] 支持 CSV 下载\n- [ ] 单测通过\n\n## 后续计划\n\n- [ ] 支持 Excel",
                         "--label",
@@ -691,7 +691,7 @@ class TestGitLabForge(unittest.TestCase):
             )
 
         run_idd("auth", "login", base_url, "--token", "glpat-secret")
-        run_idd("issue", "create", "--title", "Land test", "--body", "## 验收标准\n\n- [ ] 确认合入", "--label", "fix")
+        run_idd("issue", "create", "--title", "fix: Land test", "--body", "## 验收标准\n\n- [ ] 确认合入", "--label", "fix")
         started = json.loads(run_idd("start", "1", "--slug", "async-land", "--json").stdout)
         wt = Path(started["worktree"])
         task_dir = wt / "TASK/1-async-land"
@@ -894,7 +894,7 @@ class TestGitLabForge(unittest.TestCase):
 
                 run_idd("auth", "login", f"http://127.0.0.1:{port}", "--token", "glpat-secret")
 
-                first_out = run_idd("issue", "create", "--title", "Init check", "--body", "desc").stdout
+                first_out = run_idd("issue", "create", "--title", "feat: Init check", "--body", "desc").stdout
                 self.assertIn("💡 首次接管提示", first_out)
                 self.assertIn("GitLab", first_out)
                 self.assertIn("merge_method=merge（建议 ff）", first_out)

@@ -81,7 +81,7 @@ idd board
 | `idd watch [--current-only]` | 在终端按 2 秒频率实时刷新全局（或当前仓库）Worktree 脉搏、当前 TASK 与 CI |
 | `idd status [-g\|--global]` | 终端一次性输出 Open Issues、Worktree `TASK` 进度、脉搏与 PR/MR CI |
 | `idd repos [list\|add\|remove\|prune]` | 查看或管理全局自动监控的仓库索引（`~/.config/idd/repos.json`） |
-| `idd issue create --title "..."` | 创建 GitHub / GitLab Issue |
+| `idd issue create --title "..." [--type ...] [--scope ...]` | 按规范标题创建 GitHub / GitLab Issue |
 | `idd start <issue# \| slug>` | 创建或幂等复用独立 Worktree，`--no-track` 建分支并立即推远端 `origin`，同步 `.worktreeinclude` |
 | `idd sync [issue#]` | 将本地 `TASK` 勾选进度同步回 Issue 正文并自动推送当前开发分支 |
 | `idd pr` / `idd mr` | 汇总 `TASK` 与测试记录（附 `Closes #id`）创建或更新 PR / MR |
@@ -93,9 +93,9 @@ idd board
 | `idd upgrade [--check]` | 检查或立即快进更新本地 `idd`（`idd --version` 查看当前版本） |
 | `idd uninstall [--dry-run] [--keep-config] [-y]` | 安全完全卸载 `idd`（移除软链、技能仓库、配置与缓存） |
 
-### 分支规范（零 Git Hooks 侵入）
+### Issue 与分支规范（零 Git Hooks 侵入）
 
-分支前缀与 Commit `<type>` 共用以下 **8 类标准词表**（绑定 Issue 为 `<type>/<issue#>-<slug>`，纯本地为 `<type>/<slug>`）：
+Issue 标题、分支前缀与 Commit `<type>` 共用以下 **8 类标准词表**（Issue 标题为 `<type>: <描述>` 或 `<type>(<scope>): <描述>`，可选 `scope` 须为 ≤ 16 字符的小写英文标识；绑定 Issue 分支为 `<type>/<issue#>-<slug>`，纯本地为 `<type>/<slug>`）：
 
 `feat` · `fix` · `refactor` · `perf` · `docs` · `test` · `ci` · `chore`
 

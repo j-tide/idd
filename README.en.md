@@ -81,7 +81,7 @@ idd board
 | `idd watch [--current-only]` | Live terminal monitor for global or single-repo worktrees, tasks, and CI |
 | `idd status [-g\|--global]` | One-shot terminal summary of Open Issues, `TASK` progress, pulse, and PR/MR CI |
 | `idd repos [list\|add\|remove\|prune]` | Inspect or manage the global monitored repository index (`~/.config/idd/repos.json`) |
-| `idd issue create --title "..."` | Create a GitHub or GitLab Issue |
+| `idd issue create --title "..." [--type ...] [--scope ...]` | Create a GitHub or GitLab Issue with validated title |
 | `idd start <issue# \| slug>` | Create or idempotently reuse an isolated worktree, create `--no-track` branch & push to `origin`, and sync `.worktreeinclude` |
 | `idd sync [issue#]` | Sync local `TASK` checklist progress back to the Issue body and auto-push branch commits |
 | `idd pr` / `idd mr` | Summarize `TASK` and test records (`Closes #id`) to create or update a PR / MR |
@@ -93,9 +93,9 @@ idd board
 | `idd upgrade [--check]` | Check for updates or fast-forward `idd` (`idd --version` prints current version) |
 | `idd uninstall [--dry-run] [--keep-config] [-y]` | Completely remove `idd` symlinks, skill clone, config, and cache |
 
-### Branch Naming (Zero Git Hooks)
+### Issue &amp; Branch Naming (Zero Git Hooks)
 
-Branches and commit `<type>` tags share **8 standard prefixes** (`<type>/<issue#>-<slug>` for Issue worktrees, `<type>/<slug>` for local-only branches):
+Issue titles, branches, and commit `<type>` tags share **8 standard prefixes** (Issue titles use `<type>: <summary>` or `<type>(<scope>): <summary>` with an optional short lowercase `scope` ≤ 16 chars; branches use `<type>/<issue#>-<slug>` for Issue worktrees or `<type>/<slug>` for local-only branches):
 
 `feat` · `fix` · `refactor` · `perf` · `docs` · `test` · `ci` · `chore`
 
