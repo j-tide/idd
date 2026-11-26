@@ -45,7 +45,7 @@
   </picture>
 </p>
 
-1. **聊想法，先立一个 Issue 锚点**：在任意 Agent 窗口聊清需求范围，直接说 *「按 idd 建个 Issue」*，不污染当前代码工作区。
+1. **聊想法，先看样再立 Issue 锚点**：在任意 Agent 窗口聊清需求，必要时先看可交互 HTML 原型或 Before/After 样例对齐效果，确认后再说 *「按 idd 建个 Issue」*，不污染当前代码工作区。
 2. **多 Agent 各做各的、互不打扰**：让 **Claude Code** *「开工 #115」*，同时让 **Codex** *「开工 #51」*。每个需求自动进独立的物理 Worktree 目录和规范分支，自动复制 `.env` 并各自维护 `TASK/` 进度。
 3. **打开 `idd board` 盯进度，随时一键换手**：通过看板看改动行数、当前步骤和 CI 状态。需要换工具接着做时，在卡片或接力控制台点击 **「复制接力词」**（或直接复制目录/分支），贴进 **Antigravity** 等任意另一个 Agent 对话框即可无缝续写。
 4. **验收通过，干净 Squash 合入 `main`**：在最后一个 Agent 里说 *「合入 #115」*，自动 rebase、把 `TASK` 汇总写入 PR/MR 与提交正文、清理临时 `TASK/<issue>/` 目录后以单条直线提交合入 `main`——默认保留需求分支与工作树，空间不够时再运行 `idd cleanup`。
@@ -78,6 +78,7 @@ idd board
 | 命令 | 说明 |
 | :--- | :--- |
 | `idd board` / `idd ui` | 启动本地离线 Web 进度雷达与一键接力看板（每 2 秒刷新脉搏，支持中/英切换） |
+| `idd preview <target>... [--compare]` | 启动本地交互原型预览工作台（支持热更新、A/B 并排对比与桌面/平板/手机视口切换） |
 | `idd watch [--current-only]` | 在终端按 2 秒频率实时刷新全局（或当前仓库）Worktree 脉搏、当前 TASK 与 CI |
 | `idd status [-g\|--global]` | 终端一次性输出 Open Issues、Worktree `TASK` 进度、脉搏与 PR/MR CI |
 | `idd repos [list\|add\|remove\|prune]` | 查看或管理全局自动监控的仓库索引（`~/.config/idd/repos.json`） |

@@ -1,7 +1,7 @@
 # TASK-04：同步中英文 README 并执行全量回归验证
 
 - Issue: 27-visual-preview-and-reply
-- Status: planned
+- Status: done
 - Depends on: TASK-03
 - Test: python3 -m unittest discover -s tests -v
 
@@ -14,8 +14,8 @@
 
 ## 验收标准
 
-- [ ] `README.md` 与 `README.en.md` 已同步补充 `idd preview` 与直观对齐说明，版本徽章未改动
-- [ ] `python3 scripts/release.py --check` 与全量 `unittest` 全部通过
+- [x] `README.md` 与 `README.en.md` 已同步补充 `idd preview` 与直观对齐说明，版本徽章未改动
+- [x] `python3 scripts/release.py --check` 与全量 `unittest` 全部通过
 
 ## 实现注意事项
 
@@ -28,8 +28,8 @@
 
 ## 执行结果
 
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已同步更新中英文 README，完成版本一致性检查与全量 77 项单元测试回归。
 
 ### 当前阻塞
 
@@ -37,4 +37,6 @@
 
 ### 验证记录
 
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-26 | `python3 scripts/release.py --check && python3 -m unittest discover -s tests -v` | passed (v0.0.3, 77/77 tests ok) | `README.md`, `README.en.md`, `tests/` |

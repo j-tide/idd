@@ -45,7 +45,7 @@ When you run multiple AI coding tools at the same time, two problems show up fas
   </picture>
 </p>
 
-1. **Turn a chat into an Issue anchor**: Align on scope in any agent window and ask it to open an Issue (for example, *"Create an Issue for streaming CSV export"*). Your working tree stays untouched.
+1. **Turn a chat into a visual-aligned Issue anchor**: Align on scope in any agent window—reviewing an interactive HTML prototype or Before/After sample first when UI or output changes—then ask it to open an Issue (for example, *"Create an Issue for streaming CSV export"*). Your working tree stays untouched.
 2. **Run multiple agents in parallel**: Tell **Claude Code** *"Start #115"* and **Codex** *"Start #51"*. Each task gets its own physical worktree directory, validated branch, `.env` copy, and `TASK/<issue>/` ledger—zero conflicts.
 3. **Glance at `idd board` & switch agents in one click**: Watch live file diffs, task steps, and CI status without interrupting any agent. Need to swap tools? Click **Copy Handoff** (or copy the worktree path / branch) on any row or console, paste into **Antigravity** (or any other agent), and continue right from `TASK/`.
 4. **Land a single linear commit onto `main`**: Once CI is green, tell the active agent *"Land #115"*. IDD rebases onto `main`, writes the `TASK` summary into the PR/MR and commit body, removes temporary `TASK/<issue>/` files, and Squash-merges cleanly—while keeping your branch and worktree safe until you run `idd cleanup`.
@@ -78,6 +78,7 @@ idd board
 | Command | Description |
 | :--- | :--- |
 | `idd board` / `idd ui` | Start the offline Web radar & 1-click handoff board (2s live worktree pulse, bilingual 中文 / EN) |
+| `idd preview <target>... [--compare]` | Launch the local prototype preview workbench (hot reload, side-by-side A/B compare, and responsive viewports) |
 | `idd watch [--current-only]` | Live terminal monitor for global or single-repo worktrees, tasks, and CI |
 | `idd status [-g\|--global]` | One-shot terminal summary of Open Issues, `TASK` progress, pulse, and PR/MR CI |
 | `idd repos [list\|add\|remove\|prune]` | Inspect or manage the global monitored repository index (`~/.config/idd/repos.json`) |
