@@ -17,6 +17,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from version import parse_skill_version  # noqa: E402
+import idd_cli  # noqa: E402
 
 
 IDD_BIN = SCRIPTS_DIR / "idd"
@@ -119,6 +120,9 @@ if args[:2] == ["issue", "list"]:
 
 if args[:2] == ["issue", "edit"]:
     num = args[2]
+    if state.get("fail_issue_edit"):
+        print("injected issue edit failure", file=sys.stderr)
+        sys.exit(1)
     issue = state["issues"][str(num)]
     bf = arg_val(args, "--body-file")
     if bf:
@@ -925,6 +929,178 @@ class TestIddCli(unittest.TestCase):
                 text=True,
             ).strip()
             self.assertEqual(remote_after_sync, local_sha)
+
+    def test_check_acceptance_criteria_markdown_edge_cases(self) -> None:
+        sample = (
+            "## 背景\n\n"
+            "- [ ] 非验收复选框\n\n"
+            "## 1. 验收标准（必选）\n\n"
+            "- [ ] 支持 UTF-8 BOM\n"
+            "- [x] 已完成的一项\n"
+            "  * [ ] 缩进星号项\n"
+            "  + [ ] 缩进加号项\n"
+            "  1. [ ] 有序列表项\n"
+            "### 子验收条件\n"
+            "- [ ] 子标题下的验收项\n\n"
+            "```markdown\n"
+            "## 验收标准\n"
+            "- [ ] 代码块里的示例不能改\n"
+            "```\n\n"
+            "~~~\n"
+            "- [ ] 波浪线代码块不能改\n"
+            "~~~\n\n"
+            "## 后续计划\n\n"
+            "- [ ] 下一期优化项\n\n"
+            "## Acceptance Criteria\n\n"
+            "- [ ] English item\n"
+            "- [X] Uppercase already checked\n\n"
+            "<!-- idd:progress:start -->\n"
+            "## 执行进度（IDD 自动同步）\n"
+            "- [ ] TASK-01：进度块内保持原样\n"
+            "<!-- idd:progress:end -->\n"
+        )
+        updated, count = idd_cli.check_acceptance_criteria(sample)
+        self.assertEqual(count, 6)
+        self.assertIn("- [ ] 非验收复选框", updated)
+        self.assertIn("- [x] 支持 UTF-8 BOM", updated)
+        self.assertIn("- [x] 已完成的一项", updated)
+        self.assertIn("  * [x] 缩进星号项", updated)
+        self.assertIn("  + [x] 缩进加号项", updated)
+        self.assertIn("  1. [x] 有序列表项", updated)
+        self.assertIn("- [x] 子标题下的验收项", updated)
+        self.assertIn("- [ ] 代码块里的示例不能改", updated)
+        self.assertIn("- [ ] 波浪线代码块不能改", updated)
+        self.assertIn("- [ ] 下一期优化项", updated)
+        self.assertIn("- [x] English item", updated)
+        self.assertIn("- [X] Uppercase already checked", updated)
+        self.assertIn("- [ ] TASK-01：进度块内保持原样", updated)
+
+        # Idempotent on second run
+        updated2, count2 = idd_cli.check_acceptance_criteria(updated)
+        self.assertEqual(count2, 0)
+        self.assertEqual(updated2, updated)
+
+        # Preserves CRLF and missing trailing newline
+        crlf = "## 验收\r\n- [ ] 行一\r\n- [ ] 行二"
+        crlf_out, crlf_count = idd_cli.check_acceptance_criteria(crlf)
+        self.assertEqual(crlf_count, 2)
+        self.assertEqual(crlf_out, "## 验收\r\n- [x] 行一\r\n- [x] 行二")
+
+    def test_land_checks_acceptance_criteria_and_respects_flags(self) -> None:
+        issue_body_template = (
+            "## 范围\n\n"
+            "- [ ] 范围说明框（不应被勾选）\n\n"
+            "## 验收标准\n\n"
+            "- [ ] 验收项一：支持导出\n"
+            "- [ ] 验收项二：单测通过\n\n"
+            "## 后续计划\n\n"
+            "- [ ] 二期规划\n"
+        )
+
+        # Case 1: --dry-run preview and default land checks acceptance + syncs TASK progress
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            h.state["issues"]["42"]["body"] = issue_body_template
+            h.save_state()
+
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+
+            # Sync initial in_progress state to Issue #42, then finish TASK-01 without running sync again
+            self._write_task(wt, "42-export-csv", 1, "导出 CSV", "in_progress")
+            h.run_idd("sync", "42")
+            self.assertIn("- [ ] TASK-01：导出 CSV *(in_progress)*", h.load_state()["issues"]["42"]["body"])
+
+            self._write_task(wt, "42-export-csv", 1, "导出 CSV", "done")
+            (wt / "export.py").write_text("ok = True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "feat: 导出 CSV"], check=True, capture_output=True)
+            h.run_idd("pr", "42")
+
+            dry_out = h.run_idd("land", "42", "--dry-run").stdout
+            self.assertIn("合入后勾选 Issue 验收标准: 是（将勾选 2 项）", dry_out)
+            self.assertIn("- [ ] 验收项一：支持导出", h.load_state()["issues"]["42"]["body"])
+
+            land_out = h.run_idd("land", "42").stdout
+            self.assertIn("已自动勾选 Issue #42 验收标准（2 项）", land_out)
+            final_body = h.load_state()["issues"]["42"]["body"]
+            self.assertIn("- [ ] 范围说明框（不应被勾选）", final_body)
+            self.assertIn("- [x] 验收项一：支持导出", final_body)
+            self.assertIn("- [x] 验收项二：单测通过", final_body)
+            self.assertIn("- [ ] 二期规划", final_body)
+            self.assertIn("- [x] TASK-01：导出 CSV", final_body)
+            self.assertNotIn("*(in_progress)*", final_body)
+
+        # Case 2: --auto waits for CI and does NOT prematurely check acceptance criteria
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            h.state["issues"]["42"]["body"] = issue_body_template
+            h.save_state()
+
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+            self._write_task(wt, "42-export-csv", 1, "导出 CSV", "done")
+            (wt / "export.py").write_text("ok = True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "feat: 导出 CSV"], check=True, capture_output=True)
+            h.run_idd("pr", "42")
+
+            dry_auto = h.run_idd("land", "42", "--auto", "--dry-run").stdout
+            self.assertIn("暂不勾选（--auto 等待 CI 期间不提前勾选）", dry_auto)
+
+            auto_out = h.run_idd("land", "42", "--auto").stdout
+            self.assertIn("开启自动 Squash 合并", auto_out)
+            body_after_auto = h.load_state()["issues"]["42"]["body"]
+            self.assertIn("- [ ] 验收项一：支持导出", body_after_auto)
+            self.assertIn("- [ ] 验收项二：单测通过", body_after_auto)
+
+        # Case 2: --no-check-acceptance skips acceptance boxes
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            h.state["issues"]["42"]["body"] = issue_body_template
+            h.save_state()
+
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+            self._write_task(wt, "42-export-csv", 1, "导出 CSV", "done")
+            (wt / "export.py").write_text("ok = True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "feat: 导出 CSV"], check=True, capture_output=True)
+            h.run_idd("pr", "42")
+
+            dry_skip = h.run_idd("land", "42", "--no-check-acceptance", "--dry-run").stdout
+            self.assertIn("合入后勾选 Issue 验收标准: 否（已传 --no-check-acceptance）", dry_skip)
+
+            land_skip = h.run_idd("land", "42", "--no-check-acceptance").stdout
+            self.assertNotIn("已自动勾选", land_skip)
+            body_after_skip = h.load_state()["issues"]["42"]["body"]
+            self.assertIn("- [ ] 验收项一：支持导出", body_after_skip)
+            self.assertIn("- [ ] 验收项二：单测通过", body_after_skip)
+
+        # Case 3: Issue update failure prints non-fatal warning and still fast-forwards main
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            h.state["issues"]["42"]["body"] = issue_body_template
+            h.state["fail_issue_edit"] = True
+            h.save_state()
+
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+            self._write_task(wt, "42-export-csv", 1, "导出 CSV", "done")
+            (wt / "export.py").write_text("ok = True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "feat: 导出 CSV"], check=True, capture_output=True)
+            h.run_idd("pr", "42")
+
+            warn_res = h.run_idd("land", "42")
+            self.assertEqual(warn_res.returncode, 0)
+            self.assertIn("⚠️ 合入已成功，但自动更新 Issue #42 验收标准失败", warn_res.stdout)
+            self.assertIn("本地 `main` 已快进至：", warn_res.stdout)
+            self.assertTrue((h.repo / "export.py").is_file())
 
 
 if __name__ == "__main__":
