@@ -1,7 +1,7 @@
 # TASK-04：同步 SKILL 与文档并完成全量回归验证
 
 - Issue: 28-auto-merge-pr-mr-ci
-- Status: in_progress
+- Status: done
 - Depends on: TASK-02, TASK-03
 - Test: python3 -m unittest discover -s tests -v && python3 scripts/release.py --check
 
@@ -11,9 +11,9 @@
 - 创建 PR 并等待远端 CI 结算（遵循授权红线，本 PR 停在待验收状态不擅自合入）。
 
 ## 验收标准
-- [ ] `SKILL.md`、`references/git-issue-workflow.md`、`README.md`、`README.en.md` 内容准确一致，不改动 `metadata.version`。
-- [ ] 全量单元测试与 `scripts/release.py --check` 全部通过。
-- [ ] 已发起 PR 且远端 CI 状态明晰。
+- [x] `SKILL.md`、`references/git-issue-workflow.md`、`README.md`、`README.en.md` 内容准确一致，不改动 `metadata.version`。
+- [x] 全量单元测试与 `scripts/release.py --check` 全部通过。
+- [x] 已发起 PR 且远端 CI 状态明晰。
 
 ## 实现注意事项
 - 不提前修改版本号；仅在全部功能与文档完成后执行最终全量回归。
@@ -23,11 +23,14 @@
 - Expected: 全量测试 OK 且版本检查通过。
 
 ## 执行结果
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已同步更新 `SKILL.md`、工作流文档与中英文 README，全量 75 项单元测试与版本一致性校验全部通过。
 
 ### 当前阻塞
 无。
 
 ### 验证记录
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-26 | `python3 -m unittest discover -s tests -v` | passed (75/75) | `tests/` |
+| 2026-11-26 | `python3 scripts/release.py --check` | passed (`v0.0.3` 一致性通过) | `scripts/release.py` |
