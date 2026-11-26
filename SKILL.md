@@ -189,10 +189,11 @@ Test: <本任务实际执行的验证及结果>
    idd land <issue#>
    ```
    `idd land` 会自动完成：
-   - 核对工作树干净与分支命名合规 → `git fetch` 并自动 rebase 到最新 `origin/main`；
+   - 核对工作树与分支。GitLab 先确认项目启用了快进合并和强制 Squash。随后 `git fetch` 并自动 rebase 到最新 `origin/main`；
    - 在删除 `TASK/<issue>/` 前，先将完整 `Closes #<id>` 与所有 `TASK-XX` / `Test:` 写入 PR/MR 描述与 Squash Commit 正文；
    - 执行 `git rm -rf TASK/<issue>` 并提交清理（若 `evidence/` 含附件且未传 `--force-clean-evidence` 会安全暂停提示）；
    - 以**单条 Squash 提交**直线合入 `main`（GitHub 走 Squash Merge；GitLab 走 Squash + Fast-Forward，自动关闭 Issue 并**默认保留远端与本地需求分支**）；
+   - GitLab 合入后根据 MR 结果和远端目标分支确认只新增一条提交。自动合入仍在等待时报告待确认状态；
    - 合入真正完成后（非 `--auto` 挂起），默认自动勾选 Issue 正文「验收标准」节内的未勾选复选框并保底刷新进度块（可用 `--no-check-acceptance` 跳过）；
    - **默认保留本地 Worktree**（只有显式传入 `--rm-worktree` 时才顺带移除工作树目录，分支依然保留），并尝试将干净的主工作树 `main` 快进至最新。
 2. **释放本地工作树空间（按需手动）**：平时保留工作树便于回顾上下文；需要清理磁盘时手动运行 `idd cleanup`——它只删除工作树目录（**绝不删除分支**），且仅当工作区干净**且**本地 `HEAD` 与已合入 PR/MR 的 `headRefOid` 完全一致时才清理，避免误删合入后的本地新增提交。
