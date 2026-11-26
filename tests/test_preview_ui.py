@@ -221,6 +221,65 @@ class TestPreviewUI(unittest.TestCase):
         combined = err_proc.stdout + err_proc.stderr
         self.assertIn("找不到预览目标文件或目录", combined)
 
+    def test_preview_ui_motion_contracts_and_shared_tokens(self) -> None:
+        import board_ui  # noqa: E402
+
+        board_css_m = re.search(r"<style>([\s\S]*?)</style>", board_ui.BOARD_HTML)
+        preview_css_m = re.search(r"<style>([\s\S]*?)</style>", preview_ui.PREVIEW_HTML)
+        preview_js_m = re.search(r"<script>\s*([\s\S]*?)\s*</script>", preview_ui.PREVIEW_HTML)
+        self.assertIsNotNone(board_css_m)
+        self.assertIsNotNone(preview_css_m)
+        self.assertIsNotNone(preview_js_m)
+
+        board_css = board_css_m.group(1)
+        preview_css = preview_css_m.group(1)
+        preview_js = preview_js_m.group(1)
+
+        # Shared Motion Tokens must match board_ui.py exactly
+        for token in (
+            "--ease-out",
+            "--ease-spring",
+            "--ease-in-out",
+            "--ease-snap",
+            "--dur-press",
+            "--dur-micro",
+            "--dur-state",
+            "--dur-surface",
+            "--dur-exit",
+            "--dur-data",
+        ):
+            pat = re.compile(rf"{re.escape(token)}\s*:\s*([^;]+);")
+            bm = pat.search(board_css)
+            pm = pat.search(preview_css)
+            self.assertIsNotNone(bm, f"Missing {token} in board_ui")
+            self.assertIsNotNone(pm, f"Missing {token} in preview_ui")
+            self.assertEqual(pm.group(1).strip(), bm.group(1).strip(), f"Token mismatch for {token}")
+
+        self.assertIsNone(re.search(r"transition\s*:\s*all\b", preview_css))
+        self.assertIn("@media (prefers-reduced-motion: reduce)", preview_css)
+        self.assertIn("@media (max-width: 768px)", preview_css)
+        self.assertIn("html.theme-transitioning", preview_css)
+        self.assertIn(".stage.is-dragging iframe.canvas", preview_css)
+
+        for marker in (
+            "prefersReducedMotion",
+            "syncSlidingIndicator",
+            "split-handle",
+            "pane-resize-handle",
+            "pane-load-bar",
+            "stage.is-dragging",
+            "pulseRing",
+        ):
+            self.assertIn(marker, preview_ui.PREVIEW_HTML)
+
+        node_bin = shutil.which("node")
+        if node_bin:
+            with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=True) as js_tmp:
+                js_tmp.write(preview_js)
+                js_tmp.flush()
+                chk = subprocess.run([node_bin, "--check", js_tmp.name], capture_output=True, text=True, check=False)
+                self.assertEqual(chk.returncode, 0, chk.stderr or chk.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

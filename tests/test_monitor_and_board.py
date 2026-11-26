@@ -1702,6 +1702,65 @@ class TestMonitorAndBoard(unittest.TestCase):
                 chk = subprocess.run([node_bin, "--check", js_tmp.name], capture_output=True, text=True, check=False)
                 self.assertEqual(chk.returncode, 0, chk.stderr or chk.stdout)
 
+    def test_board_ui_motion_contracts_and_tokens(self) -> None:
+        html_doc = board_ui.BOARD_HTML
+        style_match = re.search(r"<style>([\s\S]*?)</style>", html_doc)
+        script_match = re.search(r"<script>\s*([\s\S]*?)\s*</script>", html_doc)
+        self.assertIsNotNone(style_match)
+        self.assertIsNotNone(script_match)
+        css_text = style_match.group(1)
+        js_text = script_match.group(1)
+
+        # Shared Motion Tokens & GPU-only animation hygiene
+        for token in (
+            "--ease-out:",
+            "--ease-spring:",
+            "--ease-in-out:",
+            "--ease-snap:",
+            "--dur-press:",
+            "--dur-micro:",
+            "--dur-state:",
+            "--dur-surface:",
+            "--dur-exit:",
+            "--dur-data:",
+            "--shadow-pill:",
+        ):
+            self.assertIn(token, css_text)
+
+        self.assertIsNone(re.search(r"transition\s*:\s*all\b", css_text))
+        self.assertNotIn("skelShimmer", css_text)
+        self.assertIsNone(re.search(r"background-position\s*:", css_text))
+        self.assertIn("@keyframes skelSweep", css_text)
+        self.assertIn("@keyframes pulseRing", css_text)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", css_text)
+        self.assertIn("html.theme-transitioning", css_text)
+        self.assertIn(".inspector-resizer", css_text)
+        self.assertIn(".alert-collapse-wrap", css_text)
+
+        # Anti-thrashing, sliding indicators, resizable drawer, and state transition helpers
+        for marker in (
+            "prefersReducedMotion",
+            "syncSlidingIndicator",
+            "animateNumber",
+            "applyProgressTransitions",
+            "preserveScroll",
+            "selectCockpitItem",
+            "closeInspectorInPlace",
+            "switchInspectorTab",
+            "triggerFieldShake",
+            "copiedFeedback",
+            "inspector-resizer",
+        ):
+            self.assertIn(marker, html_doc)
+
+        node_bin = shutil.which("node")
+        if node_bin:
+            with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=True) as js_tmp:
+                js_tmp.write(js_text)
+                js_tmp.flush()
+                chk = subprocess.run([node_bin, "--check", js_tmp.name], capture_output=True, text=True, check=False)
+                self.assertEqual(chk.returncode, 0, chk.stderr or chk.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

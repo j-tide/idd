@@ -40,6 +40,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>IDD 实时开发监控看板</title>
+  <link rel="icon" href="data:," />
   <style>
     :root {
       --bg-app: #111417;
@@ -1365,6 +1366,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: flex;
       align-items: center;
       gap: 10px;
+      row-gap: 6px;
+      flex-wrap: wrap;
       min-width: 0;
       flex: 1;
     }
@@ -1557,6 +1560,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-weight: 500;
       border-radius: 6px;
       cursor: pointer;
+      white-space: nowrap;
       position: relative;
       z-index: 1;
       transition: color var(--dur-micro) var(--ease-snap), background var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
@@ -1734,16 +1738,17 @@ BOARD_HTML = r"""<!DOCTYPE html>
       border-radius: var(--radius-card);
       overflow-x: auto;
     }
-    .list-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 860px; }
+    .list-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 720px; }
     .list-table th {
       text-align: left;
-      padding: 10px 14px;
+      padding: 8px 8px;
       font-size: 11px;
       font-weight: 600;
       color: var(--text-faint);
       border-bottom: 1px solid var(--border);
+      white-space: nowrap;
     }
-    .list-table td { padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; }
+    .list-table td { padding: 8px 8px; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; }
     .list-table tbody tr {
       cursor: pointer;
       transition: background var(--dur-micro) var(--ease-snap);
@@ -1824,7 +1829,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       height: 36px;
       border-radius: 999px;
       background: var(--border-strong);
-      opacity: 0;
+      opacity: 0.28;
       transition: opacity var(--dur-micro) var(--ease-snap), background var(--dur-micro) var(--ease-snap), height var(--dur-micro) var(--ease-snap);
     }
     .inspector-resizer:hover::after,
@@ -2829,7 +2834,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
   </div>
   <div id="inspector-overlay" class="inspector-overlay" aria-hidden="true"></div>
   <aside id="inspector-panel" class="inspector-panel" aria-label="任务详情抽屉" aria-hidden="true">
-    <div id="inspector-resizer" class="inspector-resizer" aria-hidden="true" title="拖拽调整宽度（双击复位）"></div>
+    <div id="inspector-resizer" class="inspector-resizer" role="separator" aria-orientation="vertical" aria-label="调整抽屉宽度" title="拖拽调整宽度（双击复位）"></div>
     <div id="inspector-content" class="inspector-content"></div>
   </aside>
   <div id="toast-wrap" class="toast-wrap" aria-live="polite"></div>
@@ -3084,6 +3089,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
         const prev = state.indicatorRects.get(key);
         const changed = prev && (prev.x !== target.x || prev.y !== target.y || prev.w !== target.w || prev.h !== target.h);
+        if (prev && !changed && ind.style.width === target.w + "px" && ind.style.opacity === "1") {
+          return;
+        }
         if (prev && changed && !prefersReducedMotion()) {
           ind.style.transition = "none";
           applyRect(prev);
@@ -3138,6 +3146,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       function applyProgressTransitions(root) {
         const scope = root || document;
         const reduced = prefersReducedMotion();
+        const pending = [];
         scope.querySelectorAll(".progress-fill[data-prog-key]").forEach((bar) => {
           const key = bar.getAttribute("data-prog-key");
           const target = Number(bar.getAttribute("data-prog-pct") || 0);
@@ -3145,14 +3154,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
           if (prev !== undefined && prev !== target && !reduced) {
             bar.style.transition = "none";
             bar.style.width = prev + "%";
-            void bar.offsetWidth;
-            bar.style.transition = "";
-            bar.style.width = target + "%";
+            pending.push({ bar, target });
           } else {
             bar.style.width = target + "%";
           }
           state.prevProgressPct.set(key, target);
         });
+        if (pending.length) {
+          void (scope.offsetWidth || document.body.offsetWidth);
+          for (const entry of pending) {
+            entry.bar.style.transition = "";
+            entry.bar.style.width = entry.target + "%";
+          }
+        }
       }
 
       function preserveScroll(specs, fn) {
@@ -4805,18 +4819,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
             locParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" data-stop-open="1">' + icon("folder", 11) + "<span>" + escapeHtml(shortWorktreePath(item.worktree)) + "</span></button>");
           }
           const progHtml = total > 0
-            ? '<div style="display:flex;align-items:center;gap:8px;min-width:110px;"><div class="progress-track"><div class="progress-fill" data-prog-key="list:' + escapeHtml(item._key) + '" data-prog-pct="' + pct + '" style="width:' + pct + '%"></div></div><span class="prog-num">' + done + "/" + total + "</span></div>"
+            ? '<div style="display:flex;align-items:center;gap:6px;min-width:96px;"><div class="progress-track"><div class="progress-fill" data-prog-key="list:' + escapeHtml(item._key) + '" data-prog-pct="' + pct + '" style="width:' + pct + '%"></div></div><span class="prog-num">' + done + "/" + total + "</span></div>"
             : '<span style="color:var(--text-faint);">—</span>';
           return (
             '<tr class="' + (isSelected ? "is-selected" : "") + '" data-open-key="' + escapeHtml(item._key) + '">' +
-              "<td><div style=\"display:flex;align-items:center;gap:8px;\">" + renderIdHtml(item) + "<span>" + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</span></div></td>" +
+              "<td><div style=\"display:flex;align-items:center;gap:6px;max-width:210px;min-width:0;\">" + renderIdHtml(item) + "<span style=\"min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\" title=\"" + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "\">" + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</span></div></td>" +
               "<td>" + renderRepoChip(item, { compact: true }) + "</td>" +
               '<td><span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span></td>" +
-              "<td>" + (locParts.length ? '<div style="display:flex;flex-direction:column;gap:4px;max-width:240px;">' + locParts.join("") + "</div>" : "—") + "</td>" +
+              "<td>" + (locParts.length ? '<div style="display:flex;flex-direction:column;gap:4px;max-width:155px;">' + locParts.join("") + "</div>" : "—") + "</td>" +
               "<td>" + progHtml + "</td>" +
               "<td>" + (renderPulseSummary(item.pulse) || "—") + "</td>" +
               "<td>" + (renderChangeInline(item) || "—") + "</td>" +
-              '<td><div style="display:inline-flex;gap:5px;">' + renderPrimaryLinkBtn(item, "btn-xs") + '<button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></div></td>" +
+              '<td><div style="display:inline-flex;gap:5px;white-space:nowrap;">' + renderPrimaryLinkBtn(item, "btn-xs") + '<button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></div></td>" +
             "</tr>"
           );
         }).join("");

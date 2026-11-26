@@ -317,6 +317,7 @@ PREVIEW_HTML = r"""<!DOCTYPE html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>__PREVIEW_TITLE__</title>
+  <link rel="icon" href="data:," />
   <style>
     :root {
       --bg-app: #111417;
@@ -487,6 +488,8 @@ PREVIEW_HTML = r"""<!DOCTYPE html>
       align-items: center;
       gap: 5px;
       font-family: inherit;
+      white-space: nowrap;
+      flex-shrink: 0;
       position: relative;
       z-index: 1;
       transition: background-color var(--dur-micro) var(--ease-snap), color var(--dur-micro) var(--ease-snap), border-color var(--dur-micro) var(--ease-snap), opacity var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
@@ -628,6 +631,11 @@ PREVIEW_HTML = r"""<!DOCTYPE html>
       gap: 8px;
       min-width: 0;
     }
+    .pane-title > strong {
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .pane-head .group { flex-shrink: 0; flex-wrap: nowrap; }
     .pane-path {
       font-family: var(--mono);
       font-size: 11px;
