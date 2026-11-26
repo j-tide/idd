@@ -409,7 +409,8 @@ class GitHubForge:
                     login_cmd=login_cmd,
                     token_url=token_url,
                 )
-            return None
+            detail = (proc.stderr or proc.stdout or f"退出码 {proc.returncode}").strip()
+            raise ForgeError(f"GitHub 查询失败：{detail}")
         raw_txt = proc.stdout.strip()
         if not raw_txt:
             return []
@@ -904,7 +905,7 @@ class GitLabForge:
             "GET",
             f"/projects/{self.encoded_project}/issues",
             query={"state": "opened", "per_page": limit},
-            check=False,
+            check=True,
         )
         if not isinstance(resp, list):
             return None
