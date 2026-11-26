@@ -84,12 +84,17 @@ config/local.*.json
 
 1. **发起 / 更新 PR 或 MR**：
    - 确认工作树无未提交改动（`git status --porcelain` 为空）且已完成 Issue 级最终 Review。
-   - 运行 `idd pr`（GitLab 也可直接敲别名 `idd mr`，支持 `--draft`、`--title`、`--dry-run`）：自动扫描本分支相对于 `origin/<main>` 的提交记录与 `TASK/` 文件，生成包含 `Closes #<id>` 以及按顺序排列的 `TASK-XX` / `Test:` 块，推送分支并创建或更新 PR / MR。
-2. **CI 监控与两轮自愈上限**：
-   - 运行 `idd ci --watch` 等待远端 Checks / Pipeline 结束；失败时执行 `idd ci --logs` 获取失败 Run/Job 的日志末尾内容（GitLab 自动拉取对应 Job trace）。
+   - 运行 `idd pr`（GitLab 也可直接敲别名 `idd mr`，支持 `--draft`、`--title`、`--auto-merge`、`--no-auto-merge`、`--dry-run`）：自动扫描本分支相对于 `origin/<main>` 的提交记录与 `TASK/` 文件，生成包含 `Closes #<id>` 以及按顺序排列的 `TASK-XX` / `Test:` 块，推送分支并创建或更新 PR / MR。
+2. **PR / MR 自动准入与自动合入开关（`auto_merge`）**：
+   - 配置层级：**仓库级覆盖**（`~/.config/idd/repos.json` 可选 `auto_merge` 字段）> **全局默认**（`~/.config/idd/config.json`，默认关闭 `false`）；CLI 支持 `idd config auto-merge [on|off|inherit] [-g|--global]`，看板 `idd board` 顶栏与设置弹窗亦支持实时切换。
+   - 开关开启（或单次传 `--auto-merge`）时：`idd pr` 创建/更新 PR 或 MR 后自动进入阻塞等待 CI 结算（对刚推送分支保留短暂注册宽限期，防远端 CI 尚未注册就被误判为无 CI）。
+   - 若远端 CI 通过（`PASS`）或仓库未配置远端 CI（`NONE`）且本地测试已通过，`idd pr` 自动串行执行 `idd land --wait-ci`（Rebase、汇总正文、清理 `TASK/<issue>/`、推送清理提交并等待二次 CI 结算、Squash 直线合入、勾选 Issue 验收框与快进本地 `main`）。
+   - **安全暂停条件**：`--draft` PR/MR 自动跳过；CI 失败或超时、Rebase 冲突、`TASK/<issue>/evidence/` 含附件时立即暂停且保留 `TASK/`，交由自愈循环或人工处理。
+3. **CI 监控与两轮自愈上限**：
+   - 运行 `idd ci --watch` 等待远端 Checks / Pipeline 结束（开关开启时 `idd pr` 已自动等待）；失败时执行 `idd ci --logs` 获取失败 Run/Job 的日志末尾内容（GitLab 自动拉取对应 Job trace）。
    - 回到该工作树分析原因并修复（若属明确新增修复任务，按范围规则追加 `TASK-XX`），本地复测通过后提交并 `git push`。
    - **熔断限制**：同一个 CI 失败问题**最多尝试两轮有针对性的修复与重推**；两轮后仍未通过，将相关任务标为 `blocked` 并记录失败日志摘要向用户汇报。
-3. **并行开发导致的分支落后 / 冲突**：
+4. **并行开发导致的分支落后 / 冲突**：
    - 当并行的另一个 PR / MR 先合入 `main` 时，回到当前工作树执行：
      ```bash
      git fetch origin main

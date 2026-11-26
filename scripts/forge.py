@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 from typing import Any
 import urllib.error
 import urllib.parse
@@ -985,9 +986,32 @@ class GitLabForge:
         return logs
 
     def watch_checks(self, number: int | None = None) -> int:
-        # Non-blocking fallback / simple poll message when glab watch isn't used
         if self.has_glab and not self.token and number is not None:
             return subprocess.run(["glab", "mr", "view", str(number)], cwd=str(self.cwd)).returncode
+        if number is None:
+            return 0
+        try:
+            poll_interval = max(0.0, float(os.environ.get("IDD_CI_POLL_INTERVAL", "5.0") or "5.0"))
+        except ValueError:
+            poll_interval = 5.0
+        try:
+            wait_timeout = max(0.05, float(os.environ.get("IDD_CI_WAIT_TIMEOUT", "1800.0") or "1800.0"))
+        except ValueError:
+            wait_timeout = 1800.0
+
+        deadline = time.monotonic() + wait_timeout
+        change = self.get_change(number=number, check=False)
+        while isinstance(change, dict):
+            overall = str(change.get("checks_overall") or "NONE")
+            if overall != "PENDING" or str(change.get("state") or "OPEN") != "OPEN":
+                return 0 if overall in ("PASS", "NONE") else 1
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return 1
+            sleep_for = min(poll_interval, remaining)
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            change = self.get_change(number=number, check=False)
         return 0
 
     def merge_squash(

@@ -47,6 +47,9 @@ LAND_SYNC_TIMEOUT_SECONDS = 30.0
 LAND_SYNC_POLL_INTERVAL_SECONDS = 1.0
 LAND_MERGE_MAX_RETRIES = 3
 LAND_MERGE_RETRY_DELAY_SECONDS = 1.5
+CI_WAIT_GRACE_SECONDS = 5.0
+CI_WAIT_POLL_INTERVAL_SECONDS = 5.0
+CI_WAIT_TIMEOUT_SECONDS = 1800.0
 
 ALLOWED_TYPES = ("feat", "fix", "refactor", "perf", "docs", "test", "ci", "chore")
 MAX_ISSUE_SCOPE_LEN = 16
@@ -1253,12 +1256,14 @@ def _render_status_footer(width: int, *, use_color: bool) -> list[str]:
 def _render_global_status(snapshot: dict[str, Any], *, use_color: bool) -> str:
     width = _status_line_width()
     s = snapshot.get("summary") or {}
+    auto_merge_on = bool((snapshot.get("config") or {}).get("auto_merge"))
+    am_badge = f"  {_ansi('2', '·', use_color)}  {_ansi('32', '自动合入: 开', use_color)}" if auto_merge_on else ""
     lines = [
         "",
         (
             f"  {_ansi('1;36', '◆', use_color)} {_ansi('1', 'IDD', use_color)}  "
             f"{_ansi('36', '全局 IDD 进度总览', use_color)}  "
-            f"{_ansi('2', f'·  v{__version__}', use_color)}"
+            f"{_ansi('2', f'·  v{__version__}', use_color)}{am_badge}"
         ),
         f"  {_ansi('2', '─' * width, use_color)}",
         f"  {_render_kpi_strip(s, include_repos=True, use_color=use_color)}",
@@ -1303,6 +1308,12 @@ def _render_single_repo_status(snap: dict[str, Any], *, use_color: bool) -> str:
     forge_badge = _style_forge_badge(str(snap.get("forge") or "local"), use_color)
     pretty_repo_path = _pretty_path(Path(str(snap.get("repo_path") or "")))
     default_branch = str(snap.get("default_branch") or "main")
+    am_info = snap.get("auto_merge") or {}
+    am_suffix = (
+        f"  ·  {_ansi('32', '自动合入: 开' + (' (仓库)' if am_info.get('source') == 'repo' else ' (全局)'), use_color)}"
+        if am_info.get("enabled")
+        else ""
+    )
 
     lines = [
         "",
@@ -1312,7 +1323,7 @@ def _render_single_repo_status(snap: dict[str, Any], *, use_color: bool) -> str:
             f"{_ansi('2', '·', use_color)}  {_ansi('1', str(snap.get('repo_name') or ''), use_color)}  "
             f"{forge_badge}"
         ),
-        f"  {_ansi('2', f'{pretty_repo_path}  ·  {default_branch}', use_color)}",
+        f"  {_ansi('2', f'{pretty_repo_path}  ·  {default_branch}', use_color)}{am_suffix}",
         f"  {_ansi('2', '─' * width, use_color)}",
         f"  {_render_kpi_strip(summary, include_repos=False, use_color=use_color)}",
         "",
@@ -1434,7 +1445,9 @@ def cmd_repos(args: argparse.Namespace) -> int:
                 ago = monitor.format_relative_time(max(0.0, now - ts)) if ts > 0 else "无记录"
                 init_state = item.get("repo_init_state")
                 init_tag = " [待初始化策略: idd repo-init --apply]" if init_state in ("pending", "prompted") else ""
-                lines.append(f"- {item['name']} ({ago}): {item['path']}{init_tag}")
+                am_val = item.get("auto_merge")
+                am_tag = f" [auto-merge: {'on' if am_val else 'off'}]" if isinstance(am_val, bool) else ""
+                lines.append(f"- {item['name']} ({ago}): {item['path']}{init_tag}{am_tag}")
         print("\n".join(lines))
         return 0
 
@@ -1986,10 +1999,25 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def cmd_pr(args: argparse.Namespace) -> int:
-    repo = get_repo_info(Path.cwd())
+    caller_cwd = Path.cwd().resolve()
+    repo = get_repo_info(caller_cwd)
     wt_path, branch, issue_dir, issue_num = _resolve_target_worktree(repo, args.target)
     validate_branch_name(branch, issue_num, wt_path)
     _require_clean_worktree(wt_path)
+
+    if getattr(args, "draft", False) and getattr(args, "auto_merge", False):
+        raise IddError("不能同时使用 `--draft` 与 `--auto-merge`。")
+
+    am_cfg = monitor.resolve_auto_merge(repo.main_worktree)
+    if getattr(args, "no_auto_merge", False):
+        effective_auto_merge = False
+        am_source = "cli"
+    elif getattr(args, "auto_merge", False):
+        effective_auto_merge = True
+        am_source = "cli"
+    else:
+        effective_auto_merge = bool(am_cfg["enabled"])
+        am_source = str(am_cfg["source"])
 
     forge = get_forge(repo.main_worktree)
     base_branch = args.base or repo.default_branch
@@ -2008,7 +2036,19 @@ def cmd_pr(args: argparse.Namespace) -> int:
     final_title = args.title or suggested_title
 
     if args.dry_run:
-        print(f"Forge: {forge.forge_type} ({forge.mr_label})\nTitle: {final_title}\nBase: {base_branch}\nHead: {branch}\n\n{body}", end="")
+        if args.draft:
+            am_preview = "关闭（Draft PR/MR 不自动合入）"
+        elif effective_auto_merge:
+            src_label = "命令行 --auto-merge" if am_source == "cli" else ("仓库配置" if am_source == "repo" else "全局配置")
+            am_preview = f"开启（来源：{src_label}）"
+        else:
+            am_preview = "关闭"
+        print(
+            f"Forge: {forge.forge_type} ({forge.mr_label})\n"
+            f"Title: {final_title}\nBase: {base_branch}\nHead: {branch}\n"
+            f"Auto-Merge: {am_preview}\n\n{body}",
+            end="",
+        )
         return 0
 
     push_cmd = ["git", "-C", str(wt_path), "push", "-u", "origin", "HEAD"]
@@ -2021,13 +2061,78 @@ def cmd_pr(args: argparse.Namespace) -> int:
     if existing:
         updated = forge.update_change(existing["number"], final_title, body)
         url = updated.get("url") or existing.get("url", "")
-        print(f"已更新 {forge.mr_label} {forge.mr_prefix}{existing['number']}: {url}")
+        change_num: int | None = int(existing["number"])
+        change_obj: dict[str, Any] = dict(existing)
+        change_obj["title"] = final_title
+        change_obj["body"] = body
+        if url:
+            change_obj["url"] = url
+        print(f"已更新 {forge.mr_label} {forge.mr_prefix}{change_num}: {url}")
     else:
         created = forge.create_change(base_branch, branch, final_title, body, draft=args.draft)
         num = created.get("number")
         num_str = f" {forge.mr_prefix}{num}" if num is not None else ""
         print(f"已创建 {forge.mr_label}{num_str}: {created.get('url', '')}")
-    return 0
+        change_num = int(num) if num is not None else None
+        change_obj = dict(created)
+
+    if not effective_auto_merge:
+        return 0
+    if args.draft:
+        print(f"提示：当前为 Draft {forge.mr_label}，本次跳过自动准入与合入。")
+        return 0
+
+    if change_num is None:
+        looked_up = forge.get_change(branch=branch, check=False)
+        if looked_up and looked_up.get("number") is not None:
+            change_num = int(looked_up["number"])
+            change_obj = looked_up
+    if change_num is None:
+        raise IddError(f"已提交 {forge.mr_label} 但无法解析编号，已停止自动准入与合入。")
+
+    initial_head = run_cmd(["git", "-C", str(wt_path), "rev-parse", "HEAD"]).stdout.strip()
+    src_desc = "命令行 --auto-merge" if am_source == "cli" else ("仓库配置" if am_source == "repo" else "全局配置")
+    print(f"已开启自动准入合入（来源：{src_desc}），开始等待 {forge.mr_label} {forge.mr_prefix}{change_num} CI 结算...")
+
+    settled, overall = _wait_for_ci_settlement(forge, change_num, initial_head, change_obj)
+    settled_state = str(settled.get("state") or "OPEN")
+    if settled_state == "MERGED":
+        print(f"{forge.mr_label} {forge.mr_prefix}{change_num} 已处于已合并状态：{settled.get('url', '')}")
+        return 0
+    if settled_state != "OPEN":
+        raise IddError(f"{forge.mr_label} {forge.mr_prefix}{change_num} 状态已变为 {settled_state}，已取消自动合入。")
+
+    remote_head_oid = str(settled.get("headRefOid") or "")
+    if remote_head_oid and remote_head_oid != initial_head:
+        raise IddError(
+            f"{forge.mr_label} {forge.mr_prefix}{change_num} 远端最新提交已变更为 `{remote_head_oid[:12]}`（本地 `{initial_head[:12]}`），"
+            "为防止合入未校验提交已暂停自动合入。"
+        )
+    if overall == "FAIL":
+        raise _format_ci_failure_error(forge, settled, context="自动准入 CI 检查")
+    if overall == "PENDING":
+        raise IddError(
+            f"等待 {forge.mr_label} {forge.mr_prefix}{change_num} CI 结算超时（当前仍为 PENDING），"
+            "已暂停自动合入（TASK 目录已保留）。",
+            exit_code=3,
+        )
+    if settled.get("mergeStateStatus") == "DIRTY":
+        raise IddError(
+            f"{forge.mr_label} {forge.mr_prefix}{change_num} 存在合并冲突（DIRTY），请先解决冲突并复测。",
+            exit_code=2,
+        )
+
+    ci_note = "CI 检查通过（PASS）" if overall == "PASS" else "仓库未配置远端 CI（NONE），按本地测试通过放行"
+    print(f"{ci_note}，自动执行 Squash 直线合入...")
+
+    return _execute_land(
+        caller_cwd=caller_cwd,
+        repo=repo,
+        target=args.target or branch,
+        title_override=args.title,
+        wait_ci=True,
+        pre_checked_head=initial_head,
+    )
 
 
 def _find_change_for_issue(forge: Any, issue_num: int) -> dict[str, Any] | None:
@@ -2291,10 +2396,100 @@ def _merge_squash_with_retry(
                     _wait_for_change_head_sync(forge, change_num, expected_sha, latest)
 
 
-def cmd_land(args: argparse.Namespace) -> int:
-    caller_cwd = Path.cwd().resolve()
-    repo = get_repo_info(caller_cwd)
-    wt_path, branch, issue_dir, issue_num = _resolve_target_worktree(repo, args.target)
+def _wait_for_ci_settlement(
+    forge: Any,
+    change_num: int,
+    expected_sha: str,
+    fallback_change: dict[str, Any],
+    *,
+    skip_initial_grace: bool = False,
+) -> tuple[dict[str, Any], str]:
+    """Wait for remote headRefOid sync and CI checks to settle (`PASS`, `FAIL`, `NONE`, or `PENDING` on timeout)."""
+    latest = _wait_for_change_head_sync(forge, change_num, expected_sha, fallback_change)
+    overall = str(latest.get("checks_overall") or "NONE")
+
+    grace = _get_float_env("IDD_CI_GRACE_SECONDS", CI_WAIT_GRACE_SECONDS, minimum=0.0)
+    poll_interval = _get_float_env("IDD_CI_POLL_INTERVAL", CI_WAIT_POLL_INTERVAL_SECONDS, minimum=0.0)
+    wait_timeout = _get_float_env("IDD_CI_WAIT_TIMEOUT", CI_WAIT_TIMEOUT_SECONDS, minimum=0.05)
+
+    # Give GitHub/GitLab a brief grace window after push to register newly triggered checks/pipelines.
+    if overall == "NONE" and not skip_initial_grace and grace > 0:
+        grace_deadline = time.monotonic() + grace
+        while time.monotonic() < grace_deadline:
+            remaining = grace_deadline - time.monotonic()
+            sleep_for = min(poll_interval if poll_interval > 0 else 1.0, 2.0, max(0.0, remaining))
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            polled = forge.get_change(number=change_num, check=False)
+            if isinstance(polled, dict):
+                latest = polled
+                if str(latest.get("state") or "OPEN") != "OPEN":
+                    return latest, str(latest.get("checks_overall") or "NONE")
+                remote_oid = str(latest.get("headRefOid") or "")
+                if remote_oid and remote_oid != expected_sha:
+                    return latest, str(latest.get("checks_overall") or "NONE")
+                overall = str(latest.get("checks_overall") or "NONE")
+                if overall != "NONE":
+                    break
+
+    if overall != "PENDING":
+        return latest, overall
+
+    deadline = time.monotonic() + wait_timeout
+    while overall == "PENDING" and time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        sleep_for = min(poll_interval, max(0.0, remaining))
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+        polled = forge.get_change(number=change_num, check=False)
+        if not isinstance(polled, dict):
+            continue
+        latest = polled
+        overall = str(latest.get("checks_overall") or "NONE")
+        if str(latest.get("state") or "OPEN") != "OPEN":
+            break
+        remote_oid = str(latest.get("headRefOid") or "")
+        if remote_oid and remote_oid != expected_sha:
+            break
+
+    return latest, overall
+
+
+def _format_ci_failure_error(forge: Any, change: dict[str, Any], *, context: str) -> IddError:
+    change_num = change.get("number")
+    checks = change.get("checks") or []
+    failed_checks = [c for c in checks if c.get("verdict") == "FAIL"]
+    lines = [f"{forge.mr_label} {forge.mr_prefix}{change_num} {context}失败（CI 未通过）：{change.get('url', '')}"]
+    if failed_checks:
+        lines.append("失败检查项：")
+        for chk in failed_checks:
+            url_part = f" ({chk['url']})" if chk.get("url") else ""
+            lines.append(f"- [FAIL] {chk.get('name', 'check')}{url_part}")
+    failed_logs = forge.get_failed_logs(change.get("failed_log_ids") or [])
+    for log_id, text in failed_logs.items():
+        lines.append(f"\n--- 失败日志 (Job/Run {log_id} 末尾 150 行) ---")
+        lines.append(text)
+    lines.append("\n请修复问题、本地复测并提交后重试（TASK 目录已保留）。")
+    return IddError("\n".join(lines), exit_code=3)
+
+
+def _execute_land(
+    *,
+    caller_cwd: Path,
+    repo: RepoInfo,
+    target: str | None,
+    title_override: str | None = None,
+    keep_tasks: bool = False,
+    force_clean_evidence: bool = False,
+    rm_worktree: bool = False,
+    auto: bool = False,
+    wait_ci: bool = False,
+    no_rebase: bool = False,
+    no_check_acceptance: bool = False,
+    dry_run: bool = False,
+    pre_checked_head: str | None = None,
+) -> int:
+    wt_path, branch, issue_dir, issue_num = _resolve_target_worktree(repo, target)
     validate_branch_name(branch, issue_num, wt_path)
     _require_clean_worktree(wt_path)
 
@@ -2315,11 +2510,11 @@ def cmd_land(args: argparse.Namespace) -> int:
 
     # Step A: Rebase if behind target base
     needs_rebase = False
-    if not args.no_rebase:
+    if not no_rebase:
         anc = run_cmd(["git", "-C", str(wt_path), "merge-base", "--is-ancestor", base_ref, "HEAD"], check=False)
         if anc.returncode != 0:
             needs_rebase = True
-            if not args.dry_run:
+            if not dry_run:
                 reb = run_cmd(["git", "-C", str(wt_path), "rebase", base_ref], check=False)
                 if reb.returncode != 0:
                     conflicts = run_cmd(
@@ -2346,7 +2541,7 @@ def cmd_land(args: argparse.Namespace) -> int:
     issue_data = forge.get_issue(issue_num, check=False) if issue_num is not None else None
     issue_title = issue_data.get("title") if issue_data else None
     pending_acceptance_count = 0
-    if issue_num is not None and issue_data and not args.no_check_acceptance:
+    if issue_num is not None and issue_data and not no_check_acceptance:
         _, pending_acceptance_count = check_acceptance_criteria(issue_data.get("body", ""))
 
     suggested_title, summary = build_issue_summary(
@@ -2357,19 +2552,19 @@ def cmd_land(args: argparse.Namespace) -> int:
         issue_title=issue_title,
         branch=branch,
     )
-    final_title = args.title or suggested_title
+    final_title = title_override or suggested_title
 
     # Step C: Clean TASK/<issue_dir>/ before merging into main (unless --keep-tasks)
     task_issue_dir = wt_path / "TASK" / (issue_dir or "")
     will_clean_tasks = False
-    if not args.keep_tasks and issue_dir and task_issue_dir.is_dir():
+    if not keep_tasks and issue_dir and task_issue_dir.is_dir():
         evidence_dir = task_issue_dir / "evidence"
         evidence_files = [
             p.relative_to(wt_path).as_posix()
             for p in sorted(evidence_dir.rglob("*"))
             if p.is_file()
         ] if evidence_dir.is_dir() else []
-        if evidence_files and not args.force_clean_evidence:
+        if evidence_files and not force_clean_evidence:
             listed = "\n".join(f"  - {item}" for item in evidence_files)
             raise IddError(
                 f"检测到 `TASK/{issue_dir}/evidence/` 含附件文件，为防误删已暂停合入：\n{listed}\n"
@@ -2377,23 +2572,24 @@ def cmd_land(args: argparse.Namespace) -> int:
                 exit_code=2,
             )
         will_clean_tasks = True
-        if not args.dry_run:
+        if not dry_run:
             run_cmd(["git", "-C", str(wt_path), "rm", "-rf", f"TASK/{issue_dir}"])
             run_cmd(["git", "-C", str(wt_path), "commit", "-m", f"chore: 清理已汇总的任务记录 ({issue_dir})"])
 
     # Step D: Dry-run short-circuit
-    if args.dry_run:
+    if dry_run:
         if issue_num is None:
             acceptance_preview = "无关联远端 Issue（跳过）"
-        elif args.no_check_acceptance:
+        elif no_check_acceptance:
             acceptance_preview = "否（已传 --no-check-acceptance）"
-        elif args.auto:
+        elif auto:
             acceptance_preview = "暂不勾选（--auto 等待 CI 期间不提前勾选）"
         elif pending_acceptance_count > 0:
             acceptance_preview = f"是（将勾选 {pending_acceptance_count} 项）"
         else:
             acceptance_preview = "无需更新（未发现未勾选的验收标准）"
 
+        merge_mode_note = "（auto 等待 CI）" if auto else ("（阻塞等待 CI 结算）" if wait_ci else "")
         lines = [
             "=== IDD Land Dry-Run 预览 ===",
             f"Forge: {forge.forge_type} | {forge.mr_label}: {forge.mr_prefix}{change_num} ({change.get('url', '')})",
@@ -2405,9 +2601,9 @@ def cmd_land(args: argparse.Namespace) -> int:
             f"Squash 提交标题: {final_title}",
             "Squash 提交正文:",
             summary.rstrip(),
-            f"合入方式: Squash 直线合入{'（auto 等待 CI）' if args.auto else ''}",
+            f"合入方式: Squash 直线合入{merge_mode_note}",
             f"分支策略: 默认保留本地与远端需求分支 `{branch}`",
-            f"工作树策略: {'合入后移除本地工作树（--rm-worktree）' if (args.rm_worktree and not args.auto) else '默认保留本地工作树（如需释放空间可手动执行 idd cleanup）'}",
+            f"工作树策略: {'合入后移除本地工作树（--rm-worktree）' if (rm_worktree and not auto) else '默认保留本地工作树（如需释放空间可手动执行 idd cleanup）'}",
         ]
         print("\n".join(lines))
         return 0
@@ -2422,12 +2618,42 @@ def cmd_land(args: argparse.Namespace) -> int:
 
     # Step F: Wait for remote headRefOid sync, verify CI on new SHA, and Squash Merge with SHA lock
     fresh_change = _wait_for_change_head_sync(forge, change_num, local_head, change)
-    overall = fresh_change.get("checks_overall") or "NONE"
+    overall = str(fresh_change.get("checks_overall") or "NONE")
 
-    if not args.auto and overall in ("FAIL", "PENDING"):
+    if wait_ci and not auto:
+        skip_ci_grace = bool(pre_checked_head and pre_checked_head == local_head)
+        if not skip_ci_grace and overall in ("PENDING", "NONE"):
+            fresh_change, overall = _wait_for_ci_settlement(
+                forge,
+                change_num,
+                local_head,
+                fresh_change,
+                skip_initial_grace=False,
+            )
+        elif skip_ci_grace and overall == "PENDING":
+            fresh_change, overall = _wait_for_ci_settlement(
+                forge,
+                change_num,
+                local_head,
+                fresh_change,
+                skip_initial_grace=True,
+            )
+        if overall == "FAIL":
+            raise _format_ci_failure_error(forge, fresh_change, context="合入前 CI 检查")
+        if overall == "PENDING":
+            raise IddError(
+                f"等待 {forge.mr_label} {forge.mr_prefix}{change_num} CI 结算超时（当前仍为 PENDING），暂不执行合入。",
+                exit_code=3,
+            )
+        if fresh_change.get("mergeStateStatus") == "DIRTY":
+            raise IddError(
+                f"{forge.mr_label} {forge.mr_prefix}{change_num} 存在合并冲突（DIRTY），请先解决冲突并复测。",
+                exit_code=2,
+            )
+    elif not auto and overall in ("FAIL", "PENDING"):
         raise IddError(
             f"{forge.mr_label} {forge.mr_prefix}{change_num} 当前 CI 状态为 `{overall}`，暂不执行合入。\n"
-            f"请运行 `idd ci {issue_num or change_num} --watch` 等待/排查 CI，或传 `--auto` 启用自动合入。",
+            f"请运行 `idd ci {issue_num or change_num} --watch` 等待/排查 CI，或传 `--wait-ci` / `--auto` 启用自动合入。",
             exit_code=3,
         )
 
@@ -2437,11 +2663,11 @@ def cmd_land(args: argparse.Namespace) -> int:
         change_num,
         final_title,
         summary,
-        auto=args.auto,
+        auto=auto,
         expected_sha=local_head,
     )
-    verified_tip = _gitlab_land_result(forge, change_num, wt_path, base_branch, before, auto=args.auto) if is_gitlab else None
-    if args.auto and verified_tip is None:
+    verified_tip = _gitlab_land_result(forge, change_num, wt_path, base_branch, before, auto=auto) if is_gitlab else None
+    if auto and verified_tip is None:
         if is_gitlab:
             print(f"已提交 MR !{change_num} 的自动 Squash 合入请求。合入结果待确认。{change.get('url', '')}")
         else:
@@ -2458,7 +2684,7 @@ def cmd_land(args: argparse.Namespace) -> int:
             orig_body = (fresh_issue or {}).get("body", "")
             updated_body = orig_body
             checked_count = 0
-            if not args.no_check_acceptance:
+            if not no_check_acceptance:
                 updated_body, checked_count = check_acceptance_criteria(orig_body)
             if landed_tasks and _find_progress_block_span(updated_body) is not None:
                 updated_body = merge_progress_block(updated_body, build_progress_block(landed_tasks))
@@ -2473,7 +2699,7 @@ def cmd_land(args: argparse.Namespace) -> int:
 
     # Step G: Retain branches & worktree by default; optionally remove worktree; fast-forward main
     in_removed_wt = False
-    if args.rm_worktree:
+    if rm_worktree:
         in_removed_wt = caller_cwd == wt_path or wt_path in caller_cwd.parents
         run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
 
@@ -2494,7 +2720,7 @@ def cmd_land(args: argparse.Namespace) -> int:
         lines.append(f"已核对远端 `{base_branch}` 只新增一条提交 `{verified_tip[:12]}`。")
     if acceptance_note:
         lines.append(acceptance_note)
-    if args.rm_worktree:
+    if rm_worktree:
         lines.append(f"已移除本地工作树：{wt_path}")
     else:
         lines.append(f"已保留本地工作树：{wt_path}（如需释放磁盘空间可运行 `idd cleanup`）")
@@ -2504,6 +2730,25 @@ def cmd_land(args: argparse.Namespace) -> int:
         lines.append(f"当前终端位于已清理目录，请切换回主工作树：cd {repo.main_worktree}")
     print("\n".join(lines))
     return 0
+
+
+def cmd_land(args: argparse.Namespace) -> int:
+    caller_cwd = Path.cwd().resolve()
+    repo = get_repo_info(caller_cwd)
+    return _execute_land(
+        caller_cwd=caller_cwd,
+        repo=repo,
+        target=args.target,
+        title_override=args.title,
+        keep_tasks=args.keep_tasks,
+        force_clean_evidence=args.force_clean_evidence,
+        rm_worktree=args.rm_worktree,
+        auto=args.auto,
+        wait_ci=bool(getattr(args, "wait_ci", False)),
+        no_rebase=args.no_rebase,
+        no_check_acceptance=args.no_check_acceptance,
+        dry_run=args.dry_run,
+    )
 
 
 def cmd_cleanup(args: argparse.Namespace) -> int:
@@ -2596,6 +2841,161 @@ def cmd_repo_init(args: argparse.Namespace) -> int:
         lines.append("提示：如需连人工网页点击也强制直线历史，建议在 GitHub Branch Ruleset 中勾选 `Require linear history`。")
     print("\n".join(lines))
     return 0
+
+
+def _resolve_config_repo(repo_arg: Path | None) -> Path | None:
+    if repo_arg is not None:
+        resolved = monitor.resolve_main_worktree_ro(repo_arg)
+        if resolved is None:
+            raise IddError(f"路径不是有效的 Git 仓库：{repo_arg}")
+        return resolved
+    return monitor.resolve_main_worktree_ro(Path.cwd())
+
+
+def _parse_auto_merge_action(raw: str) -> str:
+    val = raw.strip().lower()
+    if val in ("status", "show", "get"):
+        return "status"
+    if val in ("on", "true", "1", "enable", "enabled"):
+        return "on"
+    if val in ("off", "false", "0", "disable", "disabled"):
+        return "off"
+    if val in ("inherit", "unset", "default", "reset"):
+        return "inherit"
+    raise IddError(f"不支持的 auto-merge 值 `{raw}`（请使用 on / off / inherit / status）。")
+
+
+def _build_config_payload(main_wt: Path | None) -> dict[str, Any]:
+    global_am = monitor.get_global_auto_merge()
+    payload: dict[str, Any] = {
+        "config_path": str(monitor.get_config_path()),
+        "repos_config_path": str(monitor.get_repos_path()),
+        "global": {
+            "auto_merge": global_am,
+        },
+        "repo": None,
+    }
+    if main_wt is not None:
+        resolved = monitor.resolve_auto_merge(main_wt)
+        payload["repo"] = {
+            "path": str(main_wt),
+            "name": main_wt.name,
+            "auto_merge": resolved,
+        }
+    return payload
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    subcmd = getattr(args, "config_command", None) or "show"
+    repo_arg = getattr(args, "repo", None)
+    use_json = bool(getattr(args, "json", False))
+    global_mode = bool(getattr(args, "global_mode", False))
+
+    if subcmd == "show":
+        main_wt = _resolve_config_repo(repo_arg)
+        payload = _build_config_payload(main_wt)
+        if use_json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+        lines = [
+            f"全局配置：{payload['config_path']}",
+            f"- auto_merge（全局默认）：{'开 (on)' if payload['global']['auto_merge'] else '关 (off)'}",
+        ]
+        if payload["repo"] is not None:
+            r = payload["repo"]
+            am = r["auto_merge"]
+            ovr = am["repo_override"]
+            ovr_text = "跟随全局 (inherit)" if ovr is None else ("开 (on)" if ovr else "关 (off)")
+            eff_text = "开 (on)" if am["enabled"] else "关 (off)"
+            src_text = "仓库覆盖" if am["source"] == "repo" else "全局默认"
+            lines.extend([
+                f"当前仓库：{r['name']} ({r['path']})",
+                f"- 仓库覆盖：{ovr_text}",
+                f"- 最终生效：{eff_text}（来源：{src_text}）",
+            ])
+        else:
+            lines.append("当前目录不在 Git 仓库内（可加 `-g/--global` 或 `--repo <路径>` 管理仓库配置）。")
+        print("\n".join(lines))
+        return 0
+
+    if subcmd == "auto-merge":
+        action = _parse_auto_merge_action(getattr(args, "value", "status"))
+        main_wt = _resolve_config_repo(repo_arg)
+
+        if action == "status":
+            if global_mode:
+                global_am = monitor.get_global_auto_merge()
+                if use_json:
+                    print(json.dumps({
+                        "scope": "global",
+                        "auto_merge": global_am,
+                        "config_path": str(monitor.get_config_path()),
+                    }, ensure_ascii=False, indent=2))
+                else:
+                    print(f"全局默认 auto_merge：{'开 (on)' if global_am else '关 (off)'}（{monitor.get_config_path()}）")
+                return 0
+            if main_wt is None:
+                global_am = monitor.get_global_auto_merge()
+                if use_json:
+                    print(json.dumps(_build_config_payload(None), ensure_ascii=False, indent=2))
+                else:
+                    print(f"全局默认 auto_merge：{'开 (on)' if global_am else '关 (off)'}（当前不在 Git 仓库内）")
+                return 0
+            resolved = monitor.resolve_auto_merge(main_wt)
+            if use_json:
+                print(json.dumps({
+                    "scope": "repo",
+                    "repo_path": str(main_wt),
+                    "auto_merge": resolved,
+                }, ensure_ascii=False, indent=2))
+            else:
+                ovr = resolved["repo_override"]
+                ovr_text = "跟随全局 (inherit)" if ovr is None else ("开 (on)" if ovr else "关 (off)")
+                eff_text = "开 (on)" if resolved["enabled"] else "关 (off)"
+                src_text = "仓库覆盖" if resolved["source"] == "repo" else "全局默认"
+                print(
+                    f"仓库 `{main_wt.name}` auto_merge：{eff_text}"
+                    f"（仓库覆盖：{ovr_text}，全局默认：{'开' if resolved['global_default'] else '关'}，来源：{src_text}）"
+                )
+            return 0
+
+        if global_mode:
+            if action == "inherit":
+                raise IddError("全局默认开关不支持 `inherit`，请使用 `on` 或 `off`。")
+            enabled = action == "on"
+            cfg = monitor.set_global_auto_merge(enabled)
+            if use_json:
+                print(json.dumps({
+                    "scope": "global",
+                    "auto_merge": bool(cfg["auto_merge"]),
+                    "config_path": str(monitor.get_config_path()),
+                }, ensure_ascii=False, indent=2))
+            else:
+                state_zh = "开启" if cfg["auto_merge"] else "关闭"
+                print(f"已{state_zh}全局默认 PR/MR 自动准入与自动合入开关（{monitor.get_config_path()}）。")
+            return 0
+
+        if main_wt is None:
+            raise IddError("当前目录不在 Git 仓库内，请加 `-g/--global` 设置全局开关，或通过 `--repo <路径>` 指定仓库。")
+
+        override_val: bool | None = None if action == "inherit" else (action == "on")
+        resolved = monitor.set_repo_auto_merge_override(main_wt, override_val)
+        if use_json:
+            print(json.dumps({
+                "scope": "repo",
+                "repo_path": str(main_wt),
+                "auto_merge": resolved,
+            }, ensure_ascii=False, indent=2))
+        else:
+            if override_val is None:
+                eff_text = "开启" if resolved["enabled"] else "关闭"
+                print(f"已清除仓库 `{main_wt.name}` 的独立覆盖，恢复跟随全局默认（当前生效：{eff_text}）。")
+            else:
+                state_zh = "开启" if override_val else "关闭"
+                print(f"已为仓库 `{main_wt.name}` 独立{state_zh} PR/MR 自动准入与自动合入开关。")
+        return 0
+
+    raise IddError(f"未知 config 子命令：{subcmd}")
 
 
 def cmd_auth(args: argparse.Namespace) -> int:
@@ -3323,6 +3723,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_pr.add_argument("--base", help="目标基础分支（默认仓库主分支）")
     p_pr.add_argument("--draft", action="store_true", help="创建为 Draft PR / MR")
     p_pr.add_argument("--force-with-lease", action="store_true", help="使用 --force-with-lease 推送")
+    pr_am_group = p_pr.add_mutually_exclusive_group()
+    pr_am_group.add_argument("--auto-merge", action="store_true", help="创建/更新后自动等待 CI 结算并直线 Squash 合入（覆盖开关配置）")
+    pr_am_group.add_argument("--no-auto-merge", action="store_true", help="创建/更新后仅停在待验收状态，不触发自动合入（覆盖开关配置）")
     p_pr.add_argument("--dry-run", action="store_true", help="仅预览生成的标题与正文")
     p_pr.set_defaults(func=cmd_pr)
 
@@ -3341,7 +3744,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_land.add_argument("--keep-tasks", action="store_true", help="保留 TASK/<issue>/ 目录不清理")
     p_land.add_argument("--force-clean-evidence", action="store_true", help="强制一并清理 evidence/ 下附件")
     p_land.add_argument("--rm-worktree", action="store_true", help="合入后顺带移除本地工作树目录（仍保留本地与远端分支）")
-    p_land.add_argument("--auto", action="store_true", help="等待 CI 通过后自动 Squash 合并")
+    p_land.add_argument("--auto", action="store_true", help="开启平台 Auto-Merge 后立即返回")
+    p_land.add_argument("--wait-ci", action="store_true", help="推送清理或变基提交后阻塞等待远端 CI 结算再执行 Squash 合入")
     p_land.add_argument("--no-rebase", action="store_true", help="跳过合入前自动 rebase")
     p_land.add_argument("--no-check-acceptance", action="store_true", help="合入后跳过自动勾选 Issue 正文中的验收标准复选框")
     p_land.add_argument("--dry-run", action="store_true", help="仅预览合入计划与清理清单")
@@ -3356,6 +3760,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_repo_init = sub.add_parser("repo-init", help="检查或配置 GitHub/GitLab 仓库的仅 Squash 线性合入策略（保留分支）")
     p_repo_init.add_argument("--apply", action="store_true", help="应用线性 Squash 合入策略且合并后保留远端分支")
     p_repo_init.set_defaults(func=cmd_repo_init)
+
+    # config
+    p_config = sub.add_parser("config", help="查看或配置全局与单仓库自动准入合入开关（auto_merge）")
+    p_config.add_argument("--repo", type=Path, default=None, help="指定目标仓库路径（默认当前工作区所属仓库）")
+    p_config.add_argument("--json", action="store_true", help="输出 JSON")
+    config_sub = p_config.add_subparsers(dest="config_command", required=False)
+
+    p_config_show = config_sub.add_parser("show", help="查看当前全局与仓库配置（默认）")
+    p_config_show.add_argument("--repo", type=Path, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    p_config_show.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="输出 JSON")
+    p_config_show.set_defaults(func=cmd_config)
+
+    p_config_am = config_sub.add_parser("auto-merge", help="查看或设置 PR/MR 自动准入与自动合入开关")
+    p_config_am.add_argument(
+        "value",
+        nargs="?",
+        default="status",
+        choices=["status", "on", "off", "inherit", "true", "false", "1", "0", "unset", "default", "reset"],
+        help="目标状态：on / off / inherit（恢复跟随全局）/ status（查看）",
+    )
+    p_config_am.add_argument("-g", "--global", dest="global_mode", action="store_true", help="读取或修改全局默认开关（~/.config/idd/config.json）")
+    p_config_am.add_argument("--repo", type=Path, default=argparse.SUPPRESS, help="指定目标仓库路径（默认当前工作区所属仓库）")
+    p_config_am.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="输出 JSON")
+    p_config_am.set_defaults(func=cmd_config)
+    p_config.set_defaults(func=cmd_config)
 
     # auth
     p_auth = sub.add_parser("auth", help="管理自建 GitLab / GitHub 主机凭据（~/.config/idd/hosts.json）")

@@ -179,6 +179,8 @@ if args[:2] == ["pr", "edit"]:
     oid = origin_head_oid(pr.get("headRefName", ""))
     if oid:
         pr["headRefOid"] = oid
+    if state.get("cleanup_pending_polls", 0) > 0:
+        state["pending_check_polls"] = state.pop("cleanup_pending_polls")
     save_state(state)
     print(pr["url"])
     sys.exit(0)
@@ -201,6 +203,12 @@ if args[:2] == ["pr", "view"]:
         oid = origin_head_oid(pr.get("headRefName", ""))
         if oid:
             pr["headRefOid"] = oid
+    seq = state.get("pending_check_polls", 0)
+    if seq > 0:
+        state["pending_check_polls"] = seq - 1
+        pr["statusCheckRollup"] = [{"name": "ci / test", "status": "IN_PROGRESS", "conclusion": ""}]
+    elif "settled_checks" in state:
+        pr["statusCheckRollup"] = state["settled_checks"]
     save_state(state)
     print(json.dumps(pr))
     sys.exit(0)
@@ -358,7 +366,13 @@ class GitHubHarness:
         self.state = json.loads(self.state_file.read_text(encoding="utf-8"))
         return self.state
 
-    def run_idd(self, *args: str, cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
+    def run_idd(
+        self,
+        *args: str,
+        cwd: Path | None = None,
+        check: bool = True,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         env = dict(os.environ)
         env["PATH"] = f"{self.bin_dir}{os.pathsep}{env.get('PATH', '')}"
         env["FAKE_GH_STATE"] = str(self.state_file)
@@ -366,6 +380,8 @@ class GitHubHarness:
         env["IDD_NO_AUTO_UPDATE"] = "1"
         env["IDD_CONFIG_DIR"] = str(self.root / "idd-config")
         env.pop("IDD_WORKTREE_ROOT", None)
+        if extra_env:
+            env.update(extra_env)
         return subprocess.run(
             [sys.executable, str(IDD_BIN), *args],
             cwd=str(cwd or self.repo),
@@ -1533,6 +1549,247 @@ class TestIddCli(unittest.TestCase):
             # Legacy unprefixed Issue with bug label still falls back to fix/
             started_43 = json.loads(h.run_idd("start", "43", "--json").stdout)
             self.assertEqual(started_43["branch"], "fix/43-fix-dark-mode-flicker")
+
+    def test_config_auto_merge_global_repo_override_and_persistence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            h = GitHubHarness(tmp_path)
+
+            # Default is disabled globally and per-repo
+            initial = json.loads(h.run_idd("config", "--json").stdout)
+            self.assertFalse(initial["global"]["auto_merge"])
+            self.assertFalse(initial["repo"]["auto_merge"]["enabled"])
+            self.assertEqual(initial["repo"]["auto_merge"]["source"], "global")
+            self.assertIsNone(initial["repo"]["auto_merge"]["repo_override"])
+
+            # Non-git directory without -g/--global rejects repo-level toggle
+            outside = tmp_path / "outside"
+            outside.mkdir()
+            err_res = h.run_idd("config", "auto-merge", "on", cwd=outside, check=False)
+            self.assertNotEqual(err_res.returncode, 0)
+            self.assertIn("-g/--global", err_res.stderr)
+
+            # Global inherit is rejected
+            bad_global = h.run_idd("config", "auto-merge", "inherit", "-g", check=False)
+            self.assertNotEqual(bad_global.returncode, 0)
+
+            # Enable globally
+            g_on = json.loads(h.run_idd("config", "auto-merge", "on", "-g", "--json").stdout)
+            self.assertTrue(g_on["auto_merge"])
+            inherited = json.loads(h.run_idd("config", "auto-merge", "status", "--json").stdout)
+            self.assertTrue(inherited["auto_merge"]["enabled"])
+            self.assertEqual(inherited["auto_merge"]["source"], "global")
+            self.assertIsNone(inherited["auto_merge"]["repo_override"])
+
+            # Override off at repo level
+            r_off = json.loads(h.run_idd("config", "auto-merge", "off", "--json").stdout)
+            self.assertFalse(r_off["auto_merge"]["enabled"])
+            self.assertEqual(r_off["auto_merge"]["source"], "repo")
+            self.assertFalse(r_off["auto_merge"]["repo_override"])
+
+            # Ensure register_repo / repo-init metadata writes do NOT clobber auto_merge
+            h.run_idd("status", "--local-only")
+            h.run_idd("repo-init", "--apply")
+            after_writes = json.loads(h.run_idd("config", "--json").stdout)
+            self.assertFalse(after_writes["repo"]["auto_merge"]["enabled"])
+            self.assertFalse(after_writes["repo"]["auto_merge"]["repo_override"])
+
+            repos_list_txt = h.run_idd("repos", "list").stdout
+            self.assertIn("[auto-merge: off]", repos_list_txt)
+
+            # Inherit clears override and falls back to global=True
+            r_inh = json.loads(h.run_idd("config", "auto-merge", "inherit", "--json").stdout)
+            self.assertTrue(r_inh["auto_merge"]["enabled"])
+            self.assertEqual(r_inh["auto_merge"]["source"], "global")
+            self.assertIsNone(r_inh["auto_merge"]["repo_override"])
+
+            # Status JSON exposes auto_merge and global config
+            status_json = json.loads(h.run_idd("status", "--local-only", "--json").stdout)
+            self.assertTrue(status_json["auto_merge"]["enabled"])
+            g_status_json = json.loads(h.run_idd("status", "-g", "--local-only", "--json").stdout)
+            self.assertTrue(g_status_json["config"]["auto_merge"])
+            status_txt = h.run_idd("status", "--local-only").stdout
+            self.assertIn("自动合入: 开", status_txt)
+
+    def test_pr_auto_merge_waits_for_ci_and_lands_linearly(self) -> None:
+        fast_env = {
+            "IDD_CI_GRACE_SECONDS": "0",
+            "IDD_CI_POLL_INTERVAL": "0.01",
+            "IDD_LAND_SYNC_INTERVAL": "0.01",
+        }
+        # Case 1: Global auto_merge enabled -> pr waits for pending CI (initial + cleanup commit) -> lands & checks acceptance
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            h.state["issues"]["42"]["body"] = "## 验收标准\n\n- [ ] 支持导出 CSV\n"
+            h.state["default_checks"] = [{"name": "ci / test", "status": "IN_PROGRESS", "conclusion": ""}]
+            h.state["pending_check_polls"] = 2
+            h.state["cleanup_pending_polls"] = 2
+            h.state["settled_checks"] = [{"name": "ci / test", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+            h.save_state()
+
+            h.run_idd("config", "auto-merge", "on", "-g", extra_env=fast_env)
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json", extra_env=fast_env).stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+            self._write_task(wt, "42-export-csv", 1, "导出 CSV", "done")
+            (wt / "export.py").write_text("csv_ok = True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "feat: 导出 CSV"], check=True, capture_output=True)
+
+            # Dry-run previews Auto-Merge status without pushing/merging
+            dry_out = h.run_idd("pr", cwd=wt, extra_env=fast_env, *("--dry-run",)).stdout if False else h.run_idd("pr", "--dry-run", cwd=wt, extra_env=fast_env).stdout
+            self.assertIn("Auto-Merge: 开启（来源：全局配置）", dry_out)
+
+            pr_res = h.run_idd("pr", cwd=wt, extra_env=fast_env)
+            self.assertIn("已开启自动准入合入（来源：全局配置）", pr_res.stdout)
+            self.assertIn("CI 检查通过（PASS），自动执行 Squash 直线合入", pr_res.stdout)
+            self.assertIn("已通过 Squash Merge 直线合入 PR #10", pr_res.stdout)
+            self.assertIn("已自动勾选 Issue #42 验收标准（1 项）", pr_res.stdout)
+            self.assertTrue((h.repo / "export.py").is_file())
+            self.assertFalse((h.repo / "TASK/42-export-csv").exists())
+            final_state = h.load_state()
+            self.assertEqual(final_state["prs"]["10"]["state"], "MERGED")
+            self.assertIn("- [x] 支持导出 CSV", final_state["issues"]["42"]["body"])
+
+        # Case 2: Repo with no remote CI (NONE) allows auto-merge
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            h.state["default_checks"] = []
+            h.save_state()
+            h.run_idd("config", "auto-merge", "on", extra_env=fast_env)
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json", extra_env=fast_env).stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+            self._write_task(wt, "42-export-csv", 1, "无 CI 仓库放行", "done")
+            (wt / "no_ci.py").write_text("ok = True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "feat: 无 CI 放行"], check=True, capture_output=True)
+
+            pr_res = h.run_idd("pr", cwd=wt, extra_env=fast_env)
+            self.assertIn("仓库未配置远端 CI（NONE），按本地测试通过放行", pr_res.stdout)
+            self.assertEqual(h.load_state()["prs"]["10"]["state"], "MERGED")
+
+    def test_pr_auto_merge_safety_guards_and_cli_overrides(self) -> None:
+        fast_env = {
+            "IDD_CI_GRACE_SECONDS": "0",
+            "IDD_CI_POLL_INTERVAL": "0.01",
+            "IDD_LAND_SYNC_INTERVAL": "0.01",
+        }
+        # Case 1: CI fails -> preserves TASK/, prints logs, exit code 3; fix & re-run pr succeeds
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            h.state["default_checks"] = [
+                {
+                    "name": "ci / pytest",
+                    "status": "COMPLETED",
+                    "conclusion": "FAILURE",
+                    "detailsUrl": "https://github.com/acme/demo/actions/runs/888",
+                }
+            ]
+            h.state["run_logs"]["888"] = "AssertionError: boom"
+            h.save_state()
+            h.run_idd("config", "auto-merge", "on", extra_env=fast_env)
+
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json", extra_env=fast_env).stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+            self._write_task(wt, "42-export-csv", 1, "修复 CI", "done")
+            (wt / "app.py").write_text("bad = True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "feat: 触发 CI 失败"], check=True, capture_output=True)
+
+            fail_res = h.run_idd("pr", cwd=wt, check=False, extra_env=fast_env)
+            self.assertEqual(fail_res.returncode, 3)
+            self.assertIn("AssertionError: boom", fail_res.stderr)
+            self.assertTrue((wt / "TASK/42-export-csv").is_dir(), "TASK/ must remain intact when CI fails")
+            self.assertEqual(h.load_state()["prs"]["10"]["state"], "OPEN")
+
+            # Fix code, turn CI green, re-run `idd pr` -> updates PR and auto-lands
+            h.state["default_checks"] = [{"name": "ci / pytest", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+            h.state["settled_checks"] = [{"name": "ci / pytest", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+            h.save_state()
+            (wt / "app.py").write_text("bad = False\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "app.py"], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "fix: 修复 CI 失败"], check=True, capture_output=True)
+
+            heal_res = h.run_idd("pr", cwd=wt, extra_env=fast_env)
+            self.assertIn("已更新 PR #10", heal_res.stdout)
+            self.assertIn("已通过 Squash Merge 直线合入 PR #10", heal_res.stdout)
+            self.assertEqual(h.load_state()["prs"]["10"]["state"], "MERGED")
+
+        # Case 2: evidence/ attachment blocks auto-merge safely (exit code 2); --no-auto-merge and --draft skip
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            h.run_idd("config", "auto-merge", "on", extra_env=fast_env)
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json", extra_env=fast_env).stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+            self._write_task(wt, "42-export-csv", 1, "附带证据", "done")
+            ev_dir = wt / "TASK/42-export-csv/evidence/TASK-01"
+            ev_dir.mkdir(parents=True)
+            (ev_dir / "trace.txt").write_text("evidence", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "feat: 含证据文件"], check=True, capture_output=True)
+
+            # --draft + --auto-merge rejected
+            conflict_flags = h.run_idd("pr", "--draft", "--auto-merge", cwd=wt, check=False, extra_env=fast_env)
+            self.assertNotEqual(conflict_flags.returncode, 0)
+
+            # --draft skips config-enabled auto_merge
+            draft_res = h.run_idd("pr", "--draft", cwd=wt, extra_env=fast_env)
+            self.assertIn("跳过自动准入与合入", draft_res.stdout)
+            self.assertEqual(h.load_state()["prs"]["10"]["state"], "OPEN")
+
+            # --no-auto-merge skips config-enabled auto_merge
+            no_am_res = h.run_idd("pr", "--no-auto-merge", cwd=wt, extra_env=fast_env)
+            self.assertIn("已更新 PR #10", no_am_res.stdout)
+            self.assertNotIn("已开启自动准入合入", no_am_res.stdout)
+
+            # With auto_merge active, evidence/ pauses with exit code 2
+            ev_res = h.run_idd("pr", cwd=wt, check=False, extra_env=fast_env)
+            self.assertEqual(ev_res.returncode, 2)
+            self.assertIn("evidence", ev_res.stderr)
+            self.assertEqual(h.load_state()["prs"]["10"]["state"], "OPEN")
+
+        # Case 3: Default off + explicit `idd pr --auto-merge`, and `idd land --wait-ci`
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json", extra_env=fast_env).stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+            self._write_task(wt, "42-export-csv", 1, "临时开启", "done")
+            (wt / "feat.py").write_text("ok = 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "feat: 临时参数合入"], check=True, capture_output=True)
+
+            # Without --auto-merge (default off), PR stays open
+            h.run_idd("pr", cwd=wt, extra_env=fast_env)
+            self.assertEqual(h.load_state()["prs"]["10"]["state"], "OPEN")
+
+            # Explicit `idd land --wait-ci` waits for cleanup commit CI and lands
+            h.load_state()
+            h.state["cleanup_pending_polls"] = 2
+            h.state["settled_checks"] = [{"name": "ci / test", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+            h.save_state()
+            land_res = h.run_idd("land", "42", "--wait-ci", extra_env=fast_env)
+            self.assertIn("已通过 Squash Merge 直线合入 PR #10", land_res.stdout)
+            self.assertEqual(h.load_state()["prs"]["10"]["state"], "MERGED")
+
+        # Case 4: Default off + explicit `idd pr --auto-merge`
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json", extra_env=fast_env).stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+            self._write_task(wt, "42-export-csv", 1, "CLI 覆盖开启", "done")
+            (wt / "cli_override.py").write_text("ok = 2\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "feat: 命令行 --auto-merge 合入"], check=True, capture_output=True)
+
+            pr_override = h.run_idd("pr", "--auto-merge", cwd=wt, extra_env=fast_env)
+            self.assertIn("已开启自动准入合入（来源：命令行 --auto-merge）", pr_override.stdout)
+            self.assertIn("已通过 Squash Merge 直线合入 PR #10", pr_override.stdout)
+            self.assertEqual(h.load_state()["prs"]["10"]["state"], "MERGED")
 
 
 if __name__ == "__main__":

@@ -62,6 +62,9 @@ class MockGitLabState:
         self.merge_without_squash = False
         self.defer_auto_merge = False
         self.fail_repo_init_put: bool = False
+        self.pending_pipeline_polls: int = 0
+        self.cleanup_pipeline_polls: int = 0
+        self.current_pipeline_running: bool = False
 
     def origin_sha(self, branch: str) -> str:
         proc = subprocess.run(
@@ -188,12 +191,22 @@ def make_handler(state: MockGitLabState):
                         mr["sha"] = oid
                         mr.setdefault("diff_refs", {})["head_sha"] = oid
                     mr["detailed_merge_status"] = "mergeable"
-                    mr["head_pipeline"]["status"] = state.jobs[701]["status"]
+                    if state.pending_pipeline_polls > 0:
+                        state.pending_pipeline_polls -= 1
+                        state.current_pipeline_running = True
+                        mr["head_pipeline"]["status"] = "running"
+                    else:
+                        state.current_pipeline_running = False
+                        mr["head_pipeline"]["status"] = state.jobs[701]["status"]
                 self._send_json(200, mr)
                 return
 
             m_jobs = re.fullmatch(rf"{re.escape(proj_prefix)}/pipelines/(\d+)/jobs", path)
             if m_jobs:
+                if state.current_pipeline_running:
+                    running_jobs = [{**j, "status": "running"} for j in state.jobs.values()]
+                    self._send_json(200, running_jobs)
+                    return
                 self._send_json(200, list(state.jobs.values()))
                 return
 
@@ -300,7 +313,13 @@ def make_handler(state: MockGitLabState):
                     if oid:
                         mr["sha"] = oid
                         mr.setdefault("diff_refs", {})["head_sha"] = oid
-                    mr["head_pipeline"]["status"] = state.jobs[701]["status"]
+                    if state.cleanup_pipeline_polls > 0:
+                        state.pending_pipeline_polls = state.cleanup_pipeline_polls
+                        state.cleanup_pipeline_polls = 0
+                        state.current_pipeline_running = True
+                        mr["head_pipeline"]["status"] = "running"
+                    else:
+                        mr["head_pipeline"]["status"] = state.jobs[701]["status"]
                 self._send_json(200, mr)
                 return
 
@@ -945,6 +964,43 @@ class TestGitLabForge(unittest.TestCase):
                 repos_after = json.loads(repos_file.read_text(encoding="utf-8"))
                 self.assertEqual(repos_after["repos"][0]["repo_init_state"], "aligned")
                 self.assertNotIn("repo_init_error", repos_after["repos"][0])
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_gitlab_mr_auto_merge_waits_for_pipeline_and_lands_linearly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, repo, wt, state, server, env, run_idd = self._setup_gitlab_mr_repo(tmp)
+            try:
+                env["IDD_CI_GRACE_SECONDS"] = "0"
+                env["IDD_CI_POLL_INTERVAL"] = "0.01"
+                env["IDD_LAND_SYNC_INTERVAL"] = "0.01"
+
+                # Failed pipeline stops before TASK cleanup and reports trace
+                state.jobs[701]["status"] = "failed"
+                run_idd("config", "auto-merge", "on")
+                fail_mr = run_idd("mr", "1", check=False)
+                self.assertEqual(fail_mr.returncode, 3)
+                self.assertIn("AssertionError: csv header mismatch", fail_mr.stderr)
+                self.assertTrue((wt / "TASK/1-async-land").is_dir())
+                self.assertEqual(state.mrs[10]["state"], "opened")
+
+                # Fix pipeline: running -> success (both initial MR and cleanup commit), then auto-lands
+                state.jobs[701]["status"] = "success"
+                state.pending_pipeline_polls = 2
+                state.cleanup_pipeline_polls = 2
+                before = state.origin_sha("main")
+                mr_res = run_idd("mr", "1")
+                self.assertIn("已开启自动准入合入（来源：仓库配置）", mr_res.stdout)
+                self.assertIn("已通过 Squash Merge 直线合入 MR !10", mr_res.stdout)
+                self.assertIn("已自动勾选 Issue #1 验收标准（1 项）", mr_res.stdout)
+                after = state.origin_sha("main")
+                self.assertEqual(
+                    subprocess.check_output(["git", "-C", str(repo), "rev-list", "--parents", "-n", "1", "main"], text=True).split(),
+                    [after, before],
+                )
+                self.assertEqual(state.mrs[10]["state"], "merged")
+                self.assertIn("- [x] 确认合入", state.issues[1]["description"])
             finally:
                 server.shutdown()
                 server.server_close()

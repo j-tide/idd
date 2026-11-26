@@ -48,7 +48,7 @@
 1. **聊想法，先看样再立 Issue 锚点**：在任意 Agent 窗口聊清需求，必要时先看可交互 HTML 原型或 Before/After 样例对齐效果，确认后再说 *「按 idd 建个 Issue」*，不污染当前代码工作区。
 2. **多 Agent 各做各的、互不打扰**：让 **Claude Code** *「开工 #115」*，同时让 **Codex** *「开工 #51」*。每个需求自动进独立的物理 Worktree 目录和规范分支，自动复制 `.env` 并各自维护 `TASK/` 进度。
 3. **打开 `idd board` 盯进度，随时一键换手**：通过看板看改动行数、当前步骤和 CI 状态。需要换工具接着做时，在卡片或接力控制台点击 **「复制接力词」**（或直接复制目录/分支），贴进 **Antigravity** 等任意另一个 Agent 对话框即可无缝续写。
-4. **验收通过，干净 Squash 合入 `main`**：在最后一个 Agent 里说 *「合入 #115」*，自动 rebase、把 `TASK` 汇总写入 PR/MR 与提交正文、清理临时 `TASK/<issue>/` 目录后以单条直线提交合入 `main`——默认保留需求分支与工作树，空间不够时再运行 `idd cleanup`。
+4. **验收通过，干净 Squash 合入 `main`**：在最后一个 Agent 里说 *「合入 #115」*（或预先开启 `idd config auto-merge on` / 在 `idd board` 顶栏开启自动合入开关，CI 通过后自动完成无需额外确认），自动 rebase、把 `TASK` 汇总写入 PR/MR 与提交正文、清理临时 `TASK/<issue>/` 目录后以单条直线提交合入 `main`——默认保留需求分支与工作树，空间不够时再运行 `idd cleanup`。
 
 *(首次接管仓库建议执行一次 `idd repo-init --apply`，锁定 GitHub 仅 Squash 合入或 GitLab `ff` + `squash` 策略并保留分支。)*
 
@@ -85,11 +85,12 @@ idd board
 | `idd issue create --title "..." [--type ...] [--scope ...]` | 按规范标题创建 GitHub / GitLab Issue |
 | `idd start <issue# \| slug>` | 创建或幂等复用独立 Worktree，`--no-track` 建分支并立即推远端 `origin`，同步 `.worktreeinclude` |
 | `idd sync [issue#]` | 将本地 `TASK` 勾选进度同步回 Issue 正文并自动推送当前开发分支 |
-| `idd pr` / `idd mr` | 汇总 `TASK` 与测试记录（附 `Closes #id`）创建或更新 PR / MR |
+| `idd pr` / `idd mr` | 汇总 `TASK` 与测试记录（附 `Closes #id`）创建或更新 PR / MR（开启 `auto_merge` 时自动等待 CI 并合入，支持 `--auto-merge` / `--no-auto-merge`） |
 | `idd ci [issue# \| pr# \| !mr#] [--logs]` | 检查 PR / MR 的 CI 状态并拉取失败日志 |
-| `idd land [issue# \| slug]` | Rebase、清理 `TASK/<issue>/`、Squash 直线合入并自动勾选 Issue 验收标准（默认保留分支与工作树，可选 `--no-check-acceptance` / `--rm-worktree`） |
+| `idd land [issue# \| slug]` | Rebase、清理 `TASK/<issue>/`、Squash 直线合入并自动勾选 Issue 验收标准（默认保留分支与工作树，可选 `--wait-ci` / `--no-check-acceptance` / `--rm-worktree`） |
 | `idd cleanup [--dry-run]` | 按需清理工作区干净且 `HEAD == headRefOid` 的已合入工作树目录（**不删分支**） |
 | `idd repo-init [--apply]` | 检查或配置 GitHub / GitLab 为线性 Squash 合入策略且保留分支 |
+| `idd config [auto-merge on\|off\|inherit] [-g]` | 查看或切换全局与单仓库 PR/MR 自动准入及自动合入开关（默认关闭） |
 | `idd auth login / status / logout` | 管理自建 GitLab / GitHub 企业版主机凭据 |
 | `idd upgrade [--check]` | 检查或立即快进更新本地 `idd`（`idd --version` 查看当前版本） |
 | `idd uninstall [--dry-run] [--keep-config] [-y]` | 安全完全卸载 `idd`（移除软链、技能仓库、配置与缓存） |
