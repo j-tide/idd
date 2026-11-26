@@ -3587,7 +3587,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const changedFiles = (pulse && pulse.changed_files) || [];
         const targetArg = item.issue_number != null ? String(item.issue_number) : (item.issue || item.issue_dir || "");
         const startCmd = targetArg && item.repo_path ? ("cd " + item.repo_path + " && idd start " + targetArg) : "";
-        const issueHref = safeUrl(item.url);
         const idLabel = item.issue_number != null ? ("#" + item.issue_number) : tr("本地", "Local");
 
         const repoMeta = resolveRepoMeta(item);
@@ -3640,7 +3639,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 (item.branch ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" type="button">' + icon("branch", 12) + "<span>" + tr("复制分支", "Copy Branch") + "</span></button>" : "") +
                 (startCmd ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="' + tr("已复制终端命令", "Copied CLI command") + '" type="button">' + icon("terminal", 12) + "<span>" + tr("终端命令", "CLI Cmd") + "</span></button>" : "") +
                 (repoMeta.repoUrl ? '<a class="btn btn-sm" href="' + escapeHtml(repoMeta.repoUrl) + '" target="_blank" rel="noopener noreferrer">' + forgeIcon(repoMeta.forgeType, 12) + "<span>" + escapeHtml(forgeLabel(repoMeta.forgeType)) + tr(" 主页", " Home") + "</span></a>" : "") +
-                (issueHref ? '<a class="btn btn-sm" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 12) + "<span>" + tr("打开 Issue", "Open Issue") + "</span></a>" : "") +
+                renderPrimaryLinkBtn(item, "btn-sm", { iconSize: 12, stopOpen: false }) +
               "</div>" +
             "</div>" +
             '<div class="console-well">' + wellHtml + "</div>" +
@@ -3680,10 +3679,46 @@ BOARD_HTML = r"""<!DOCTYPE html>
         );
       }
 
-      function renderOpenIssueBtn(item, extraCls) {
-        const href = safeUrl(item.url);
-        if (!href) return "";
-        return '<a class="btn ' + (extraCls || "btn-xs") + '" href="' + escapeHtml(href) + '" target="_blank" rel="noopener noreferrer" data-stop-open="1">' + icon("externalLink", 11) + "<span>" + tr("打开 Issue", "Open Issue") + "</span></a>";
+      function resolvePrimaryLink(item) {
+        const ch = item && item.change;
+        const changeHref = safeUrl(ch && ch.url);
+        if (changeHref) {
+          const mrLabel = (item && item.mr_label) || (item && item.forge_type === "gitlab" ? "MR" : "PR");
+          return {
+            href: changeHref,
+            label: tr("打开 " + mrLabel, "Open " + mrLabel),
+            kind: "change"
+          };
+        }
+        if (item && item._kind === "orphan") {
+          const orphHref = safeUrl(item.url);
+          if (orphHref) {
+            const mrLabel = item.mr_label || (item.forge_type === "gitlab" ? "MR" : "PR");
+            return {
+              href: orphHref,
+              label: tr("打开 " + mrLabel, "Open " + mrLabel),
+              kind: "change"
+            };
+          }
+        }
+        const issueHref = safeUrl(item && item.url);
+        if (issueHref) {
+          return {
+            href: issueHref,
+            label: tr("打开 Issue", "Open Issue"),
+            kind: "issue"
+          };
+        }
+        return null;
+      }
+
+      function renderPrimaryLinkBtn(item, extraCls, opts) {
+        const link = resolvePrimaryLink(item);
+        if (!link) return "";
+        const options = opts || {};
+        const iconSize = options.iconSize || 11;
+        const stopAttr = options.stopOpen === false ? "" : ' data-stop-open="1"';
+        return '<a class="btn ' + (extraCls || "btn-xs") + '" href="' + escapeHtml(link.href) + '" target="_blank" rel="noopener noreferrer"' + stopAttr + ">" + icon("externalLink", iconSize) + "<span>" + escapeHtml(link.label) + "</span></a>";
       }
 
       function renderCockpitView(items) {
@@ -3726,7 +3761,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const stageBadge = '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>";
           const progBadge = total > 0 ? '<span class="badge">' + done + "/" + total + " TASK</span>" : "";
           const chBadge = item.change ? renderChangeInline(item) : "";
-          const issueBtn = renderOpenIssueBtn(item, "btn-xs");
+          const primaryLinkBtn = renderPrimaryLinkBtn(item, "btn-xs");
 
           const subParts = [];
           if (item.branch) subParts.push("<span>" + escapeHtml(item.branch) + "</span>");
@@ -3751,7 +3786,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 "</div>" +
               "</div>" +
               '<div class="wt-row-actions" data-stop-open="1">' +
-                issueBtn +
+                primaryLinkBtn +
                 '<button class="btn btn-xs ' + (isSel ? "btn-primary" : "") + '" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button>" +
                 (item.worktree ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" data-stop-open="1" type="button">' + icon("folder", 11) + "<span>" + tr("目录", "Dir") + "</span></button>" : "") +
                 (item.branch ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" data-stop-open="1" type="button">' + icon("branch", 11) + "<span>" + tr("分支", "Branch") + "</span></button>" : "") +
@@ -3845,7 +3880,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             "</div>" +
             '<div class="card-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</div>" +
             (ctxParts.length ? '<div class="card-context">' + ctxParts.join("") + "</div>" : "") +
-            '<div class="card-foot"><span>' + (pulseHtml || " ") + '</span><span style="display:inline-flex;gap:5px;">' + renderOpenIssueBtn(item, "btn-xs") + '<button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></span></div>" +
+            '<div class="card-foot"><span>' + (pulseHtml || " ") + '</span><span style="display:inline-flex;gap:5px;">' + renderPrimaryLinkBtn(item, "btn-xs") + '<button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></span></div>" +
           "</article>"
         );
       }
@@ -3875,7 +3910,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
               "<td>" + progHtml + "</td>" +
               "<td>" + (renderPulseSummary(item.pulse) || "—") + "</td>" +
               "<td>" + (renderChangeInline(item) || "—") + "</td>" +
-              '<td><div style="display:inline-flex;gap:5px;">' + renderOpenIssueBtn(item, "btn-xs") + '<button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></div></td>" +
+              '<td><div style="display:inline-flex;gap:5px;">' + renderPrimaryLinkBtn(item, "btn-xs") + '<button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></div></td>" +
             "</tr>"
           );
         }).join("");
@@ -4235,7 +4270,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const targetArg = item.issue_number != null ? String(item.issue_number) : (item.issue || item.issue_dir || "");
         const startCmd = targetArg && item.repo_path ? ("cd " + item.repo_path + " && idd start " + targetArg) : "";
         const handoffPrompt = buildHandoffPrompt(item);
-        const issueHref = safeUrl(item.url);
 
         let tabBody = "";
         if (state.inspectorTab === "files") {
@@ -4256,7 +4290,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         panel.innerHTML =
           '<div class="inspector-hdr">' +
             '<div style="min-width:0;flex:1;">' +
-              '<div class="card-meta" style="flex-wrap:wrap;">' + renderRepoChip(item, { compact: true }) + renderIdHtml(item) + '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" + (issueHref ? '<a class="btn btn-xs" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>" + tr("打开 Issue", "Open Issue") + "</span></a>" : "") + "</div>" +
+              '<div class="card-meta" style="flex-wrap:wrap;">' + renderRepoChip(item, { compact: true }) + renderIdHtml(item) + '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" + renderPrimaryLinkBtn(item, "btn-xs", { stopOpen: false }) + "</div>" +
               '<h2 class="inspector-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</h2>" +
             "</div>" +
             '<button class="icon-btn" id="inspector-close-btn" type="button" aria-label="' + tr("关闭详情", "Close details") + '">' + icon("x", 15) + "</button>" +
