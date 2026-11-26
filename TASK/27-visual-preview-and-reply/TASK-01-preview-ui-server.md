@@ -1,7 +1,7 @@
 # TASK-01：实现本地原型预览服务端与前端工作台（preview_ui.py）
 
 - Issue: 27-visual-preview-and-reply
-- Status: in_progress
+- Status: done
 - Depends on: none
 - Test: tests/test_preview_ui.py
 
@@ -17,9 +17,9 @@
 
 ## 验收标准
 
-- [ ] `scripts/preview_ui.py` 可独立启动本地预览服务并响应 `/api/health`、`/api/meta`、`/raw/<id>` 与安全受限的同级静态资源请求
-- [ ] 支持单文件、多文件、`标签=路径`、目录动态新增/删除、热更新信号以及越权路径 `403` 拦截
-- [ ] `tests/test_preview_ui.py` 全部用例通过
+- [x] `scripts/preview_ui.py` 可独立启动本地预览服务并响应 `/api/health`、`/api/meta`、`/raw/<id>` 与安全受限的同级静态资源请求
+- [x] 支持单文件、多文件、`标签=路径`、目录动态新增/删除、热更新信号以及越权路径 `403` 拦截
+- [x] `tests/test_preview_ui.py` 全部用例通过
 
 ## 实现注意事项
 
@@ -33,8 +33,8 @@
 
 ## 执行结果
 
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已实现 `scripts/preview_ui.py` 与 `tests/test_preview_ui.py`，6 项测试全部无警告通过。
 
 ### 当前阻塞
 
@@ -42,4 +42,6 @@
 
 ### 验证记录
 
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-26 | `python3 -m unittest tests/test_preview_ui.py -v` | passed (6/6) | `tests/test_preview_ui.py` |

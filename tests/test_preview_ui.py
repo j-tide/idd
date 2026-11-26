@@ -200,6 +200,27 @@ class TestPreviewUI(unittest.TestCase):
             proc = subprocess.run([node, "--check", str(js_file)], capture_output=True, text=True)
             self.assertEqual(proc.returncode, 0, proc.stderr)
 
+    def test_cli_preview_help_and_missing_target_error(self) -> None:
+        idd_bin = SCRIPTS_DIR / "idd"
+        help_proc = subprocess.run(
+            [sys.executable, str(idd_bin), "preview", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(help_proc.returncode, 0, help_proc.stderr)
+        self.assertIn("--compare", help_proc.stdout)
+        self.assertIn("--no-open", help_proc.stdout)
+
+        err_proc = subprocess.run(
+            [sys.executable, str(idd_bin), "preview", "/tmp/definitely-missing-idd-preview-target.html", "--no-open"],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "IDD_NO_AUTO_UPDATE": "1"},
+        )
+        self.assertNotEqual(err_proc.returncode, 0)
+        combined = err_proc.stdout + err_proc.stderr
+        self.assertIn("找不到预览目标文件或目录", combined)
+
 
 if __name__ == "__main__":
     unittest.main()
