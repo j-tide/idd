@@ -323,7 +323,14 @@ class TestMonitorAndBoard(unittest.TestCase):
                     self.assertIn("resolvePrimaryLink", html)
                     self.assertIn("renderPrimaryLinkBtn", html)
                     self.assertNotIn("renderOpenIssueBtn", html)
-                    self.assertIn("wt-tasks-strip", html)
+                    self.assertIn("renderReposView", html)
+                    self.assertIn("cleanup-drawer", html)
+                    self.assertIn('id="view-repos" class="sb-item active"', html)
+                    self.assertIn('localStorage.getItem("idd_board_view") || "repos"', html)
+                    self.assertIn('["repos", "kanban", "list"]', html)
+                    self.assertNotIn("view-cockpit", html)
+                    self.assertNotIn("workbench-grid", html)
+                    self.assertNotIn("renderCockpitView", html)
                     self.assertIn("auth_alerts", html)
                     self.assertIn("forge_syncing", html)
                     self.assertIn("forge_connections", html)
@@ -337,9 +344,8 @@ class TestMonitorAndBoard(unittest.TestCase):
                         "status-cluster",
                         "forge-status-group",
                         "forge-status-popover",
-                        "view-cockpit",
-                        "view-kanban",
                         "view-repos",
+                        "view-kanban",
                         "view-list",
                         "inspector-panel",
                         "lang-btn",
@@ -1961,11 +1967,11 @@ class TestMonitorAndBoard(unittest.TestCase):
 
     def test_board_redesigned_layout_removes_worktree_rail_and_surfaces_cleanable_worktrees(self) -> None:
         html_doc = board_ui.BOARD_HTML
-        for removed_token in ("wt-rail-list", "sb-hdr-wts", "sb-filters", "并行目录"):
+        for removed_token in ("wt-rail-list", "sb-hdr-wts", "sb-filters", "并行目录", "view-cockpit", "workbench-grid", "console-sticky", "renderCockpitView"):
             self.assertNotIn(removed_token, html_doc)
-        for view_id in ("view-cockpit", "view-kanban", "view-repos", "view-list"):
+        for view_id in ("view-repos", "view-kanban", "view-list"):
             self.assertIn(view_id, html_doc)
-        for layout_token in ("workbench-grid", "console-sticky", "telemetry-strip", "toggle-cleanup", "cleanup-drawer"):
+        for layout_token in ("repo-section", "repo-grid", "telemetry-strip", "toggle-cleanup", "cleanup-drawer"):
             self.assertIn(layout_token, html_doc)
 
         node_bin = shutil.which("node")
@@ -2007,7 +2013,6 @@ class TestMonitorAndBoard(unittest.TestCase):
             "getProgressNumbers",
             "shortWorktreePath",
             "shortDirSlug",
-            "itemDotClass",
             "collectRetainedWorktrees",
             "getStageQuickCli",
             "buildHandoffPrompt",
@@ -2019,28 +2024,44 @@ class TestMonitorAndBoard(unittest.TestCase):
             "renderPulseSummary",
             "renderSegBar",
             "renderKpis",
-            "taskStatusMeta",
-            "renderTaskChips",
             "resolvePrimaryLink",
             "renderPrimaryLinkBtn",
             "cardBucket",
-            "renderCockpitConsole",
-            "renderCockpitView",
+            "renderCard",
+            "renderReposView",
+            "renderInspector",
         )
         harness = "\n".join(
             [
                 """
+                const makeOverlayEl = () => ({
+                  innerHTML: '',
+                  attrs: {},
+                  classes: new Set(),
+                  classList: {
+                    add(c) { this._p.classes.add(c); },
+                    remove(c) { this._p.classes.delete(c); }
+                  },
+                  setAttribute(k, v) { this.attrs[k] = v; }
+                });
+                const overlayEl = makeOverlayEl();
+                overlayEl.classList._p = overlayEl;
+                const panelEl = makeOverlayEl();
+                panelEl.classList._p = panelEl;
                 const els = {
-                  kpis: { innerHTML: '' }
+                  kpis: { innerHTML: '' },
+                  'inspector-overlay': overlayEl,
+                  'inspector-panel': panelEl
                 };
                 const document = { getElementById: (id) => els[id] || null };
                 const ICONS = {
                   github: '<gh/>', gitlab: '<gl/>', terminal: '<tm/>', externalLink: '<ext/>',
                   copy: '<cp/>', folder: '<fd/>', branch: '<br/>', trash: '<tr/>',
-                  chevronRight: '<cr/>', chevronDown: '<cd/>'
+                  chevronRight: '<cr/>', chevronDown: '<cd/>', x: '<x/>'
                 };
                 const state = {
                   lang: 'zh',
+                  viewMode: 'cockpit',
                   selectedRepo: 'ALL',
                   search: '',
                   worktreeOnly: false,
@@ -2048,8 +2069,9 @@ class TestMonitorAndBoard(unittest.TestCase):
                   todoOnly: false,
                   cleanupOnly: false,
                   cleanupDrawerOpen: false,
-                  selectedKey: null,
-                  consoleTab: 'tasks',
+                  inspectedKey: null,
+                  inspectorTab: 'tasks',
+                  repoInitRunning: {},
                   snapshot: {
                     repos: [
                       {
@@ -2139,6 +2161,12 @@ class TestMonitorAndBoard(unittest.TestCase):
                 """
                 const assert = require('assert');
 
+                // 0. Legacy viewMode 'cockpit' falls back to 'repos'
+                if (!['repos', 'kanban', 'list'].includes(state.viewMode)) {
+                  state.viewMode = 'repos';
+                }
+                assert.strictEqual(state.viewMode, 'repos');
+
                 // 1. Retained worktree aggregated into telemetry strip & collapsed drawer by default
                 const retained = collectRetainedWorktrees(state.snapshot, false);
                 assert.strictEqual(retained.length, 1);
@@ -2150,33 +2178,54 @@ class TestMonitorAndBoard(unittest.TestCase):
                 assert(els.kpis.innerHTML.includes('可清理目录</span><span class="pill-cnt">1</span>'));
 
                 const items = collectItems(false);
-                const htmlCollapsed = renderCockpitView(items);
-                assert(htmlCollapsed.includes('class="workbench-grid"'));
-                assert(htmlCollapsed.includes('class="bento-card console-sticky"'));
+                const htmlCollapsed = renderReposView(items, state.snapshot);
+                assert(htmlCollapsed.includes('class="repo-section"'));
+                assert(htmlCollapsed.includes('class="repo-grid"'));
                 assert(htmlCollapsed.includes('data-toggle-cleanup-drawer="1"'));
                 assert(!htmlCollapsed.includes('class="cleanup-body"'));
+                // Verify stage priority ordering inside repo section: #44 (修 CI) -> #42 (开发中) -> #41 (待合入) -> #47 (待处理)
+                const idx44 = htmlCollapsed.indexOf('#44');
+                const idx42 = htmlCollapsed.indexOf('#42');
+                const idx41 = htmlCollapsed.indexOf('#41');
+                const idx47 = htmlCollapsed.indexOf('#47');
+                assert(idx44 !== -1 && idx44 < idx42 && idx42 < idx41 && idx41 < idx47, 'expected stage priority ordering in repo grid');
 
-                // 2. Expanding drawer reveals retained directory
+                // 2. Expanding drawer reveals retained directory card with 已合入 badge and idd cleanup action
                 state.cleanupDrawerOpen = true;
-                const htmlExpanded = renderCockpitView(items);
+                const htmlExpanded = renderReposView(items, state.snapshot);
                 assert(htmlExpanded.includes('class="cleanup-body"'));
                 assert(htmlExpanded.includes('33-ui'));
+                assert(htmlExpanded.includes('已合入'));
+                assert(htmlExpanded.includes('data-copy-val="idd cleanup"'));
 
-                // 3. cleanupOnly mode filters to cleanable worktrees and shows idd cleanup prompt
+                // 3. cleanupOnly mode filters to cleanable worktrees and shows per-repo idd cleanup button & prompt
                 state.cleanupOnly = true;
-                state.selectedKey = null;
-                const htmlCleanupOnly = renderCockpitView(retained);
-                assert(htmlCleanupOnly.includes('可清理的已合入工作树'));
-                assert(htmlCleanupOnly.includes('idd cleanup'));
+                const htmlCleanupOnly = renderReposView(retained, state.snapshot);
+                assert(htmlCleanupOnly.includes('cd /repos/demo &amp;&amp; idd cleanup'));
+                assert(htmlCleanupOnly.includes('33-ui'));
                 assert(buildHandoffPrompt(retained[0]).includes('idd cleanup'));
 
-                // 4. Smart stage quick CLI commands across all 5 stages
+                // 4. Smart stage quick CLI commands across all 5 stages & inspector drawer integration
                 const byNum = new Map(items.map((x) => [x.issue_number, x]));
                 assert.strictEqual(getStageQuickCli(byNum.get(47)).cmd, 'cd /repos/demo && idd start 47');
                 assert.strictEqual(getStageQuickCli(byNum.get(44)).cmd, 'cd /repos/demo-worktrees/44-fix && idd ci 44 --logs');
                 assert.strictEqual(getStageQuickCli(byNum.get(41)).cmd, 'cd /repos/demo-worktrees/41-ready && idd land 41');
                 assert.strictEqual(getStageQuickCli(byNum.get(42)).cmd, 'cd /repos/demo-worktrees/42-coding && idd sync 42');
                 assert.strictEqual(getStageQuickCli(retained[0]).cmd, 'cd /repos/demo && idd cleanup');
+
+                const inspectorExpectations = [
+                  [byNum.get(47)._key, 'cd /repos/demo &amp;&amp; idd start 47'],
+                  [byNum.get(44)._key, 'cd /repos/demo-worktrees/44-fix &amp;&amp; idd ci 44 --logs'],
+                  [byNum.get(41)._key, 'cd /repos/demo-worktrees/41-ready &amp;&amp; idd land 41'],
+                  [byNum.get(42)._key, 'cd /repos/demo-worktrees/42-coding &amp;&amp; idd sync 42'],
+                  [retained[0]._key, 'cd /repos/demo &amp;&amp; idd cleanup']
+                ];
+                for (const [k, expectedCmd] of inspectorExpectations) {
+                  state.inspectedKey = k;
+                  renderInspector();
+                  assert(panelEl.classes.has('open'), 'inspector panel should open for ' + k);
+                  assert(panelEl.innerHTML.includes(expectedCmd), 'inspector should include ' + expectedCmd);
+                }
 
                 console.log('JS_REDESIGNED_LAYOUT_OK');
                 """,
