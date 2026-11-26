@@ -1,7 +1,7 @@
 # TASK-02：HTML 结构重构、6 胶囊筛选与 3 栏进度卡渲染器
 
 - Issue: #55
-- Status: in_progress
+- Status: done
 - Depends on: TASK-01
 - Test: node --check & python3 -m unittest discover -s tests -p "test_monitor_and_board.py"
 

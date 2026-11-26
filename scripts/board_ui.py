@@ -2765,57 +2765,59 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
     <!-- Right Main Board Workspace -->
     <div class="workspace">
-      <header class="ws-header">
-        <div class="ws-title-group">
-          <div id="ws-logo" class="ws-logo" aria-hidden="true">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path>
-            </svg>
-          </div>
-          <h1 id="ws-title" class="ws-title">全局工作区</h1>
-          <span id="scope-tag" class="ws-scope" style="display:none;"></span>
-          <span id="ws-repo-link-wrap"></span>
-        </div>
-        <div class="ws-controls">
-          <div id="search-wrap" class="sb-search">
-            <span class="sb-search-ic" aria-hidden="true">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="11" cy="11" r="8"></circle>
-                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+      <div class="ws-top-deck">
+        <header class="ws-header">
+          <div class="ws-title-group">
+            <div id="ws-logo" class="ws-logo" aria-hidden="true">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path>
               </svg>
-            </span>
-            <input id="search-input" type="search" placeholder="搜索 #编号、目录、分支" />
-            <span class="sb-kbd">/</span>
-            <button id="search-clear" class="sb-search-clear" type="button" aria-label="清空搜索">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-              </svg>
-            </button>
-          </div>
-          <div id="status-cluster" class="status-cluster">
-            <div class="status-cluster-live">
-              <span id="conn-tag" class="live-pill is-loading">
-                <span class="dot-pulse"></span>
-                <span>初始化中</span>
-                <span class="sep live-sep">·</span>
-                <span id="updated-tag" class="num live-clock">扫描仓库...</span>
-              </span>
-              <button id="pause-btn" class="cluster-icon-btn" type="button" title="暂停自动轮询" aria-label="暂停自动轮询"></button>
             </div>
-            <span class="status-cluster-sep" aria-hidden="true"></span>
-            <div id="forge-status-group" class="forge-status-group"></div>
-            <div id="forge-status-popover" class="status-popover" role="dialog" aria-label="托管平台连接详情" aria-hidden="true"></div>
+            <h1 id="ws-title" class="ws-title">全局工作区</h1>
+            <span id="scope-tag" class="ws-scope" style="display:none;"></span>
+            <span id="ws-repo-link-wrap"></span>
           </div>
-          <button id="setup-btn" class="btn" type="button"></button>
-          <button id="sync-btn" class="btn btn-primary" type="button" title="快捷键 r"></button>
-        </div>
-      </header>
+          <div class="ws-controls">
+            <div id="search-wrap" class="sb-search">
+              <span class="sb-search-ic" aria-hidden="true">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </span>
+              <input id="search-input" type="search" placeholder="搜索 #编号、目录、分支" />
+              <span class="sb-kbd">/</span>
+              <button id="search-clear" class="sb-search-clear" type="button" aria-label="清空搜索">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+            <div id="status-cluster" class="status-cluster">
+              <div class="status-cluster-live">
+                <span id="conn-tag" class="live-pill is-loading">
+                  <span class="dot-pulse"></span>
+                  <span>初始化中</span>
+                  <span class="sep live-sep">·</span>
+                  <span id="updated-tag" class="num live-clock">扫描仓库...</span>
+                </span>
+                <button id="pause-btn" class="cluster-icon-btn" type="button" title="暂停自动轮询" aria-label="暂停自动轮询"></button>
+              </div>
+              <span class="status-cluster-sep" aria-hidden="true"></span>
+              <div id="forge-status-group" class="forge-status-group"></div>
+              <div id="forge-status-popover" class="status-popover" role="dialog" aria-label="托管平台连接详情" aria-hidden="true"></div>
+            </div>
+            <button id="setup-btn" class="btn" type="button"></button>
+            <button id="sync-btn" class="btn btn-primary" type="button" title="快捷键 r"></button>
+          </div>
+        </header>
 
+        <section id="kpis" class="telemetry-strip" aria-label="全局总览与筛选"></section>
+      </div>
+
+      <section id="bento-kpis" class="bento-kpis" aria-label="全局指标概览"></section>
       <div id="top-alerts-wrap"></div>
-
-      <section id="kpis" class="telemetry-strip"></section>
-
       <main id="main-content"></main>
       <div id="warnings-wrap"></div>
       <footer id="footer" class="footer"></footer>
@@ -2864,7 +2866,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
         circle: '<circle cx="12" cy="12" r="8"/>',
         chevronRight: '<polyline points="9 18 15 12 9 6"/>',
         chevronDown: '<polyline points="6 9 12 15 18 9"/>',
-        trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>'
+        trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+        radar: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/>',
+        gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>',
+        queue: '<circle cx="12" cy="12" r="9" stroke-dasharray="3 3"/>'
       };
 
       function icon(name, size) {
@@ -2891,6 +2896,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         search: "",
         worktreeOnly: false,
         alertsOnly: false,
+        readyOnly: false,
         todoOnly: false,
         cleanupOnly: false,
         cleanupDrawerOpen: false,
@@ -3526,6 +3532,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       function matchesFilters(item) {
         if (state.selectedRepo !== "ALL" && item.repo_path !== state.selectedRepo) return false;
         if (state.worktreeOnly && !item.worktree) return false;
+        if (state.readyOnly && cardBucket(item) !== "ready") return false;
         if (state.todoOnly && (item.worktree || item.change)) return false;
         if (state.alertsOnly && !isItemAlert(item)) return false;
         const q = state.search.trim().toLowerCase();
@@ -3799,21 +3806,22 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return '<span class="' + cls + '">' + inner + "</span>";
       }
 
-      function renderIdHtml(item) {
+      function renderIdHtml(item, opts) {
+        const cls = (opts && opts.pill) ? "id-link is-pill" : "id-link";
         const issueHref = safeUrl(item.url);
         if (item._kind === "retained") {
           return item.issue_number != null
-            ? '<span class="id-link">#' + item.issue_number + "</span>"
+            ? '<span class="' + cls + '">#' + item.issue_number + "</span>"
             : '<span class="badge tone-violet">' + tr("已合入", "Merged") + "</span>";
         }
         if (item._kind === "issue") {
           return issueHref
-            ? '<a class="id-link" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer" data-stop-open="1">#' + item.issue_number + "</a>"
-            : '<span class="id-link">#' + item.issue_number + "</span>";
+            ? '<a class="' + cls + '" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer" data-stop-open="1">#' + item.issue_number + "</a>"
+            : '<span class="' + cls + '">#' + item.issue_number + "</span>";
         }
         if (item._kind === "orphan") {
           const lbl = (item.mr_label || "PR") + " " + (item.mr_prefix || "#") + item.number;
-          return '<span class="id-link">' + escapeHtml(lbl) + "</span>";
+          return '<span class="' + cls + '">' + escapeHtml(lbl) + "</span>";
         }
         return '<span class="badge tone-violet">' + tr("本地", "Local") + "</span>";
       }
@@ -3929,7 +3937,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const wtCnt = items.filter((x) => x.worktree).length;
           const isAct = state.selectedRepo === r.repo_path;
           const forgeCls = r.forge === "github" ? "is-github" : (r.forge === "gitlab" ? "is-gitlab" : "");
-          const platShort = r.forge === "github" ? "GH" : (r.forge === "gitlab" ? "GL" : "");
           const platFull = forgeLabel(r.forge);
           const repoHref = safeUrl(r.repo_url);
           const extBtn = repoHref
@@ -3959,7 +3966,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
               '<span class="sb-right-group hide-collapsed">' +
                 policyBtn +
                 amTag +
-                (platShort ? '<span class="sb-plat-tag ' + forgeCls + '">' + platShort + "</span>" : "") +
                 '<span class="sb-meta">' + wtCnt + "/" + items.length + "</span>" +
                 extBtn +
               "</span>" +
@@ -4045,6 +4051,20 @@ BOARD_HTML = r"""<!DOCTYPE html>
       function renderKpis(snap) {
         const kpisEl = document.getElementById("kpis");
         if (!kpisEl) return;
+        const buildSegSlots = (totalCount, slotCount, parts) => {
+          const slots = [];
+          let used = 0;
+          for (const part of parts) {
+            if (!totalCount || !part.count || used >= slotCount) continue;
+            let n = Math.max(1, Math.round((part.count / totalCount) * slotCount));
+            if (used + n > slotCount) n = slotCount - used;
+            for (let i = 0; i < n; i++) slots.push('<span class="bento-slot ' + part.cls + '"></span>');
+            used += n;
+          }
+          while (slots.length < slotCount) slots.push('<span class="bento-slot"></span>');
+          return slots.join("");
+        };
+
         const allItems = collectItems(true);
         const scopedItems = state.selectedRepo === "ALL"
           ? allItems
@@ -4055,6 +4075,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
         let issueQueued = 0;
         let activeWt = 0;
         let attentionCnt = 0;
+        let ciFail = 0;
+        let ciRun = 0;
         let totalSteps = 0;
         let doneSteps = 0;
         let inProgSteps = 0;
@@ -4063,12 +4085,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
         for (const it of scopedItems) {
           if (it.worktree) activeWt += 1;
           if (isItemAlert(it)) attentionCnt += 1;
-          if (it._kind === "issue") {
-            const b = cardBucket(it);
-            if (b === "ready") issueReady += 1;
-            else if (b === "todo") issueQueued += 1;
-            else issueInProg += 1;
-          }
+          const overall = (it.change && it.change.checks_overall) || "";
+          if (overall === "FAIL") ciFail += 1;
+          else if (overall === "PENDING") ciRun += 1;
+          const b = cardBucket(it);
+          if (b === "ready") issueReady += 1;
+          else if (b === "todo") issueQueued += 1;
+          else issueInProg += 1;
+
           const counts = it.counts || {};
           const nums = getProgressNumbers(it);
           totalSteps += nums.total;
@@ -4078,46 +4102,77 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
 
         const retainedCnt = collectRetainedWorktrees(snap, true).length;
-        const isAllActive = !state.worktreeOnly && !state.alertsOnly && !state.todoOnly && !state.cleanupOnly;
+        const isAllActive = !state.worktreeOnly && !state.alertsOnly && !state.readyOnly && !state.todoOnly && !state.cleanupOnly;
 
-        const pills = [
-          { act: "filter-all", label: tr("全部活跃", "All Active"), cnt: scopedItems.length, active: isAllActive, cls: "" },
-          { act: "toggle-wt", label: tr("施工中", "In Worktree"), cnt: activeWt, active: state.worktreeOnly, cls: "" },
-          { act: "toggle-alerts", label: tr("需关注", "Attention"), cnt: attentionCnt, active: state.alertsOnly, cls: "is-danger" },
-          { act: "toggle-todo", label: tr("待处理 Issue", "Open Issues"), cnt: issueQueued, active: state.todoOnly, cls: "" },
-          { act: "toggle-cleanup", label: tr("可清理目录", "Cleanable"), cnt: retainedCnt, active: state.cleanupOnly, cls: "is-cleanup" }
+        const statChips = [
+          { act: "filter-all", label: tr("全部活跃", "All Active"), cnt: scopedItems.length, active: isAllActive, cls: "is-all", ic: icon("radar", 13) },
+          { act: "toggle-wt", label: tr("施工中", "In Worktree"), cnt: activeWt, active: state.worktreeOnly, cls: "is-wt", ic: icon("gear", 13) },
+          { act: "toggle-alerts", label: tr("需关注", "Attention"), cnt: attentionCnt, active: state.alertsOnly, cls: "is-alerts", ic: '<span class="stat-beacon"></span>' },
+          { act: "toggle-ready", label: tr("待合入", "Ready"), cnt: issueReady, active: Boolean(state.readyOnly), cls: "is-ready", ic: icon("checkCircle", 13) },
+          { act: "toggle-todo", label: tr("待处理", "Queued"), cnt: issueQueued, active: state.todoOnly, cls: "is-todo", ic: icon("queue", 13) },
+          { act: "toggle-cleanup", label: tr("可清理", "Cleanable"), cnt: retainedCnt, active: state.cleanupOnly, cls: "is-cleanup", ic: icon("sparkle", 13) }
         ];
 
-        const pct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
-        const taskTones = [];
-        const doneSlots = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 8) : 0;
-        const inProgSlots = totalSteps > 0 ? Math.max(inProgSteps > 0 ? 1 : 0, Math.round((inProgSteps / totalSteps) * 8)) : 0;
-        const blkSlots = totalSteps > 0 ? Math.max(blockedSteps > 0 ? 1 : 0, Math.round((blockedSteps / totalSteps) * 8)) : 0;
-        for (let i = 0; i < 8; i++) {
-          if (i < doneSlots) taskTones.push("green");
-          else if (i < doneSlots + inProgSlots) taskTones.push("on");
-          else if (i < doneSlots + inProgSlots + blkSlots) taskTones.push("red");
-          else taskTones.push("");
-        }
-
-        const summaryTxt = isEn()
-          ? (issueInProg + " active · " + issueReady + " ready")
-          : ("推进中 " + issueInProg + " · 待合入 " + issueReady);
+        const activeChip = statChips.find((c) => c.active && c.act !== "filter-all");
+        const filterHintHtml = activeChip
+          ? '<div class="glass-filter-hint"><span>' + escapeHtml(tr("已筛选 · ", "Filtered · ") + activeChip.label) + '</span><button type="button" class="glass-filter-reset" data-kpi-action="filter-all">' + tr("重置筛选", "Reset") + "</button></div>"
+          : '<div class="glass-filter-hint"><span>' + tr("点击胶囊切换筛选视角", "Click chips to filter") + "</span></div>";
 
         kpisEl.innerHTML =
-          '<div class="filter-pills">' +
-            pills.map((p) =>
-              '<button class="filter-pill ' + p.cls + (p.active ? " active" : "") + '" type="button" data-kpi-action="' + p.act + '">' +
-                "<span>" + escapeHtml(p.label) + "</span>" +
-                '<span class="pill-cnt">' + p.cnt + "</span>" +
+          '<div class="stat-strip">' +
+            statChips.map((c) =>
+              '<button class="stat-chip ' + c.cls + (c.active ? " active" : "") + '" type="button" data-kpi-action="' + c.act + '">' +
+                '<span class="stat-ic">' + c.ic + "</span>" +
+                '<span class="stat-lbl">' + escapeHtml(c.label) + "</span>" +
+                '<span class="stat-val">' + c.cnt + "</span>" +
               "</button>"
             ).join("") +
           "</div>" +
-          '<div class="progress-strip">' +
-            '<span>TASK <strong class="num" style="color:var(--text);">' + doneSteps + "/" + totalSteps + "</strong> (" + pct + "%)</span>" +
-            renderSegBar(doneSteps > 0 ? Math.max(1, doneSlots) : 0, 8, taskTones) +
-            "<span>" + escapeHtml(summaryTxt) + "</span>" +
-          "</div>";
+          filterHintHtml;
+
+        const bentoEl = document.getElementById("bento-kpis");
+        if (!bentoEl) return;
+        const pct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
+        const reposCnt = ((snap && snap.repos) || []).length;
+        const issueSlots = buildSegSlots(scopedItems.length, 8, [
+          { count: issueReady, cls: "done" },
+          { count: Math.max(0, activeWt - issueReady), cls: "ink" }
+        ]);
+        const taskSlots = buildSegSlots(totalSteps, 10, [
+          { count: doneSteps, cls: "done" },
+          { count: inProgSteps, cls: "prog" },
+          { count: blockedSteps, cls: "red" }
+        ]);
+        const prDenom = Math.max(scopedItems.length, issueReady + ciRun + ciFail);
+        const prSlots = buildSegSlots(prDenom, 8, [
+          { count: issueReady, cls: "done" },
+          { count: ciRun, cls: "amber" },
+          { count: ciFail, cls: "red" }
+        ]);
+        const prBadgeCls = ciFail > 0 ? "is-warn" : (issueReady > 0 ? "is-good" : "");
+        const prBadgeTxt = ciFail > 0
+          ? tr("CI 失败 " + ciFail, ciFail + " Failing")
+          : (issueReady > 0 ? tr("就绪 " + issueReady, issueReady + " Ready") : tr("暂无异常", "Healthy"));
+
+        bentoEl.innerHTML =
+          '<article class="bento-card">' +
+            '<div class="bento-top"><span class="bento-lbl">' + tr("Issue 状态", "Issue Status") + '</span><span class="bento-sub-badge">' + escapeHtml(state.selectedRepo === "ALL" ? (reposCnt + tr(" 仓库", " repos")) : tr("单仓视角", "Single Repo")) + "</span></div>" +
+            '<div class="bento-val-row"><div><span class="bento-num">' + scopedItems.length + '</span><span class="bento-unit">' + tr("活跃", "active") + '</span></div><span class="bento-frac">' + escapeHtml(tr("施工 ", "WT ") + activeWt + " · " + tr("待办 ", "Queued ") + issueQueued) + "</span></div>" +
+            '<div class="bento-segs cols-8" title="' + escapeHtml(tr("待合入 ", "Ready ") + issueReady + " · " + tr("施工中 ", "WT ") + Math.max(0, activeWt - issueReady) + " · " + tr("待处理 ", "Queued ") + issueQueued) + '">' + issueSlots + "</div>" +
+            '<div class="bento-foot">' + escapeHtml(tr("待合入 ", "Ready ") + issueReady + " · " + tr("推进中 ", "Active ") + issueInProg + " · " + tr("待处理 ", "Queued ") + issueQueued) + "</div>" +
+          "</article>" +
+          '<article class="bento-card">' +
+            '<div class="bento-top"><span class="bento-lbl">' + tr("TASK 拆分进度", "TASK Breakdown") + '</span><span class="bento-sub-badge is-good">' + doneSteps + "/" + totalSteps + "</span></div>" +
+            '<div class="bento-val-row"><div><span class="bento-num">' + pct + '%</span><span class="bento-unit">' + tr("完成", "done") + '</span></div><span class="bento-frac">' + Math.max(0, totalSteps - doneSteps) + tr(" 项未完成", " remaining") + "</span></div>" +
+            '<div class="bento-segs cols-10" title="' + escapeHtml(tr("已完成 ", "Done ") + doneSteps + " · " + tr("进行中 ", "Running ") + inProgSteps + " · " + tr("受阻 ", "Blocked ") + blockedSteps) + '">' + taskSlots + "</div>" +
+            '<div class="bento-foot">' + escapeHtml(tr("已完成 ", "Done ") + doneSteps + " · " + tr("进行中 ", "Running ") + inProgSteps + " · " + tr("受阻 ", "Blocked ") + blockedSteps) + "</div>" +
+          "</article>" +
+          '<article class="bento-card">' +
+            '<div class="bento-top"><span class="bento-lbl">' + tr("PR / MR 与合入", "PR / MR & Merge") + '</span><span class="bento-sub-badge ' + prBadgeCls + '">' + escapeHtml(prBadgeTxt) + "</span></div>" +
+            '<div class="bento-val-row"><div><span class="bento-num">' + issueReady + '</span><span class="bento-unit">' + tr("待合入", "ready") + '</span></div><span class="bento-frac">' + escapeHtml(tr("需关注 ", "Alerts ") + attentionCnt) + "</span></div>" +
+            '<div class="bento-segs cols-8" title="' + escapeHtml(tr("CI 全绿 ", "Green ") + issueReady + " · " + tr("运行中 ", "Running ") + ciRun + " · " + tr("失败 ", "Failed ") + ciFail) + '">' + prSlots + "</div>" +
+            '<div class="bento-foot">' + escapeHtml(tr("CI 全绿 ", "Green ") + issueReady + " · " + tr("运行中 ", "Running ") + ciRun + " · " + tr("失败 ", "Failed ") + ciFail + (retainedCnt ? (" · " + tr("可清理 ", "Cleanable ") + retainedCnt) : "")) + "</div>" +
+          "</article>";
       }
 
       function resolvePrimaryLink(item) {
@@ -4175,10 +4230,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
       function renderCard(item, opts) {
         const options = opts || {};
+        const meta = resolveRepoMeta(item);
+        const forgeAttr = meta.forgeType || "local";
         const stInfo = parseStage(item.stage);
         const { total, done, pct } = getProgressNumbers(item);
         const handoffPrompt = buildHandoffPrompt(item);
         const isSelected = state.inspectedKey === item._key;
+        const ch = item.change || {};
+        const progTone = (stInfo.key === "修 CI" || stInfo.key === "受阻" || ch.checks_overall === "FAIL")
+          ? "fail"
+          : ((pct >= 100 || stInfo.key === "待合入" || stInfo.key === "已合入" || ch.checks_overall === "PASS") ? "pass" : "run");
         const ctxParts = [];
         if (item.branch) {
           ctxParts.push('<button type="button" class="copy-chip" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" data-stop-open="1">' + icon("branch", 11) + "<span>" + escapeHtml(item.branch) + "</span></button>");
@@ -4190,7 +4251,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           ctxParts.push('<div class="card-task">' + icon("chevronRight", 12) + "<span>" + escapeHtml(item.current_task) + "</span></div>");
         }
         if (total > 0) {
-          ctxParts.push('<div class="card-prog"><div class="progress-track"><div class="progress-fill" style="width:' + pct + '%"></div></div><span class="prog-num">' + done + "/" + total + "</span></div>");
+          ctxParts.push('<div class="card-prog"><div class="progress-track"><div class="progress-fill ' + progTone + '" style="width:' + pct + '%"></div></div><span class="prog-num">' + done + "/" + total + "</span></div>");
         }
         if (item.change) {
           ctxParts.push(renderChangeInline(item));
@@ -4201,11 +4262,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
             ? (tr("已合入主干 · 工作区干净", "Merged · Clean") + (item.last_active_ago ? " · " + escapeHtml(localizeAgo(item.last_active_ago)) : ""))
             : ""
         );
-        const cardChip = renderRepoChip(item, { compact: true, hideName: !options.showRepo });
+        const cardChip = options.inRepoGroup ? "" : renderRepoChip(item, { compact: true, hideName: !options.showRepo });
+        const idHtml = renderIdHtml(item, { pill: Boolean(options.inRepoGroup) });
         return (
-          '<article class="card ' + (isSelected ? "is-selected" : "") + '" data-open-key="' + escapeHtml(item._key) + '">' +
+          '<article class="card ' + (isSelected ? "is-selected" : "") + '" data-forge="' + escapeHtml(forgeAttr) + '" data-open-key="' + escapeHtml(item._key) + '">' +
             '<div class="card-top">' +
-              '<div class="card-meta">' + cardChip + renderIdHtml(item) + "</div>" +
+              '<div class="card-meta">' + cardChip + idHtml + "</div>" +
               '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" +
             "</div>" +
             '<div class="card-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</div>" +
@@ -4358,8 +4420,21 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const kpisEl = document.getElementById("kpis");
         if (kpisEl) {
           kpisEl.innerHTML =
-            '<div class="filter-pills">' + [64, 58, 56, 72, 68].map((w) => skelBar(w + "px", 26)).join("") + "</div>" +
-            '<div class="progress-strip">' + skelBar("140px", 14) + "</div>";
+            '<div class="stat-strip">' + [86, 76, 74, 74, 74, 74].map((w) => skelBar(w + "px", 30)).join("") + "</div>" +
+            '<div class="glass-filter-hint">' + skelBar("120px", 12) + "</div>";
+        }
+        const bentoEl = document.getElementById("bento-kpis");
+        if (bentoEl) {
+          bentoEl.innerHTML = state.initError
+            ? ""
+            : [1, 2, 3].map(() =>
+                '<div class="bento-card">' +
+                  skelBar("42%", 14) +
+                  skelBar("55%", 24) +
+                  skelBar("100%", 8) +
+                  skelBar("68%", 12) +
+                "</div>"
+              ).join("");
         }
 
         const warnsWrap = document.getElementById("warnings-wrap");
@@ -4444,7 +4519,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml((grp.path ? ("cd " + grp.path + " && ") : "") + "idd cleanup") + '" data-copy-msg="' + tr("已复制清理命令 idd cleanup", "Copied idd cleanup") + '" type="button">' + icon("trash", 11) + "<span>" + tr("复制 idd cleanup", "Copy idd cleanup") + "</span></button>"
             : "";
           return (
-            '<section class="repo-section">' +
+            '<section class="repo-section" data-forge="' + escapeHtml(grp.forge || "local") + '">' +
               '<div class="repo-hdr">' +
                 '<div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
                   renderRepoChip({ forgeType: grp.forge, repoUrl: grp.repoUrl, repoName: "" }, { hideName: true, customLabel: forgeLabel(grp.forge) + (grp.repoUrl ? tr(" 主页", " Home") : "") }) +
@@ -4453,11 +4528,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 '<div style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
                   gPolicyBtn +
                   cleanupCmdBtn +
-                  (grp.repoUrl ? '<a class="btn btn-xs" href="' + escapeHtml(grp.repoUrl) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>" + tr("进入仓库主页", "Open Repo Home") + "</span></a>" : "") +
                   '<span class="col-count">' + sortedItems.length + tr(" 项", " items") + "</span>" +
                 "</div>" +
               "</div>" +
-              '<div class="repo-grid">' + sortedItems.map((it) => renderCard(it, { showRepo: false })).join("") + "</div>" +
+              '<div class="repo-grid">' + sortedItems.map((it) => renderCard(it, { showRepo: false, inRepoGroup: true })).join("") + "</div>" +
             "</section>"
           );
         }).join("");
@@ -4512,7 +4586,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
 
         const items = state.cleanupOnly ? collectRetainedWorktrees(snap, false) : collectItems(false);
-        const hasFilters = Boolean(state.search.trim() || state.worktreeOnly || state.alertsOnly || state.todoOnly || state.cleanupOnly);
+        const hasFilters = Boolean(state.search.trim() || state.worktreeOnly || state.alertsOnly || state.readyOnly || state.todoOnly || state.cleanupOnly);
         if (items.length === 0 && snap.forge_syncing && !hasFilters) {
           container.innerHTML = renderMainSkeleton(
             tr("正在从远端同步 " + repos.length + " 个仓库的 Issue 与 PR/MR…", "Syncing open Issues & PR/MRs from " + repos.length + " repository(ies)…"),
@@ -5548,6 +5622,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           sq: state.search,
           wo: state.worktreeOnly,
           ao: state.alertsOnly,
+          ro: state.readyOnly,
           to: state.todoOnly,
           co: state.cleanupOnly,
           cdo: state.cleanupDrawerOpen,
@@ -5701,17 +5776,30 @@ BOARD_HTML = r"""<!DOCTYPE html>
           if (act === "filter-all") {
             state.worktreeOnly = false;
             state.alertsOnly = false;
+            state.readyOnly = false;
             state.todoOnly = false;
             state.cleanupOnly = false;
           } else if (act === "toggle-wt") {
             state.worktreeOnly = !state.worktreeOnly;
             if (state.worktreeOnly) {
+              state.alertsOnly = false;
+              state.readyOnly = false;
               state.todoOnly = false;
               state.cleanupOnly = false;
             }
           } else if (act === "toggle-alerts") {
             state.alertsOnly = !state.alertsOnly;
             if (state.alertsOnly) {
+              state.worktreeOnly = false;
+              state.readyOnly = false;
+              state.todoOnly = false;
+              state.cleanupOnly = false;
+            }
+          } else if (act === "toggle-ready") {
+            state.readyOnly = !state.readyOnly;
+            if (state.readyOnly) {
+              state.worktreeOnly = false;
+              state.alertsOnly = false;
               state.todoOnly = false;
               state.cleanupOnly = false;
             }
@@ -5720,6 +5808,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             if (state.todoOnly) {
               state.worktreeOnly = false;
               state.alertsOnly = false;
+              state.readyOnly = false;
               state.cleanupOnly = false;
             }
           } else if (act === "toggle-cleanup") {
@@ -5727,12 +5816,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
             if (state.cleanupOnly) {
               state.worktreeOnly = false;
               state.alertsOnly = false;
+              state.readyOnly = false;
               state.todoOnly = false;
             }
           } else if (act === "clear-filters") {
             state.selectedRepo = "ALL";
             state.worktreeOnly = false;
             state.alertsOnly = false;
+            state.readyOnly = false;
             state.todoOnly = false;
             state.cleanupOnly = false;
             state.search = "";

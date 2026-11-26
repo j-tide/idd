@@ -1,7 +1,7 @@
 # TASK-03：同步更新与扩充单测、全量回归验证并提 PR
 
 - Issue: #55
-- Status: planned
+- Status: in_progress
 - Depends on: TASK-02
 - Test: python3 -m unittest discover -s tests && node --check
 
