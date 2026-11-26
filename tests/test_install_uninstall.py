@@ -96,6 +96,15 @@ class TestInstallAndUninstall(unittest.TestCase):
             self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
             self.assertIn("已安装 idd", res.stdout)
             self.assertIn("export PATH=", res.stdout)
+            self.assertIn("零侵入安装", res.stdout)
+            self.assertIn("AGENTS.md", res.stdout)
+            self.assertIn("README", res.stdout)
+            for rule_path in (
+                home_dir / ".claude" / "CLAUDE.md",
+                home_dir / ".codex" / "AGENTS.md",
+                home_dir / ".gemini" / "GEMINI.md",
+            ):
+                self.assertFalse(rule_path.exists(), f"{rule_path} must not be auto-created")
 
             skill_dir = (home_dir / ".agents" / "skills" / "idd").resolve()
             self.assertTrue((skill_dir / "SKILL.md").is_file())

@@ -68,6 +68,45 @@ idd board
 
 > `idd` safely checks `origin/main` in the background every 6 hours and fast-forwards only when your local skill repo is on a clean `main` branch (or run `idd upgrade [--check]`). Run `idd uninstall` (or `curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh -s -- --uninstall -y`) anytime for clean removal without touching your project repositories.
 
+<details>
+<summary><strong>Optional: Set IDD as Your Default Workflow</strong> (Global User Rules / Project <code>AGENTS.md</code> templates — installer never writes these automatically)</summary>
+
+`install.sh` only symlinks the shared Skill and `idd` CLI, and `idd repo-init` only configures remote merge rules—**neither creates or edits any global rules or project `AGENTS.md` automatically**. If you want IDD active by default, copy one of the snippets below:
+
+### Option 1: Personal Global Default (Recommended — keeps project repos untouched)
+
+Add this snippet to your agent's user-level global instructions:
+
+- **Claude Code**: `~/.claude/CLAUDE.md`
+- **Codex**: `~/.codex/AGENTS.md`
+- **Antigravity**: Global User Rules (`~/.gemini/GEMINI.md` or User Rules settings)
+
+```markdown
+# Global Development Workflow (IDD)
+
+Default to the global `idd` skill (`~/.agents/skills/idd/SKILL.md`) for all non-read-only code, config, and documentation tasks.
+
+- **Issue first, then isolated worktree**: When a repo has a GitHub / GitLab remote and no linked Issue yet, run `idd issue create`, then `idd start <issue#>` to create or reuse an isolated worktree and `<type>/<id>-<slug>` branch pushed to `origin` (never edit directly on `main`).
+- **Per-TASK verification & immediate push**: Break work down under `TASK/<issue>/TASK-XX-*.md` with test mappings, verify with real tests, commit per task, and push right away via `idd sync` (or `git push -u origin HEAD`).
+- **PR/MR, CI & linear merge**: Run `idd pr` / `idd mr` and `idd ci --watch`; once approved (or when `auto_merge` is enabled), run `idd land` to clean `TASK/<issue>/` and Squash-merge linearly onto `main`.
+- **Safety boundaries**: Use the unnumbered `<slug>` flow only in local-only repos without remotes; protect uncommitted edits and never force-push or merge into `main`, deploy, or touch production without authorization.
+```
+
+### Option 2: Project-Level Enforcement (Shared with collaborators)
+
+To enforce IDD across all contributors in a repository, add the snippet below to the repository's root `AGENTS.md` (and put `@AGENTS.md` in `CLAUDE.md` if teammates use Claude Code), optionally paired with `idd repo-init --apply` and remote `main` branch protection:
+
+```markdown
+# Repository Workflow (IDD)
+
+This repository uses the `idd` skill (Issue-Driven Development) for all changes:
+- Create an Issue with `idd issue create`, then develop in an isolated worktree and `<type>/<id>-<slug>` branch via `idd start <issue#>`—never commit directly to `main`.
+- Track steps and real test results under `TASK/<issue>/`; commit per task and push with `idd sync`.
+- Open a PR/MR via `idd pr` / `idd mr`, wait for green CI, and land with `idd land` to remove temporary `TASK/` files and Squash-merge onto `main`.
+```
+
+</details>
+
 ---
 
 <details>
