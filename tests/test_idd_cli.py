@@ -1534,6 +1534,67 @@ class TestIddCli(unittest.TestCase):
             started_43 = json.loads(h.run_idd("start", "43", "--json").stdout)
             self.assertEqual(started_43["branch"], "fix/43-fix-dark-mode-flicker")
 
+    def test_config_auto_merge_global_repo_override_and_persistence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            h = GitHubHarness(tmp_path)
+
+            # Default is disabled globally and per-repo
+            initial = json.loads(h.run_idd("config", "--json").stdout)
+            self.assertFalse(initial["global"]["auto_merge"])
+            self.assertFalse(initial["repo"]["auto_merge"]["enabled"])
+            self.assertEqual(initial["repo"]["auto_merge"]["source"], "global")
+            self.assertIsNone(initial["repo"]["auto_merge"]["repo_override"])
+
+            # Non-git directory without -g/--global rejects repo-level toggle
+            outside = tmp_path / "outside"
+            outside.mkdir()
+            err_res = h.run_idd("config", "auto-merge", "on", cwd=outside, check=False)
+            self.assertNotEqual(err_res.returncode, 0)
+            self.assertIn("-g/--global", err_res.stderr)
+
+            # Global inherit is rejected
+            bad_global = h.run_idd("config", "auto-merge", "inherit", "-g", check=False)
+            self.assertNotEqual(bad_global.returncode, 0)
+
+            # Enable globally
+            g_on = json.loads(h.run_idd("config", "auto-merge", "on", "-g", "--json").stdout)
+            self.assertTrue(g_on["auto_merge"])
+            inherited = json.loads(h.run_idd("config", "auto-merge", "status", "--json").stdout)
+            self.assertTrue(inherited["auto_merge"]["enabled"])
+            self.assertEqual(inherited["auto_merge"]["source"], "global")
+            self.assertIsNone(inherited["auto_merge"]["repo_override"])
+
+            # Override off at repo level
+            r_off = json.loads(h.run_idd("config", "auto-merge", "off", "--json").stdout)
+            self.assertFalse(r_off["auto_merge"]["enabled"])
+            self.assertEqual(r_off["auto_merge"]["source"], "repo")
+            self.assertFalse(r_off["auto_merge"]["repo_override"])
+
+            # Ensure register_repo / repo-init metadata writes do NOT clobber auto_merge
+            h.run_idd("status", "--local-only")
+            h.run_idd("repo-init", "--apply")
+            after_writes = json.loads(h.run_idd("config", "--json").stdout)
+            self.assertFalse(after_writes["repo"]["auto_merge"]["enabled"])
+            self.assertFalse(after_writes["repo"]["auto_merge"]["repo_override"])
+
+            repos_list_txt = h.run_idd("repos", "list").stdout
+            self.assertIn("[auto-merge: off]", repos_list_txt)
+
+            # Inherit clears override and falls back to global=True
+            r_inh = json.loads(h.run_idd("config", "auto-merge", "inherit", "--json").stdout)
+            self.assertTrue(r_inh["auto_merge"]["enabled"])
+            self.assertEqual(r_inh["auto_merge"]["source"], "global")
+            self.assertIsNone(r_inh["auto_merge"]["repo_override"])
+
+            # Status JSON exposes auto_merge and global config
+            status_json = json.loads(h.run_idd("status", "--local-only", "--json").stdout)
+            self.assertTrue(status_json["auto_merge"]["enabled"])
+            g_status_json = json.loads(h.run_idd("status", "-g", "--local-only", "--json").stdout)
+            self.assertTrue(g_status_json["config"]["auto_merge"])
+            status_txt = h.run_idd("status", "--local-only").stdout
+            self.assertIn("自动合入: 开", status_txt)
+
 
 if __name__ == "__main__":
     unittest.main()

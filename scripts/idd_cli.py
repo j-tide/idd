@@ -1253,12 +1253,14 @@ def _render_status_footer(width: int, *, use_color: bool) -> list[str]:
 def _render_global_status(snapshot: dict[str, Any], *, use_color: bool) -> str:
     width = _status_line_width()
     s = snapshot.get("summary") or {}
+    auto_merge_on = bool((snapshot.get("config") or {}).get("auto_merge"))
+    am_badge = f"  {_ansi('2', '·', use_color)}  {_ansi('32', '自动合入: 开', use_color)}" if auto_merge_on else ""
     lines = [
         "",
         (
             f"  {_ansi('1;36', '◆', use_color)} {_ansi('1', 'IDD', use_color)}  "
             f"{_ansi('36', '全局 IDD 进度总览', use_color)}  "
-            f"{_ansi('2', f'·  v{__version__}', use_color)}"
+            f"{_ansi('2', f'·  v{__version__}', use_color)}{am_badge}"
         ),
         f"  {_ansi('2', '─' * width, use_color)}",
         f"  {_render_kpi_strip(s, include_repos=True, use_color=use_color)}",
@@ -1303,6 +1305,12 @@ def _render_single_repo_status(snap: dict[str, Any], *, use_color: bool) -> str:
     forge_badge = _style_forge_badge(str(snap.get("forge") or "local"), use_color)
     pretty_repo_path = _pretty_path(Path(str(snap.get("repo_path") or "")))
     default_branch = str(snap.get("default_branch") or "main")
+    am_info = snap.get("auto_merge") or {}
+    am_suffix = (
+        f"  ·  {_ansi('32', '自动合入: 开' + (' (仓库)' if am_info.get('source') == 'repo' else ' (全局)'), use_color)}"
+        if am_info.get("enabled")
+        else ""
+    )
 
     lines = [
         "",
@@ -1312,7 +1320,7 @@ def _render_single_repo_status(snap: dict[str, Any], *, use_color: bool) -> str:
             f"{_ansi('2', '·', use_color)}  {_ansi('1', str(snap.get('repo_name') or ''), use_color)}  "
             f"{forge_badge}"
         ),
-        f"  {_ansi('2', f'{pretty_repo_path}  ·  {default_branch}', use_color)}",
+        f"  {_ansi('2', f'{pretty_repo_path}  ·  {default_branch}', use_color)}{am_suffix}",
         f"  {_ansi('2', '─' * width, use_color)}",
         f"  {_render_kpi_strip(summary, include_repos=False, use_color=use_color)}",
         "",
@@ -1434,7 +1442,9 @@ def cmd_repos(args: argparse.Namespace) -> int:
                 ago = monitor.format_relative_time(max(0.0, now - ts)) if ts > 0 else "无记录"
                 init_state = item.get("repo_init_state")
                 init_tag = " [待初始化策略: idd repo-init --apply]" if init_state in ("pending", "prompted") else ""
-                lines.append(f"- {item['name']} ({ago}): {item['path']}{init_tag}")
+                am_val = item.get("auto_merge")
+                am_tag = f" [auto-merge: {'on' if am_val else 'off'}]" if isinstance(am_val, bool) else ""
+                lines.append(f"- {item['name']} ({ago}): {item['path']}{init_tag}{am_tag}")
         print("\n".join(lines))
         return 0
 
@@ -2598,6 +2608,161 @@ def cmd_repo_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_config_repo(repo_arg: Path | None) -> Path | None:
+    if repo_arg is not None:
+        resolved = monitor.resolve_main_worktree_ro(repo_arg)
+        if resolved is None:
+            raise IddError(f"路径不是有效的 Git 仓库：{repo_arg}")
+        return resolved
+    return monitor.resolve_main_worktree_ro(Path.cwd())
+
+
+def _parse_auto_merge_action(raw: str) -> str:
+    val = raw.strip().lower()
+    if val in ("status", "show", "get"):
+        return "status"
+    if val in ("on", "true", "1", "enable", "enabled"):
+        return "on"
+    if val in ("off", "false", "0", "disable", "disabled"):
+        return "off"
+    if val in ("inherit", "unset", "default", "reset"):
+        return "inherit"
+    raise IddError(f"不支持的 auto-merge 值 `{raw}`（请使用 on / off / inherit / status）。")
+
+
+def _build_config_payload(main_wt: Path | None) -> dict[str, Any]:
+    global_am = monitor.get_global_auto_merge()
+    payload: dict[str, Any] = {
+        "config_path": str(monitor.get_config_path()),
+        "repos_config_path": str(monitor.get_repos_path()),
+        "global": {
+            "auto_merge": global_am,
+        },
+        "repo": None,
+    }
+    if main_wt is not None:
+        resolved = monitor.resolve_auto_merge(main_wt)
+        payload["repo"] = {
+            "path": str(main_wt),
+            "name": main_wt.name,
+            "auto_merge": resolved,
+        }
+    return payload
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    subcmd = getattr(args, "config_command", None) or "show"
+    repo_arg = getattr(args, "repo", None)
+    use_json = bool(getattr(args, "json", False))
+    global_mode = bool(getattr(args, "global_mode", False))
+
+    if subcmd == "show":
+        main_wt = _resolve_config_repo(repo_arg)
+        payload = _build_config_payload(main_wt)
+        if use_json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+        lines = [
+            f"全局配置：{payload['config_path']}",
+            f"- auto_merge（全局默认）：{'开 (on)' if payload['global']['auto_merge'] else '关 (off)'}",
+        ]
+        if payload["repo"] is not None:
+            r = payload["repo"]
+            am = r["auto_merge"]
+            ovr = am["repo_override"]
+            ovr_text = "跟随全局 (inherit)" if ovr is None else ("开 (on)" if ovr else "关 (off)")
+            eff_text = "开 (on)" if am["enabled"] else "关 (off)"
+            src_text = "仓库覆盖" if am["source"] == "repo" else "全局默认"
+            lines.extend([
+                f"当前仓库：{r['name']} ({r['path']})",
+                f"- 仓库覆盖：{ovr_text}",
+                f"- 最终生效：{eff_text}（来源：{src_text}）",
+            ])
+        else:
+            lines.append("当前目录不在 Git 仓库内（可加 `-g/--global` 或 `--repo <路径>` 管理仓库配置）。")
+        print("\n".join(lines))
+        return 0
+
+    if subcmd == "auto-merge":
+        action = _parse_auto_merge_action(getattr(args, "value", "status"))
+        main_wt = _resolve_config_repo(repo_arg)
+
+        if action == "status":
+            if global_mode:
+                global_am = monitor.get_global_auto_merge()
+                if use_json:
+                    print(json.dumps({
+                        "scope": "global",
+                        "auto_merge": global_am,
+                        "config_path": str(monitor.get_config_path()),
+                    }, ensure_ascii=False, indent=2))
+                else:
+                    print(f"全局默认 auto_merge：{'开 (on)' if global_am else '关 (off)'}（{monitor.get_config_path()}）")
+                return 0
+            if main_wt is None:
+                global_am = monitor.get_global_auto_merge()
+                if use_json:
+                    print(json.dumps(_build_config_payload(None), ensure_ascii=False, indent=2))
+                else:
+                    print(f"全局默认 auto_merge：{'开 (on)' if global_am else '关 (off)'}（当前不在 Git 仓库内）")
+                return 0
+            resolved = monitor.resolve_auto_merge(main_wt)
+            if use_json:
+                print(json.dumps({
+                    "scope": "repo",
+                    "repo_path": str(main_wt),
+                    "auto_merge": resolved,
+                }, ensure_ascii=False, indent=2))
+            else:
+                ovr = resolved["repo_override"]
+                ovr_text = "跟随全局 (inherit)" if ovr is None else ("开 (on)" if ovr else "关 (off)")
+                eff_text = "开 (on)" if resolved["enabled"] else "关 (off)"
+                src_text = "仓库覆盖" if resolved["source"] == "repo" else "全局默认"
+                print(
+                    f"仓库 `{main_wt.name}` auto_merge：{eff_text}"
+                    f"（仓库覆盖：{ovr_text}，全局默认：{'开' if resolved['global_default'] else '关'}，来源：{src_text}）"
+                )
+            return 0
+
+        if global_mode:
+            if action == "inherit":
+                raise IddError("全局默认开关不支持 `inherit`，请使用 `on` 或 `off`。")
+            enabled = action == "on"
+            cfg = monitor.set_global_auto_merge(enabled)
+            if use_json:
+                print(json.dumps({
+                    "scope": "global",
+                    "auto_merge": bool(cfg["auto_merge"]),
+                    "config_path": str(monitor.get_config_path()),
+                }, ensure_ascii=False, indent=2))
+            else:
+                state_zh = "开启" if cfg["auto_merge"] else "关闭"
+                print(f"已{state_zh}全局默认 PR/MR 自动准入与自动合入开关（{monitor.get_config_path()}）。")
+            return 0
+
+        if main_wt is None:
+            raise IddError("当前目录不在 Git 仓库内，请加 `-g/--global` 设置全局开关，或通过 `--repo <路径>` 指定仓库。")
+
+        override_val: bool | None = None if action == "inherit" else (action == "on")
+        resolved = monitor.set_repo_auto_merge_override(main_wt, override_val)
+        if use_json:
+            print(json.dumps({
+                "scope": "repo",
+                "repo_path": str(main_wt),
+                "auto_merge": resolved,
+            }, ensure_ascii=False, indent=2))
+        else:
+            if override_val is None:
+                eff_text = "开启" if resolved["enabled"] else "关闭"
+                print(f"已清除仓库 `{main_wt.name}` 的独立覆盖，恢复跟随全局默认（当前生效：{eff_text}）。")
+            else:
+                state_zh = "开启" if override_val else "关闭"
+                print(f"已为仓库 `{main_wt.name}` 独立{state_zh} PR/MR 自动准入与自动合入开关。")
+        return 0
+
+    raise IddError(f"未知 config 子命令：{subcmd}")
+
+
 def cmd_auth(args: argparse.Namespace) -> int:
     subcmd = args.auth_command
     if subcmd == "login":
@@ -3356,6 +3521,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_repo_init = sub.add_parser("repo-init", help="检查或配置 GitHub/GitLab 仓库的仅 Squash 线性合入策略（保留分支）")
     p_repo_init.add_argument("--apply", action="store_true", help="应用线性 Squash 合入策略且合并后保留远端分支")
     p_repo_init.set_defaults(func=cmd_repo_init)
+
+    # config
+    p_config = sub.add_parser("config", help="查看或配置全局与单仓库自动准入合入开关（auto_merge）")
+    p_config.add_argument("--repo", type=Path, default=None, help="指定目标仓库路径（默认当前工作区所属仓库）")
+    p_config.add_argument("--json", action="store_true", help="输出 JSON")
+    config_sub = p_config.add_subparsers(dest="config_command", required=False)
+
+    p_config_show = config_sub.add_parser("show", help="查看当前全局与仓库配置（默认）")
+    p_config_show.add_argument("--repo", type=Path, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    p_config_show.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="输出 JSON")
+    p_config_show.set_defaults(func=cmd_config)
+
+    p_config_am = config_sub.add_parser("auto-merge", help="查看或设置 PR/MR 自动准入与自动合入开关")
+    p_config_am.add_argument(
+        "value",
+        nargs="?",
+        default="status",
+        choices=["status", "on", "off", "inherit", "true", "false", "1", "0", "unset", "default", "reset"],
+        help="目标状态：on / off / inherit（恢复跟随全局）/ status（查看）",
+    )
+    p_config_am.add_argument("-g", "--global", dest="global_mode", action="store_true", help="读取或修改全局默认开关（~/.config/idd/config.json）")
+    p_config_am.add_argument("--repo", type=Path, default=argparse.SUPPRESS, help="指定目标仓库路径（默认当前工作区所属仓库）")
+    p_config_am.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="输出 JSON")
+    p_config_am.set_defaults(func=cmd_config)
+    p_config.set_defaults(func=cmd_config)
 
     # auth
     p_auth = sub.add_parser("auth", help="管理自建 GitLab / GitHub 主机凭据（~/.config/idd/hosts.json）")

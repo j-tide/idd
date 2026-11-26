@@ -33,12 +33,75 @@ import task_status
 
 
 _REPOS_LOCK = threading.Lock()
+_CONFIG_LOCK = threading.Lock()
 _IGNORED_GIT_ERROR = (OSError, subprocess.SubprocessError)
 
 
 def get_repos_path() -> Path:
     """Return path to the global active-repository registry JSON file."""
     return get_config_dir() / "repos.json"
+
+
+def get_config_path() -> Path:
+    """Return path to the global IDD settings JSON file."""
+    return get_config_dir() / "config.json"
+
+
+def _normalize_global_config(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {"auto_merge": False}
+    normalized = dict(raw)
+    normalized["auto_merge"] = bool(raw.get("auto_merge", False))
+    return normalized
+
+
+def _read_raw_config_unlocked() -> dict[str, Any]:
+    path = get_config_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"auto_merge": False}
+    return _normalize_global_config(raw)
+
+
+def _save_config_unlocked(data: dict[str, Any]) -> dict[str, Any]:
+    normalized = _normalize_global_config(data)
+    path = get_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix="config-", suffix=".tmp", dir=str(path.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(normalized, handle, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return normalized
+
+
+def load_global_config() -> dict[str, Any]:
+    """Load global IDD configuration (`~/.config/idd/config.json`) with safe defaults."""
+    with _CONFIG_LOCK:
+        return _read_raw_config_unlocked()
+
+
+def save_global_config(data: dict[str, Any]) -> dict[str, Any]:
+    """Atomically persist global IDD configuration."""
+    with _CONFIG_LOCK:
+        return _save_config_unlocked(data)
+
+
+def get_global_auto_merge() -> bool:
+    """Return the global default `auto_merge` switch (default False)."""
+    return bool(load_global_config().get("auto_merge", False))
+
+
+def set_global_auto_merge(enabled: bool) -> dict[str, Any]:
+    """Update and persist the global default `auto_merge` switch."""
+    with _CONFIG_LOCK:
+        cfg = _read_raw_config_unlocked()
+        cfg["auto_merge"] = bool(enabled)
+        return _save_config_unlocked(cfg)
 
 
 def _run_git_ro(cwd: Path, args: list[str], *, timeout: float = 10.0) -> subprocess.CompletedProcess[str] | None:
@@ -154,7 +217,7 @@ def _read_raw_repos_unlocked() -> list[dict[str, Any]]:
 
 
 def _copy_repo_init_fields(src: dict[str, Any], dst: dict[str, Any]) -> None:
-    """Copy persisted `repo_init_*` metadata fields from `src` to `dst` when present."""
+    """Copy persisted `repo_init_*` and `auto_merge` metadata fields from `src` to `dst` when present."""
     existing_state = src.get("repo_init_state")
     if isinstance(existing_state, str) and existing_state:
         dst["repo_init_state"] = existing_state
@@ -166,6 +229,9 @@ def _copy_repo_init_fields(src: dict[str, Any], dst: dict[str, Any]) -> None:
     err = src.get("repo_init_error")
     if isinstance(err, str) and err:
         dst["repo_init_error"] = err
+    auto_merge = src.get("auto_merge")
+    if isinstance(auto_merge, bool):
+        dst["auto_merge"] = auto_merge
 
 
 def load_registered_repos(*, prune_missing: bool = True) -> list[dict[str, Any]]:
@@ -326,6 +392,67 @@ def get_repo_init_state(main_worktree: Path) -> str:
 def set_repo_init_state(main_worktree: Path, state: str) -> None:
     """Persist `repo_init_state` for a repository main worktree in `repos.json`."""
     set_repo_init_meta(main_worktree, state)
+
+
+def get_repo_auto_merge_override(main_worktree: Path) -> bool | None:
+    """Return explicit per-repository `auto_merge` override (True/False) or None when inheriting global."""
+    key = str(main_worktree.expanduser().resolve())
+    with _REPOS_LOCK:
+        for item in _read_raw_repos_unlocked():
+            try:
+                p = str(Path(item["path"]).expanduser().resolve())
+            except OSError:
+                continue
+            if p == key:
+                val = item.get("auto_merge")
+                return val if isinstance(val, bool) else None
+    return None
+
+
+def resolve_auto_merge(main_worktree: Path | None) -> dict[str, Any]:
+    """Resolve effective `auto_merge` setting (`repo` override > `global` default)."""
+    global_default = get_global_auto_merge()
+    repo_override = get_repo_auto_merge_override(main_worktree) if main_worktree is not None else None
+    enabled = repo_override if repo_override is not None else global_default
+    source = "repo" if repo_override is not None else "global"
+    return {
+        "enabled": bool(enabled),
+        "source": source,
+        "global_default": bool(global_default),
+        "repo_override": repo_override,
+    }
+
+
+def set_repo_auto_merge_override(main_worktree: Path, value: bool | None) -> dict[str, Any]:
+    """Persist or clear (`value=None`) per-repository `auto_merge` override in `repos.json`."""
+    resolved = main_worktree.expanduser().resolve()
+    key = str(resolved)
+    now = time.time()
+    with _REPOS_LOCK:
+        raw_items = _read_raw_repos_unlocked()
+        by_path: dict[str, dict[str, Any]] = {}
+        for item in raw_items:
+            try:
+                p = Path(item["path"]).expanduser().resolve()
+            except OSError:
+                continue
+            if p.is_dir() and (p / ".git").exists():
+                rec: dict[str, Any] = {
+                    "path": str(p),
+                    "name": str(item.get("name") or p.name),
+                    "last_seen_at": float(item.get("last_seen_at") or 0.0),
+                }
+                _copy_repo_init_fields(item, rec)
+                by_path[str(p)] = rec
+        target = by_path.get(key) or {"path": key, "name": resolved.name, "last_seen_at": now}
+        if value is None:
+            target.pop("auto_merge", None)
+        else:
+            target["auto_merge"] = bool(value)
+        by_path[key] = target
+        entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
+        _save_repos_unlocked(entries)
+    return resolve_auto_merge(resolved)
 
 
 def unregister_repo(target: Path) -> bool:
@@ -1658,6 +1785,7 @@ def collect_repo_snapshot(
         if (main_wt is not None and has_origin)
         else {"state": "local", "mismatches": [], "error": ""}
     )
+    auto_merge_meta = resolve_auto_merge(main_wt)
 
     return {
         "repo_name": repo_name,
@@ -1672,6 +1800,7 @@ def collect_repo_snapshot(
         "forge_syncing": bool(forge_info.get("syncing")),
         "auth_alert": forge_info.get("auth_alert"),
         "repo_init": repo_init_meta,
+        "auto_merge": auto_merge_meta,
         "mr_label": mr_label,
         "mr_prefix": mr_prefix,
         "issues": rows,
@@ -2098,6 +2227,10 @@ def collect_global_snapshot(
         "local_only": bool(local_only),
         "generated_at": time.time(),
         "repos_config_path": str(get_repos_path()),
+        "config": {
+            "auto_merge": get_global_auto_merge(),
+            "config_path": str(get_config_path()),
+        },
         "forge_syncing": any(bool(r.get("forge_syncing")) for r in repos_out),
         "forge_connections": _build_forge_connections(
             repos_out,
@@ -2147,6 +2280,10 @@ def collect_scope_snapshot(
             "local_only": bool(local_only),
             "generated_at": snap["generated_at"],
             "repos_config_path": str(get_repos_path()),
+            "config": {
+                "auto_merge": get_global_auto_merge(),
+                "config_path": str(get_config_path()),
+            },
             "forge_syncing": bool(snap.get("forge_syncing")),
             "forge_connections": _build_forge_connections(
                 [snap],
