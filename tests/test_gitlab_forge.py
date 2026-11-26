@@ -591,6 +591,10 @@ class TestGitLabForge(unittest.TestCase):
                 mr_res = run_idd("mr", "1")
                 self.assertIn("已创建 MR !10", mr_res.stdout)
                 self.assertIn("Closes #1", state.mrs[10]["description"])
+                self.assertIn(
+                    "### TASK-01 实现 CSV 导出\n\n- **Test:** `pytest test_csv.py` — 2 passed",
+                    state.mrs[10]["description"],
+                )
                 self.assertNotIn("Goal:", state.mrs[10]["description"])
 
                 # 6. Check failed CI log & status board

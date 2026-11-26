@@ -515,8 +515,8 @@ class TestIddCli(unittest.TestCase):
             dry_pr = h.run_idd("pr", "42", "--dry-run").stdout
             self.assertNotIn("Goal:", dry_pr)
             self.assertIn("Closes #42", dry_pr)
-            self.assertIn("TASK-01 增加 CSV 后端导出接口", dry_pr)
-            self.assertIn("Test: pytest tests/test_export.py — 5 passed", dry_pr)
+            self.assertIn("### TASK-01 增加 CSV 后端导出接口", dry_pr)
+            self.assertIn("- **Test:** `pytest tests/test_export.py` — 5 passed", dry_pr)
 
             # Real PR creation
             pr_out = h.run_idd("pr", "42").stdout
@@ -606,7 +606,7 @@ class TestIddCli(unittest.TestCase):
             final_state = h.load_state()
             self.assertEqual(final_state["prs"][pr_num]["state"], "MERGED")
             self.assertEqual(final_state["issues"]["42"]["state"], "CLOSED")
-            self.assertIn("TASK-01 增加 CSV 后端导出接口", final_state["prs"][pr_num]["body"])
+            self.assertIn("### TASK-01 增加 CSV 后端导出接口", final_state["prs"][pr_num]["body"])
             wt_head = subprocess.check_output(["git", "-C", str(wt), "rev-parse", "HEAD"], text=True).strip()
             merge_calls = [c for c in final_state["calls"] if c[:2] == ["pr", "merge"]]
             self.assertTrue(merge_calls)
@@ -1790,6 +1790,107 @@ class TestIddCli(unittest.TestCase):
             self.assertIn("已开启自动准入合入（来源：命令行 --auto-merge）", pr_override.stdout)
             self.assertIn("已通过 Squash Merge 直线合入 PR #10", pr_override.stdout)
             self.assertEqual(h.load_state()["prs"]["10"]["state"], "MERGED")
+
+    def test_build_issue_summary_markdown_and_test_formatting(self) -> None:
+        self.assertEqual(
+            idd_cli._format_test_summary_line("uv run --offline --locked --extra dev python -m pytest -o addopts='' -q tests/ — 95 passed"),
+            "- **Test:** `uv run --offline --locked --extra dev python -m pytest -o addopts='' -q tests/` — 95 passed",
+        )
+        self.assertEqual(
+            idd_cli._format_test_summary_line("uv run pytest tests/ — 4505 passed, 11 skipped; tests/packaging/ — 3 passed"),
+            "- **Test:** `uv run pytest tests/` — 4505 passed, 11 skipped; `tests/packaging/` — 3 passed",
+        )
+        self.assertEqual(
+            idd_cli._format_test_summary_line("cmd1; cmd2 — 10 passed"),
+            "- **Test:** `cmd1; cmd2` — 10 passed",
+        )
+        self.assertEqual(
+            idd_cli._format_test_summary_line("`pytest tests/test_a.py` — 4 passed"),
+            "- **Test:** `pytest tests/test_a.py` — 4 passed",
+        )
+        self.assertEqual(
+            idd_cli._format_test_summary_line("echo `ok` — passed"),
+            "- **Test:** `` echo `ok` `` — passed",
+        )
+        self.assertEqual(
+            idd_cli._format_test_summary_line("未记录"),
+            "- **Test:** 未记录",
+        )
+        self.assertEqual(
+            idd_cli._format_test_summary_line("未在提交中记录"),
+            "- **Test:** 未在提交中记录",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+            (repo / "README.md").write_text("init\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-m", "chore: init"], check=True, capture_output=True)
+
+            subprocess.run(["git", "-C", str(repo), "checkout", "-b", "feat/6-review"], check=True, capture_output=True)
+            task_dir = repo / "TASK" / "6-review"
+            task_dir.mkdir(parents=True)
+            (task_dir / "TASK-01-context.md").write_text(
+                "# TASK-01：扩展独立复核上下文\n\n"
+                "- Issue: #6\n- Status: done\n- Depends on: none\n- Test: pytest\n",
+                encoding="utf-8",
+            )
+            (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            commit_msg_1 = (
+                "feat(review): 扩展独立复核上下文\n\n"
+                "第一段说明包含上下文细节。\n\n"
+                "第二段列出关键点：\n"
+                "- 含文件头与扩展窗口\n"
+                "- 零 I/O 关联符号变更\n\n"
+                "Task: 6-review/TASK-01\n"
+                "Refs: #6\n"
+                "Test: uv run --offline --locked -q tests/review/ — 95 passed"
+            )
+            subprocess.run(["git", "-C", str(repo), "commit", "-m", commit_msg_1], check=True, capture_output=True)
+
+            # Single TASK with issue_title=None must not leak '###' or 'TASK-01' into suggested_title
+            single_title, single_body = idd_cli.build_issue_summary(repo, "6-review", 6, "main", issue_title=None)
+            self.assertEqual(single_title, "feat: 扩展独立复核上下文 (#6)")
+            self.assertNotIn("###", single_title)
+            self.assertNotIn("TASK-01", single_title)
+            expected_single = (
+                "Closes #6\n\n"
+                "### TASK-01 扩展独立复核上下文\n\n"
+                "第一段说明包含上下文细节。\n\n"
+                "第二段列出关键点：\n"
+                "- 含文件头与扩展窗口\n"
+                "- 零 I/O 关联符号变更\n\n"
+                "- **Test:** `uv run --offline --locked -q tests/review/` — 95 passed\n"
+            )
+            self.assertEqual(single_body, expected_single)
+
+            # Second TASK without extra body should still separate heading and Test with blank line
+            (task_dir / "TASK-02-docs.md").write_text(
+                "# TASK-02：同步文档\n\n"
+                "- Issue: #6\n- Status: done\n- Depends on: TASK-01\n- Test: pytest\n",
+                encoding="utf-8",
+            )
+            (repo / "b.py").write_text("y = 2\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(repo), "commit", "-m",
+                    "docs: 同步文档\n\nTask: 6-review/TASK-02\nRefs: #6\nTest: pytest tests/a.py — 10 passed; tests/b.py — 3 passed",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            _, multi_body = idd_cli.build_issue_summary(repo, "6-review", 6, "main", issue_title="fix(review): 收敛噪音")
+            self.assertIn(
+                "### TASK-02 同步文档\n\n- **Test:** `pytest tests/a.py` — 10 passed; `tests/b.py` — 3 passed\n",
+                multi_body,
+            )
 
 
 if __name__ == "__main__":
