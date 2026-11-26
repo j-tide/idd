@@ -27,9 +27,10 @@ GITLAB_FAIL_STATUSES = {"failed", "canceled"}
 class ForgeError(Exception):
     """Error raised when communicating with GitHub/GitLab or resolving forge credentials."""
 
-    def __init__(self, message: str, exit_code: int = 1) -> None:
+    def __init__(self, message: str, exit_code: int = 1, *, http_status: int | None = None) -> None:
         super().__init__(message)
         self.exit_code = exit_code
+        self.http_status = http_status
 
 
 class ForgeAuthError(ForgeError):
@@ -45,8 +46,9 @@ class ForgeAuthError(ForgeError):
         login_cmd: str = "",
         token_url: str = "",
         exit_code: int = 1,
+        http_status: int | None = None,
     ) -> None:
-        super().__init__(message, exit_code=exit_code)
+        super().__init__(message, exit_code=exit_code, http_status=http_status)
         self.host = host
         self.api_base = api_base
         self.forge_type = forge_type
@@ -519,7 +521,15 @@ class GitHubForge:
         cmd.append("--watch")
         return subprocess.run(cmd, cwd=str(self.cwd), env=self._gh_env()).returncode
 
-    def merge_squash(self, number: int, title: str, body: str, *, auto: bool = False) -> None:
+    def merge_squash(
+        self,
+        number: int,
+        title: str,
+        body: str,
+        *,
+        auto: bool = False,
+        expected_sha: str | None = None,
+    ) -> None:
         fd, raw_path = tempfile.mkstemp(prefix="idd-merge-", suffix=".md")
         tmp_path = Path(raw_path)
         try:
@@ -536,6 +546,8 @@ class GitHubForge:
                 "--body-file",
                 str(tmp_path),
             ]
+            if expected_sha:
+                args.extend(["--match-head-commit", expected_sha])
             if auto:
                 args.insert(4, "--auto")
             _run(args, cwd=self.cwd, env=self._gh_env())
@@ -697,8 +709,12 @@ class GitLabForge:
                     forge_type="gitlab",
                     login_cmd=login_cmd,
                     token_url=token_url,
+                    http_status=exc.code,
                 ) from exc
-            raise ForgeError(f"GitLab API 请求失败（HTTP {exc.code} {method} {path}）：{detail}") from exc
+            raise ForgeError(
+                f"GitLab API 请求失败（HTTP {exc.code} {method} {path}）：{detail}",
+                http_status=exc.code,
+            ) from exc
         except urllib.error.URLError as exc:
             if not check:
                 return None
@@ -803,17 +819,26 @@ class GitLabForge:
             state = "OPEN"
 
         detailed = str(raw.get("detailed_merge_status") or "").lower()
+        legacy_merge_status = str(raw.get("merge_status") or "").lower()
         if raw.get("has_conflicts") or detailed == "conflict":
             merge_state = "DIRTY"
         elif detailed in {"need_rebase", "not_open"}:
             merge_state = "BEHIND"
+        elif detailed in {"checking", "unchecked", "preparing"} or legacy_merge_status in {
+            "checking",
+            "unchecked",
+            "preparing",
+        }:
+            merge_state = "CHECKING"
         else:
             merge_state = "CLEAN"
 
         title = raw.get("title", "")
         is_draft = bool(raw.get("draft") or raw.get("work_in_progress") or title.startswith(("Draft:", "WIP:")))
         diff_refs = raw.get("diff_refs") or {}
-        head_oid = str(raw.get("sha") or diff_refs.get("head_sha") or "")
+        diff_head_sha = str(diff_refs.get("head_sha") or "")
+        raw_sha = str(raw.get("sha") or "")
+        head_oid = diff_head_sha or raw_sha
 
         if state == "MERGED":
             overall, checks, failed_ids = "NONE", [], []
@@ -829,6 +854,8 @@ class GitLabForge:
             "baseRefName": raw.get("target_branch", ""),
             "headRefName": raw.get("source_branch", ""),
             "headRefOid": head_oid,
+            "rawSha": raw_sha,
+            "detailedMergeStatus": detailed or legacy_merge_status,
             "isDraft": is_draft,
             "mergeStateStatus": merge_state,
             "checks_overall": overall,
@@ -953,16 +980,27 @@ class GitLabForge:
             return subprocess.run(["glab", "mr", "view", str(number)], cwd=str(self.cwd)).returncode
         return 0
 
-    def merge_squash(self, number: int, title: str, body: str, *, auto: bool = False) -> None:
+    def merge_squash(
+        self,
+        number: int,
+        title: str,
+        body: str,
+        *,
+        auto: bool = False,
+        expected_sha: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "squash": True,
+            "squash_commit_message": f"{title}\n\n{body}",
+            "should_remove_source_branch": False,
+            "merge_when_pipeline_succeeds": bool(auto),
+        }
+        if expected_sha:
+            payload["sha"] = expected_sha
         self._request(
             "PUT",
             f"/projects/{self.encoded_project}/merge_requests/{number}/merge",
-            json_body={
-                "squash": True,
-                "squash_commit_message": f"{title}\n\n{body}",
-                "should_remove_source_branch": False,
-                "merge_when_pipeline_succeeds": bool(auto),
-            },
+            json_body=payload,
         )
 
     def repo_init(self, *, apply: bool = False) -> dict[str, Any]:

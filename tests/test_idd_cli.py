@@ -191,6 +191,12 @@ if args[:2] == ["pr", "view"]:
     if not pr:
         print(f"pr {ref} not found", file=sys.stderr)
         sys.exit(1)
+    if state.get("stale_pr_view_polls", 0) > 0:
+        state["stale_pr_view_polls"] -= 1
+    else:
+        oid = origin_head_oid(pr.get("headRefName", ""))
+        if oid:
+            pr["headRefOid"] = oid
     save_state(state)
     print(json.dumps(pr))
     sys.exit(0)
@@ -200,15 +206,19 @@ if args[:2] == ["pr", "merge"]:
     pr = state["prs"][str(num)]
     subject = arg_val(args, "--subject") or pr["title"]
     body = Path(arg_val(args, "--body-file")).read_text(encoding="utf-8") if arg_val(args, "--body-file") else pr["body"]
+    expected_commit = arg_val(args, "--match-head-commit")
+    head = pr["headRefName"]
+    oid = origin_head_oid(head)
+    if expected_commit and oid and expected_commit != oid:
+        print(f"Head commit {expected_commit} does not match {oid}", file=sys.stderr)
+        sys.exit(1)
     if "--auto" in args:
         pr["autoMergeRequest"] = True
         save_state(state)
         print("auto-merge enabled")
         sys.exit(0)
 
-    head = pr["headRefName"]
     base = pr["baseRefName"]
-    oid = origin_head_oid(head)
     if oid:
         pr["headRefOid"] = oid
     tree = subprocess.check_output(["git", "--git-dir", str(ORIGIN_DIR), "rev-parse", f"refs/heads/{head}^{{tree}}"], text=True).strip()
@@ -569,6 +579,12 @@ class TestIddCli(unittest.TestCase):
             self.assertEqual(final_state["prs"][pr_num]["state"], "MERGED")
             self.assertEqual(final_state["issues"]["42"]["state"], "CLOSED")
             self.assertIn("TASK-01 增加 CSV 后端导出接口", final_state["prs"][pr_num]["body"])
+            wt_head = subprocess.check_output(["git", "-C", str(wt), "rev-parse", "HEAD"], text=True).strip()
+            merge_calls = [c for c in final_state["calls"] if c[:2] == ["pr", "merge"]]
+            self.assertTrue(merge_calls)
+            self.assertIn("--match-head-commit", merge_calls[-1])
+            idx = merge_calls[-1].index("--match-head-commit")
+            self.assertEqual(merge_calls[-1][idx + 1], wt_head)
 
     def test_repo_init_and_issue_create(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

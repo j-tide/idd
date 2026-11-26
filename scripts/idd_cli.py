@@ -41,6 +41,10 @@ from version import get_version  # noqa: E402
 
 __version__ = get_version()
 AUTO_UPDATE_INTERVAL_SECONDS = 6 * 3600
+LAND_SYNC_TIMEOUT_SECONDS = 30.0
+LAND_SYNC_POLL_INTERVAL_SECONDS = 1.0
+LAND_MERGE_MAX_RETRIES = 3
+LAND_MERGE_RETRY_DELAY_SECONDS = 1.5
 
 ALLOWED_TYPES = ("feat", "fix", "refactor", "perf", "docs", "test", "ci", "chore")
 ISSUE_BRANCH_RE = re.compile(r"^(feat|fix|refactor|perf|docs|test|ci|chore)/(\d+)-[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -1719,6 +1723,113 @@ def cmd_ci(args: argparse.Namespace) -> int:
     return 0
 
 
+def _get_float_env(name: str, default: float, *, minimum: float = 0.0) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        val = float(raw)
+    except ValueError:
+        return default
+    if val < minimum:
+        return default
+    return val
+
+
+def _is_change_synced_to_head(change: dict[str, Any] | None, expected_sha: str) -> bool:
+    if not isinstance(change, dict):
+        return False
+    head_oid = str(change.get("headRefOid") or "")
+    if head_oid != expected_sha:
+        return False
+    raw_sha = str(change.get("rawSha") or "")
+    if raw_sha and raw_sha != expected_sha:
+        return False
+    if change.get("mergeStateStatus") == "CHECKING":
+        return False
+    return True
+
+
+def _wait_for_change_head_sync(
+    forge: Any,
+    change_num: int,
+    expected_sha: str,
+    fallback_change: dict[str, Any],
+) -> dict[str, Any]:
+    """Wait until remote PR/MR headRefOid catches up with local HEAD and leaves CHECKING."""
+    latest = forge.get_change(number=change_num, check=False)
+    if _is_change_synced_to_head(latest, expected_sha):
+        assert latest is not None
+        return latest
+
+    timeout = _get_float_env("IDD_LAND_SYNC_TIMEOUT", LAND_SYNC_TIMEOUT_SECONDS, minimum=0.05)
+    interval = _get_float_env("IDD_LAND_SYNC_INTERVAL", LAND_SYNC_POLL_INTERVAL_SECONDS, minimum=0.0)
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        sleep_for = min(interval, max(0.0, remaining))
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+        latest = forge.get_change(number=change_num, check=False)
+        if _is_change_synced_to_head(latest, expected_sha):
+            assert latest is not None
+            return latest
+
+    current = latest or fallback_change
+    remote_oid = str(current.get("headRefOid") or "") or "unknown"
+    mstate = str(current.get("mergeStateStatus") or "UNKNOWN")
+    dstate = str(current.get("detailedMergeStatus") or "")
+    state_detail = f"{mstate} ({dstate})" if dstate else mstate
+    raise IddError(
+        f"等待 {forge.mr_label} {forge.mr_prefix}{change_num} 同步最新提交 `{expected_sha[:12]}` 超时"
+        f"（远端当前头提交：`{remote_oid[:12] if remote_oid != 'unknown' else 'unknown'}`，合并状态：`{state_detail}`）。\n"
+        "远端可能仍在异步刷新 MR/PR diff 或合并状态，为避免误合旧提交已取消合并；"
+        "请稍后重试 `idd land`（或调大环境变量 `IDD_LAND_SYNC_TIMEOUT`）。",
+        exit_code=3,
+    )
+
+
+def _is_transient_gitlab_merge_error(forge: Any, exc: ForgeError) -> bool:
+    if getattr(forge, "forge_type", "") != "gitlab":
+        return False
+    status = getattr(exc, "http_status", None)
+    if status in {405, 406, 409, 422}:
+        return True
+    if status is None:
+        msg = str(exc).lower()
+        return any(tok in msg for tok in ("http 405", "http 406", "http 409", "http 422", "cannot be merged", "not mergeable", "sha"))
+    return False
+
+
+def _merge_squash_with_retry(
+    forge: Any,
+    change_num: int,
+    title: str,
+    body: str,
+    *,
+    auto: bool,
+    expected_sha: str,
+) -> None:
+    """Execute squash merge with SHA lock and bounded retries on transient GitLab mergeability errors."""
+    retry_delay = _get_float_env("IDD_LAND_MERGE_RETRY_DELAY", LAND_MERGE_RETRY_DELAY_SECONDS, minimum=0.0)
+    for attempt in range(LAND_MERGE_MAX_RETRIES):
+        try:
+            forge.merge_squash(change_num, title, body, auto=auto, expected_sha=expected_sha)
+            return
+        except ForgeError as exc:
+            if attempt + 1 >= LAND_MERGE_MAX_RETRIES or not _is_transient_gitlab_merge_error(forge, exc):
+                raise
+            if retry_delay > 0:
+                time.sleep(retry_delay)
+            latest = forge.get_change(number=change_num, check=False)
+            if isinstance(latest, dict):
+                if latest.get("mergeStateStatus") == "DIRTY" or (not auto and latest.get("checks_overall") == "FAIL"):
+                    raise
+                if not _is_change_synced_to_head(latest, expected_sha):
+                    _wait_for_change_head_sync(forge, change_num, expected_sha, latest)
+
+
 def cmd_land(args: argparse.Namespace) -> int:
     caller_cwd = Path.cwd().resolve()
     repo = get_repo_info(caller_cwd)
@@ -1811,20 +1922,27 @@ def cmd_land(args: argparse.Namespace) -> int:
         print("\n".join(lines))
         return 0
 
-    # Step E: Update PR/MR body and push if local HEAD differs from origin/<branch>
-    forge.update_change(change_num, final_title, summary)
+    # Step E: Push local HEAD first (so remote starts async MR/PR refresh), then update PR/MR body
     local_head = run_cmd(["git", "-C", str(wt_path), "rev-parse", "HEAD"]).stdout.strip()
     remote_proc = run_cmd(["git", "-C", str(wt_path), "rev-parse", f"origin/{branch}"], check=False)
     remote_head = remote_proc.stdout.strip() if remote_proc.returncode == 0 else ""
     if local_head != remote_head:
         run_cmd(["git", "-C", str(wt_path), "push", "--force-with-lease", "origin", "HEAD"])
+    forge.update_change(change_num, final_title, summary)
 
-    # Step F: Squash Merge (Zero Merge Commits!) — keep remote feature branch
-    fresh_change = forge.get_change(number=change_num, check=False) or change
+    # Step F: Wait for remote headRefOid sync, verify CI on new SHA, and Squash Merge with SHA lock
+    fresh_change = _wait_for_change_head_sync(forge, change_num, local_head, change)
     overall = fresh_change.get("checks_overall") or "NONE"
 
     if args.auto:
-        forge.merge_squash(change_num, final_title, summary, auto=True)
+        _merge_squash_with_retry(
+            forge,
+            change_num,
+            final_title,
+            summary,
+            auto=True,
+            expected_sha=local_head,
+        )
         print(
             f"已为 {forge.mr_label} {forge.mr_prefix}{change_num} 开启自动 Squash 合并（CI 通过后将直线合入 {base_branch}，保留需求分支）：{change.get('url', '')}\n"
             "本地工作树与需求分支已保留；合并完成后如需释放工作树目录可执行 `idd cleanup`。"
@@ -1838,7 +1956,14 @@ def cmd_land(args: argparse.Namespace) -> int:
             exit_code=3,
         )
 
-    forge.merge_squash(change_num, final_title, summary, auto=False)
+    _merge_squash_with_retry(
+        forge,
+        change_num,
+        final_title,
+        summary,
+        auto=False,
+        expected_sha=local_head,
+    )
 
     # Step G: Retain branches & worktree by default; optionally remove worktree; fast-forward main
     in_removed_wt = False
