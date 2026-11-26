@@ -1382,16 +1382,26 @@ def cmd_repos(args: argparse.Namespace) -> int:
 
     if subcmd == "add":
         added: list[dict[str, Any]] = []
+        hints: list[str] = []
         for raw in args.paths:
             main_wt = monitor.resolve_main_worktree_ro(Path(raw))
             if main_wt is None:
                 raise IddError(f"路径不是有效的 Git 仓库：{raw}")
-            added.append(monitor.register_repo(main_wt))
+            entry = monitor.register_repo(main_wt)
+            has_origin = run_cmd(["git", "-C", str(main_wt), "remote", "get-url", "origin"], check=False).returncode == 0
+            hint = _maybe_check_first_time_repo_init(main_wt, has_origin=has_origin)
+            if hint:
+                entry = dict(entry)
+                entry["repo_init_hint"] = hint
+                hints.append(hint["message"])
+            added.append(entry)
         if args.json:
             print(json.dumps({"added": added}, ensure_ascii=False, indent=2))
         else:
             for entry in added:
                 print(f"已注册仓库：{entry['name']} ({entry['path']})")
+            for msg in hints:
+                print(msg)
         return 0
 
     if subcmd == "remove":
@@ -1418,6 +1428,73 @@ def cmd_repos(args: argparse.Namespace) -> int:
     raise IddError(f"未知 repos 子命令：{subcmd}")
 
 
+def evaluate_repo_init_settings(result: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Return `(is_aligned, mismatches)` for a `forge.repo_init` result."""
+    forge_type = result.get("forge")
+    settings = result.get("settings") or {}
+    mismatches: list[str] = []
+    if forge_type == "github":
+        if settings.get("allow_merge_commit") is True:
+            mismatches.append("allow_merge_commit=true（建议 false）")
+        if settings.get("allow_squash_merge") is False:
+            mismatches.append("allow_squash_merge=false（建议 true）")
+        if settings.get("delete_branch_on_merge") is True:
+            mismatches.append("delete_branch_on_merge=true（建议 false）")
+    elif forge_type == "gitlab":
+        merge_method = settings.get("merge_method")
+        if merge_method is not None and merge_method != "ff":
+            mismatches.append(f"merge_method={merge_method}（建议 ff）")
+        squash_option = settings.get("squash_option")
+        if squash_option is not None and squash_option != "always":
+            mismatches.append(f"squash_option={squash_option}（建议 always）")
+        if settings.get("remove_source_branch_after_merge") is True:
+            mismatches.append("remove_source_branch_after_merge=true（建议 false）")
+    return len(mismatches) == 0, mismatches
+
+
+def _maybe_check_first_time_repo_init(
+    main_worktree: Path,
+    *,
+    has_origin: bool,
+    forge: Any | None = None,
+) -> dict[str, Any] | None:
+    """Probe remote merge policy once per repository and return an onboarding hint if unaligned."""
+    if not has_origin:
+        return None
+    if monitor.get_repo_init_state(main_worktree) in ("aligned", "prompted"):
+        return None
+    try:
+        active_forge = forge if forge is not None else get_forge(main_worktree)
+        result = active_forge.repo_init(apply=False)
+    except Exception:
+        return None
+
+    aligned, mismatches = evaluate_repo_init_settings(result)
+    if aligned:
+        monitor.set_repo_init_state(main_worktree, "aligned")
+        return None
+
+    monitor.set_repo_init_state(main_worktree, "prompted")
+    forge_type = str(result.get("forge") or "github")
+    forge_name = "GitLab" if forge_type == "gitlab" else "GitHub"
+    policy_desc = (
+        "「仅 Fast-Forward + Squash 且保留分支」"
+        if forge_type == "gitlab"
+        else "「仅 Squash 直线合入且保留分支」"
+    )
+    message = (
+        f"💡 首次接管提示：检测到当前 {forge_name} 仓库尚未启用线性 Squash 合入策略（{'、'.join(mismatches)}）。\n"
+        f"   建议向用户确认后执行 `idd repo-init --apply` 锁定{policy_desc}，避免后续产生 Merge 节点。"
+    )
+    return {
+        "forge": forge_type,
+        "repo": str(result.get("repo") or ""),
+        "mismatches": mismatches,
+        "command": "idd repo-init --apply",
+        "message": message,
+    }
+
+
 def cmd_issue_create(args: argparse.Namespace) -> int:
     repo = get_repo_info(Path.cwd())
     forge = get_forge(repo.main_worktree)
@@ -1425,12 +1502,18 @@ def cmd_issue_create(args: argparse.Namespace) -> int:
     if args.body_file:
         body = Path(args.body_file).read_text(encoding="utf-8")
     created = forge.create_issue(args.title, body=body, labels=args.label, assignees=args.assignee)
+    hint = _maybe_check_first_time_repo_init(repo.main_worktree, has_origin=repo.has_origin, forge=forge)
     if args.json:
+        if hint:
+            created = dict(created)
+            created["repo_init_hint"] = hint
         print(json.dumps(created, ensure_ascii=False, indent=2))
     else:
         num = created.get("number")
         num_str = f"#{num} " if num is not None else ""
         print(f"已创建 Issue {num_str}: {created.get('url', '')}")
+        if hint:
+            print(hint["message"])
     return 0
 
 
@@ -1505,6 +1588,9 @@ def cmd_start(args: argparse.Namespace) -> int:
         }
         if push_warning:
             payload["push_warning"] = push_warning
+        hint = _maybe_check_first_time_repo_init(repo.main_worktree, has_origin=repo.has_origin)
+        if hint:
+            payload["repo_init_hint"] = hint
         if args.json:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
         else:
@@ -1522,13 +1608,17 @@ def cmd_start(args: argparse.Namespace) -> int:
             if task_summary and task_summary["issues"]:
                 lines.append("")
                 lines.append(task_status.render(task_summary))
+            if hint:
+                lines.append(hint["message"])
             print("\n".join(lines))
         return 0
 
     issue_num = parse_issue_ref(args.target)
     issue_data: dict[str, Any] | None = None
+    forge_for_hint: Any | None = None
     if issue_num is not None:
         forge = get_forge(repo.main_worktree)
+        forge_for_hint = forge
         issue_data = forge.get_issue(issue_num)
         slug = slugify(args.slug, "") if args.slug else slugify(issue_data.get("title", ""), "task")
         issue_dir = f"{issue_num}-{slug}"
@@ -1594,6 +1684,9 @@ def cmd_start(args: argparse.Namespace) -> int:
     }
     if push_warning:
         payload["push_warning"] = push_warning
+    hint = _maybe_check_first_time_repo_init(repo.main_worktree, has_origin=repo.has_origin, forge=forge_for_hint)
+    if hint:
+        payload["repo_init_hint"] = hint
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
@@ -1610,6 +1703,8 @@ def cmd_start(args: argparse.Namespace) -> int:
             lines.append(f"关联 Issue：#{issue_data['number']} {issue_data.get('title', '')}")
             if issue_data.get("url"):
                 lines.append(f"链接：{issue_data['url']}")
+        if hint:
+            lines.append(hint["message"])
         print("\n".join(lines))
     return 0
 
@@ -2221,6 +2316,8 @@ def cmd_repo_init(args: argparse.Namespace) -> int:
     repo = get_repo_info(Path.cwd())
     forge = get_forge(repo.main_worktree)
     result = forge.repo_init(apply=args.apply)
+    aligned, _ = evaluate_repo_init_settings(result)
+    monitor.set_repo_init_state(repo.main_worktree, "aligned" if aligned else "prompted")
     settings = result.get("settings") or {}
     if result["forge"] == "gitlab":
         prefix = (

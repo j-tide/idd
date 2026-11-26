@@ -762,6 +762,78 @@ class TestGitLabForge(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+    def test_gitlab_first_time_repo_init_hint_prompts_once_and_aligns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            origin = root / "origin.git"
+            repo = root / "demo"
+            config_dir = root / "config"
+
+            subprocess.run(["git", "init", "--bare", "-b", "main", str(origin)], check=True, capture_output=True)
+            state = MockGitLabState(origin)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            port = server.server_address[1]
+            base_url = f"http://127.0.0.1:{port}"
+            state.base_url = base_url
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+
+            try:
+                remote_url = f"{base_url}/dept/sub/demo.git"
+                subprocess.run(["git", "clone", str(origin), str(repo)], check=True, capture_output=True)
+                subprocess.run(["git", "-C", str(repo), "checkout", "-b", "main"], check=True, capture_output=True)
+                subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tester"], check=True)
+                subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+                (repo / "README.md").write_text("# GitLab Demo\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True)
+                subprocess.run(["git", "-C", str(repo), "commit", "-m", "chore: init"], check=True, capture_output=True)
+                subprocess.run(["git", "-C", str(repo), "push", "-u", "origin", "main"], check=True, capture_output=True)
+                subprocess.run(["git", "--git-dir", str(origin), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
+
+                subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin", remote_url], check=True)
+                subprocess.run(["git", "-C", str(repo), "config", f"url.{origin}.insteadOf", remote_url], check=True)
+                subprocess.run(["git", "-C", str(repo), "fetch", "origin", "main"], check=True, capture_output=True)
+
+                env = dict(os.environ)
+                env["IDD_CONFIG_DIR"] = str(config_dir)
+                env["IDD_NO_AUTO_UPDATE"] = "1"
+                env.pop("IDD_WORKTREE_ROOT", None)
+                env.pop("IDD_FORGE", None)
+                env.pop("GITLAB_TOKEN", None)
+
+                def run_idd(*args: str) -> subprocess.CompletedProcess[str]:
+                    return subprocess.run(
+                        [sys.executable, str(IDD_BIN), *args],
+                        cwd=str(repo),
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+
+                run_idd("auth", "login", f"http://127.0.0.1:{port}", "--token", "glpat-secret")
+
+                first_out = run_idd("issue", "create", "--title", "Init check", "--body", "desc").stdout
+                self.assertIn("💡 首次接管提示", first_out)
+                self.assertIn("GitLab", first_out)
+                self.assertIn("merge_method=merge（建议 ff）", first_out)
+                self.assertIn("squash_option=default_off（建议 always）", first_out)
+                self.assertIn("idd repo-init --apply", first_out)
+
+                repos_file = config_dir / "repos.json"
+                repos_data = json.loads(repos_file.read_text(encoding="utf-8"))
+                self.assertEqual(repos_data["repos"][0]["repo_init_state"], "prompted")
+
+                second_out = run_idd("start", "1", "--slug", "init-check").stdout
+                self.assertNotIn("💡 首次接管提示", second_out)
+
+                run_idd("repo-init", "--apply")
+                repos_after = json.loads(repos_file.read_text(encoding="utf-8"))
+                self.assertEqual(repos_after["repos"][0]["repo_init_state"], "aligned")
+            finally:
+                server.shutdown()
+                server.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()
