@@ -1010,6 +1010,19 @@ def _get_worktree_dirty_task_dirs(wt_path: Path) -> set[str]:
     return set()
 
 
+def _get_worktree_base_task_dirs(wt_path: Path, default_branch: str) -> set[str]:
+    """List TASK/<dir> entries present at merge-base(default_branch, HEAD) so older branches ignore cleaned legacy dirs."""
+    for base_ref in (default_branch, f"origin/{default_branch}"):
+        mb_proc = _run_git_ro(wt_path, ["merge-base", base_ref, "HEAD"])
+        if mb_proc and mb_proc.returncode == 0 and mb_proc.stdout.strip():
+            mb_sha = mb_proc.stdout.strip()
+            tree_proc = _run_git_ro(wt_path, ["ls-tree", "-d", "--name-only", f"{mb_sha}:TASK"])
+            if tree_proc and tree_proc.returncode == 0 and tree_proc.stdout.strip():
+                return {line.strip() for line in tree_proc.stdout.splitlines() if line.strip()}
+            return set()
+    return set()
+
+
 def _get_worktree_touched_task_dirs(
     wt_path: Path,
     default_branch: str,
@@ -1045,11 +1058,11 @@ def _collect_all_worktrees_ro(
         except OSError:
             main_task_dirs = set()
 
-    def scan_one(wt: dict[str, str]) -> tuple[list[dict[str, Any]], list[str], bool]:
+    def scan_one(wt: dict[str, str]) -> tuple[list[dict[str, Any]], list[str], bool, str]:
         wt_path = Path(wt["path"]).resolve()
         task_root = wt_path / "TASK"
         if not task_root.is_dir():
-            return [], [], False
+            return [], [], False, ""
         branch = wt.get("branch", "")
         is_main = wt_path == main_resolved
         entries, warnings, matched = task_status._collect_from_task_root(  # noqa: SLF001
@@ -1060,8 +1073,9 @@ def _collect_all_worktrees_ro(
             branch=branch,
         )
         if issue_filter is not None or not entries:
-            return entries, warnings, matched
+            return entries, warnings, matched, ""
 
+        suppressed_wt = ""
         dirty_task_dirs = _get_worktree_dirty_task_dirs(wt_path)
         touched_dirs = _get_worktree_touched_task_dirs(
             wt_path,
@@ -1069,20 +1083,23 @@ def _collect_all_worktrees_ro(
             is_main=is_main,
             dirty_dirs=dirty_task_dirs,
         )
+        base_task_dirs = _get_worktree_base_task_dirs(wt_path, default_branch) if not is_main else set()
+        inherited_dirs = main_task_dirs | base_task_dirs
         if is_main:
             kept = [
                 e for e in entries
                 if e.get("issue_number") is not None or e["issue"] in touched_dirs
             ]
-        elif not main_task_dirs:
+        elif not inherited_dirs:
             kept = entries
         else:
             wt_inum = _infer_worktree_issue_num(branch, wt_path)
             branch_slug = branch.split("/")[-1] if branch and branch != "(detached)" else ""
             dir_slug = wt_path.name
             kept = []
+            saw_done_main_local = False
             for e in entries:
-                in_main = e["issue"] in main_task_dirs
+                in_main = e["issue"] in inherited_dirs
                 is_done_main_local = (
                     in_main
                     and e.get("issue_number") is None
@@ -1091,6 +1108,7 @@ def _collect_all_worktrees_ro(
                     and e.get("done", 0) == e.get("total", 0)
                 )
                 if is_done_main_local:
+                    saw_done_main_local = True
                     continue
                 if (
                     (not in_main)
@@ -1099,9 +1117,11 @@ def _collect_all_worktrees_ro(
                     or (e["issue"] in {branch_slug, dir_slug})
                 ):
                     kept.append(e)
+            if saw_done_main_local and not kept:
+                suppressed_wt = str(wt_path)
         kept_issues = {e["issue"] for e in kept}
         kept_warnings = [w for w in warnings if any(f"TASK/{issue_name}/" in w for issue_name in kept_issues)] if warnings else []
-        return kept, kept_warnings, matched
+        return kept, kept_warnings, matched, suppressed_wt
 
     if len(worktrees) > 1:
         with ThreadPoolExecutor(max_workers=min(6, len(worktrees))) as pool:
@@ -1111,12 +1131,15 @@ def _collect_all_worktrees_ro(
 
     all_entries: list[dict[str, Any]] = []
     all_warnings: list[str] = []
+    suppressed_worktrees: set[str] = set()
     seen_keys: set[tuple[str, str]] = set()
     matched_any = issue_filter is None
 
-    for entries, warnings, matched in scan_results:
+    for entries, warnings, matched, sup_wt in scan_results:
         if matched:
             matched_any = True
+        if sup_wt:
+            suppressed_worktrees.add(sup_wt)
         for entry in entries:
             wt_str = entry.get("worktree", "")
             dedup_key = (entry["issue"], str(Path(wt_str).resolve()) if wt_str else "")
@@ -1130,7 +1153,7 @@ def _collect_all_worktrees_ro(
         raise ValueError(f"没有匹配的 Issue 目录：{issue_filter}")
 
     all_entries.sort(key=lambda item: (item.get("issue_number") or 10**9, item["issue"], item.get("worktree", "")))
-    return {"issues": all_entries, "warnings": all_warnings}
+    return {"issues": all_entries, "warnings": all_warnings, "suppressed_worktrees": suppressed_worktrees}
 
 
 def _dedupe_auth_alerts(repo_snaps: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -1317,6 +1340,7 @@ def collect_repo_snapshot(
         entry["repo_path"] = repo_path_str
 
     retained_idle_worktrees: list[dict[str, Any]] = []
+    suppressed_wts: set[str] = set(wt_data.get("suppressed_worktrees", []))
     for wt, wt_p, wt_str in extra_worktrees:
         branch = wt.get("branch", "")
         inum = _infer_worktree_issue_num(branch, wt_p)
@@ -1324,7 +1348,7 @@ def collect_repo_snapshot(
         is_open_issue = inum is not None and inum in open_issue_numbers
         is_dirty = pulse["dirty_count"] > 0
         looks_post_land = pulse.get("last_commit_subject", "").startswith("chore: 清理已汇总的任务记录")
-        is_local_active = (not forge_connected) and (not looks_post_land)
+        is_local_active = (not forge_connected) and (not looks_post_land) and (wt_str not in suppressed_wts)
 
         if is_open_issue or is_dirty or is_local_active:
             synthetic_entry = {
