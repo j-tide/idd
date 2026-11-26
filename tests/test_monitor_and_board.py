@@ -512,6 +512,13 @@ class TestMonitorAndBoard(unittest.TestCase):
             self.assertEqual(row42["url"], "https://github.com/acme/legacy-repo/issues/42")
             self.assertEqual([t["status"] for t in row42["tasks"]], ["done", "in_progress"])
 
+            # Even if main later deletes historical TASK/, the older worktree must still hide inherited TASKs via merge-base
+            subprocess.run(["git", "-C", str(repo), "rm", "-rf", "--quiet", "TASK"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-m", "chore: clean main legacy tasks"], check=True, capture_output=True)
+            snap_after_main_clean = monitor.collect_repo_snapshot(repo, local_only=True, register=False)
+            self.assertEqual(snap_after_main_clean["local_only_items"], [])
+            self.assertEqual([r["issue_number"] for r in snap_after_main_clean["issues"]], [42])
+
     def test_async_forge_cache_non_blocking_and_host_deduplicated_auth_alerts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
