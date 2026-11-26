@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import errno
 from functools import partial
 import html
 from http import HTTPStatus
@@ -4684,11 +4685,37 @@ BOARD_HTML = r"""<!DOCTYPE html>
 """
 
 
+_CLIENT_DISCONNECT_ERRNOS = frozenset(
+    code
+    for code in (
+        errno.EPIPE,
+        errno.ECONNRESET,
+        errno.ECONNABORTED,
+        errno.ESHUTDOWN,
+        getattr(errno, "EPROTOTYPE", None),
+    )
+    if code is not None
+)
+
+
+def _is_client_disconnect(exc: BaseException) -> bool:
+    """Return True when `exc` indicates the HTTP client closed the socket early."""
+    if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+        return True
+    return isinstance(exc, OSError) and getattr(exc, "errno", None) in _CLIENT_DISCONNECT_ERRNOS
+
+
 class BoardHTTPServer(ThreadingHTTPServer):
     """Threaded HTTP server configured for clean local port reuse and shutdown."""
 
     daemon_threads = True
     allow_reuse_address = True
+
+    def handle_error(self, request: object, client_address: object) -> None:
+        _, exc, _ = sys.exc_info()
+        if exc is not None and _is_client_disconnect(exc):
+            return
+        super().handle_error(request, client_address)
 
 
 class BoardRequestHandler(BaseHTTPRequestHandler):
@@ -4715,12 +4742,18 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
         return
 
     def _send_bytes(self, status: HTTPStatus, content_type: str, payload: bytes) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(payload)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+        except OSError as exc:
+            if _is_client_disconnect(exc):
+                self.close_connection = True
+                return
+            raise
 
     def _send_json(self, status: HTTPStatus, obj: object) -> None:
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -4778,9 +4811,10 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/auth/status":
             try:
                 auth_status = monitor.collect_auth_hosts_status(root=self.root, global_mode=self.global_mode)
-                self._send_json(HTTPStatus.OK, auth_status)
             except Exception as exc:
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+                return
+            self._send_json(HTTPStatus.OK, auth_status)
             return
 
         if parsed.path == "/api/snapshot":
@@ -4798,9 +4832,10 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
                     force_refresh=False,
                     allow_stale_async=True,
                 )
-                self._send_json(HTTPStatus.OK, snapshot)
             except Exception as exc:
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+                return
+            self._send_json(HTTPStatus.OK, snapshot)
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
