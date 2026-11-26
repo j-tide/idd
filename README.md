@@ -1,15 +1,24 @@
+<a id="readme-top"></a>
+
 <div align="center">
 
 # IDD
 
-**让 Claude Code、Codex 与 Antigravity 各自独立并行、互不打扰；在本地看板看清每个 Worktree 进度，一键复制上下文换任意 Agent 接着做。**
+**Issue-Driven Development · 多 AI 编程 Agent 隔离并行与一键接力工作流**
+
+让 **Claude Code**、**Codex** 与 **Antigravity** 各自在原生窗口中独立并行、互不踩文件；<br />
+在零 Token 本地看板实时盯盘，随时一键复制上下文换任意 Agent 接着做。
 
 **简体中文** · [English](README.en.md)
 
 [![Version](https://img.shields.io/badge/version-v0.0.3-10b981?style=flat-square)](https://github.com/j-tide/idd/releases)
-[![Forges](https://img.shields.io/badge/forges-GitHub%20%C2%B7%20Self--Hosted%20GitLab-fc6d26?style=flat-square)](#)
-[![Dependencies](https://img.shields.io/badge/dependencies-0%20(stdlib)-8b5cf6?style=flat-square)](#)
-[![Agents](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Antigravity-38bdf8?style=flat-square)](#)
+[![GitHub Stars](https://img.shields.io/github/stars/j-tide/idd?style=flat-square&logo=github&color=f59e0b)](https://github.com/j-tide/idd/stargazers)
+[![CI](https://img.shields.io/github/actions/workflow/status/j-tide/idd/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/j-tide/idd/actions/workflows/ci.yml)
+[![Forges](https://img.shields.io/badge/forges-GitHub%20%C2%B7%20Self--Hosted%20GitLab-fc6d26?style=flat-square)](#支持生态)
+[![Agents](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Antigravity-38bdf8?style=flat-square)](#支持生态)
+[![Dependencies](https://img.shields.io/badge/dependencies-0%20(stdlib)-8b5cf6?style=flat-square)](#开发测试与发版)
+
+[为什么选择 IDD](#为什么选择-idd) · [核心特性](#核心特性) · [工作原理](#工作原理) · [快速开始](#快速开始) · [支持生态](#支持生态) · [命令速查](#cli-命令与规范速查) · [Star History](#star-history)
 
 </div>
 
@@ -19,23 +28,71 @@
     <source media="(prefers-color-scheme: light)" srcset="assets/board-zh-light.png" />
     <img src="assets/board-zh-dark.png" width="100%" alt="IDD 实时 Worktree 雷达看板与一键跨 Agent 接力台" />
   </picture>
+  <br />
+  <sub><em><code>idd board</code> 本地 Web 雷达看板：零 Token 监控所有仓库的 Worktree 脉搏、<code>TASK</code> 进度、CI 状态，并支持一键跨 Agent 接力与中/英切换。</em></sub>
 </p>
 
 ---
 
-## IDD 解决什么问题
+## 为什么选择 IDD
 
-同时开几个 AI 编程工具干活时，最常见两个痛点：大家挤在同一个目录里容易互相改乱代码；某一个 Agent 额度耗尽或卡住时，对话上下文也跟着锁死在那个窗口里。
+同时用多个 AI 编程工具干活时，最常遇到两个瓶颈：**多个窗口挤在同一个工作区容易互相改乱代码**；而当某一个 Agent 额度耗尽、上下文膨胀或卡住时，**任务进度也跟着锁死在那个聊天框里**。
 
-**IDD 不把你绑进重型套壳客户端**——你依然在各自原生顺手的窗口里用 Claude Code、Codex 和 Antigravity，底层靠三件事串成闭环：
+| 对比维度 | 多窗口裸跑 AI | 重型套壳 IDE / 编排平台 | **IDD** |
+| :--- | :--- | :--- | :--- |
+| **原生工具体验** | 原生窗口，无额外学习成本 | 强制绑定特定客户端或调度 UI | **保留 Claude Code / Codex / Antigravity 原生窗口** |
+| **并行开发隔离** | 共享同一目录，极易互相覆盖 | 依赖私有沙箱或容器快照 | **每个 Issue 自动分配独立物理 Git Worktree** |
+| **跨 Agent 接力** | 换工具需手动总结全部上下文 | 仅限平台内部模型切换 | **磁盘 `TASK/` 账本 + 看板一键「复制接力词」无缝续写** |
+| **全局进度监控** | 逐个窗口翻聊天记录 | 需运行常驻后台与额外 Token | **零 Token 本地 Web 看板（2s 脉搏）与终端实时盯盘** |
+| **平台与合入历史** | 容易直接提交主干或混入脏节点 | 多为本地分支或平台私有状态 | **原生联动 GitHub / GitLab，CI 自愈后 Squash 直线合入 `main`** |
+| **依赖与侵入性** | 无 | 重依赖、配置复杂 | **0 外部依赖（Python 3 标准库 + sh），零 Git Hooks 侵入** |
 
-- **统一研发规范（`SKILL.md` Skill）**：让三个工具遵循同一套约定——先用 GitHub / GitLab **Issue** 锚定需求，再为每个 Issue 开出独立 **Git Worktree**，把拆分步骤与进度记在工作树里的 `TASK/<issue>/` 账本中。
-- **全局进度雷达与接力跳板（`idd board`）**：零 Token 实时总览所有仓库和并行需求——一眼看清哪个需求在**哪个 Worktree 目录、哪个分支、做到第几个 `TASK`、CI 过没过**；想换工具时，点一下 **「复制接力词」**（或直接复制工作目录路径 / 分支名），切到另一个 Agent 窗口粘贴就能接着做（看板支持中英文切换）。
-- **幕后确定性引擎（`idd` CLI）**：主要供 Agent 自动调用，把 `worktree` 创建、`.worktreeinclude`（`.env`）同步、8 类分支命名拦截、PR/MR 汇总、CI 失败日志拉取与 **Squash 直线合入 `main`** 封装成安全动作，平时无需背命令。
+IDD 用三层轻量组件把整套研发闭环串起来，平时只需要对 Agent 说自然语言即可驱动：
+
+- **统一研发规范（`SKILL.md`）**：让 Claude Code、Codex 与 Antigravity 共享同一套流程——聊清需求先看样、GitHub / GitLab **Issue** 锚定范围、独立 **Git Worktree** 隔离开发、工作树内 `TASK/<issue>/` 持久化进度。
+- **零 Token 进度雷达与接力台（`idd board`）**：一屏聚合本机所有仓库的活跃 Worktree 改动行数、步骤进度与 PR/MR CI 状态；需要换工具时，点一下 **「复制接力词」** 贴进任意另一个 Agent 即可接管现场。
+- **确定性底层引擎（`idd` CLI）**：主要由 Agent 自动调用，把 Worktree 创建、`.env`（`.worktreeinclude`）同步、8 类分支规范校验、PR/MR 汇总、CI 日志拉取与 **Squash 直线合入** 封装成幂等命令。
 
 ---
 
-## 日常怎么用
+## 核心特性
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>Issue 驱动 · 物理 Worktree 并行</h3>
+      一个需求绑定一个 Issue，自动在同级 <code>../&lt;repo&gt;-worktrees/&lt;id&gt;-&lt;slug&gt;</code> 开出独立工作树与 <code>&lt;type&gt;/&lt;id&gt;-&lt;slug&gt;</code> 分支（<code>--no-track</code> 创建并立即推送远端），自动同步 <code>.worktreeinclude</code> 里的 <code>.env</code> 文件。
+    </td>
+    <td width="50%" valign="top">
+      <h3>直观原型对齐 · 本地预览台 (<code>idd preview</code>)</h3>
+      涉及 UI、交互或终端输出改动时，先看样再建单。内置热更新本地预览工作台，支持多方案 A/B 并排对比与桌面 / 平板 / 手机响应式视口切换，临时原型绝不污染业务仓库。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>零 Token 雷达 · 一键跨 Agent 接力</h3>
+      <code>idd board</code>（2s 刷新本地脉搏、30s 缓存远端）与 <code>idd watch</code> 实时展示改动文件、<code>+insertions/-deletions</code>、<code>TASK</code> 进度与 CI；自带浏览器令牌向导、中/英切换，一键复制接力词、目录或分支。
+    </td>
+    <td width="50%" valign="top">
+      <h3>CI 日志自愈 · 可控自动合入 (<code>auto-merge</code>)</h3>
+      <code>idd pr</code> / <code>idd mr</code> 自动汇总 <code>TASK</code> 与测试记录并关联 <code>Closes #id</code>；CI 失败自动拉取日志并严格限制最多 2 轮定位修复；支持全局或单仓库开启 <code>auto-merge</code>（默认关闭，Draft/冲突/证据附件自动安全暂停）。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>直线 Squash 主干 · 零残留档案</h3>
+      <code>idd land</code> 自动 Rebase 到最新 <code>main</code>、将完整任务汇总写入 PR/MR 与提交正文、清理临时 <code>TASK/&lt;issue&gt;/</code> 目录、以单条 Squash 提交直线合入并自动勾选 Issue 验收框；默认保留工作树，空间不足时 <code>idd cleanup</code> 安全清理。
+    </td>
+    <td width="50%" valign="top">
+      <h3>双平台原生 · 零外部依赖 · 零 Hook 侵入</h3>
+      纯 Python 3 标准库 + POSIX <code>sh</code> 实现，开箱支持 GitHub、GitHub Enterprise 与自建 GitLab（<code>ff</code> + <code>squash</code>）；内置 8 类前缀分支拦截（不向项目写入任何 Git Hook），并支持每 6 小时安全快进更新。
+    </td>
+  </tr>
+</table>
+
+---
+
+## 工作原理
 
 <p align="center">
   <picture>
@@ -45,28 +102,58 @@
   </picture>
 </p>
 
-1. **聊想法，先看样再立 Issue 锚点**：在任意 Agent 窗口聊清需求，必要时先看可交互 HTML 原型或 Before/After 样例对齐效果，确认后再说 *「按 idd 建个 Issue」*，不污染当前代码工作区。
-2. **多 Agent 各做各的、互不打扰**：让 **Claude Code** *「开工 #115」*，同时让 **Codex** *「开工 #51」*。每个需求自动进独立的物理 Worktree 目录和规范分支，自动复制 `.env` 并各自维护 `TASK/` 进度。
-3. **打开 `idd board` 盯进度，随时一键换手**：通过看板看改动行数、当前步骤和 CI 状态。需要换工具接着做时，在卡片或接力控制台点击 **「复制接力词」**（或直接复制目录/分支），贴进 **Antigravity** 等任意另一个 Agent 对话框即可无缝续写。
-4. **验收通过，干净 Squash 合入 `main`**：在最后一个 Agent 里说 *「合入 #115」*（或预先开启 `idd config auto-merge on` / 在 `idd board` 顶栏开启自动合入开关，CI 通过后自动完成无需额外确认），自动 rebase、把 `TASK` 汇总写入 PR/MR 与提交正文、清理临时 `TASK/<issue>/` 目录后以单条直线提交合入 `main`——默认保留需求分支与工作树，空间不够时再运行 `idd cleanup`。
+1. **聊想法，先看样再立 Issue 锚点**：在任意 Agent 窗口聊清范围，界面或输出改动先用可交互原型 / `idd preview` / Before-After 样例对齐，确认后说 *「按 idd 建个 Issue」*，不改动当前代码工作区。
+2. **多 Agent 各进各的工作树并行开干**：让 **Claude Code** *「开工 #115」*，同时让 **Codex** *「开工 #51」*。各自进入独立 Worktree 目录、自动复制 `.env` 并推进 `TASK/<issue>/`。
+3. **打开 `idd board` 实时盯盘，随时一键换手**：通过看板直观查看活跃脉搏、进度条与 CI 状态。需要切换工具时，点击 **「复制接力词」** 贴进 **Antigravity** 等任意 Agent，立即衔接上一手进度。
+4. **验收通过，干净 Squash 合入 `main`**：在最后一个 Agent 里说 *「合入 #115」*（或开启 `idd config auto-merge on` / 看板顶栏自动合入开关，CI 全绿后自动准入），自动清理 `TASK/` 并生成一条干净的直线提交。
 
-*(首次接管仓库建议执行一次 `idd repo-init --apply`，锁定 GitHub 仅 Squash 合入或 GitLab `ff` + `squash` 策略并保留分支。)*
+```text
+~/code/
+├── my-app/                                  # 主仓库（始终保持干净的 main）
+└── my-app-worktrees/                        # IDD 自动管理的隔离并行区
+    ├── 115-export-csv/                      # ← Claude Code 正在这里执行 feat/115-export-csv
+    │   ├── .env                             #   从 .worktreeinclude 自动同步
+    │   └── TASK/115-export-csv/             #   磁盘任务账本（合入 main 前自动清理）
+    │       ├── TASK-01-csv-serializer.md    #   Status: done
+    │       └── TASK-02-stream-endpoint.md   #   Status: in_progress
+    └── 51-fix-dark-flicker/                 # ← Codex 同时在这里执行 fix/51-fix-dark-flicker
+        └── TASK/51-fix-dark-flicker/
+```
 
 ---
 
 ## 快速开始
 
-前置条件：本机已安装 `git` 与 `python3`（打开 `idd board` 会自动弹出初始化向导，点击跳转生成令牌后直接在网页粘贴保存即可连接 GitHub / 自建 GitLab，无需手动敲登录命令）。
+前置依赖仅需本机已安装的 `git` 与 `python3`。
+
+### 1. 一键安装 Skill 与全局 `idd` CLI
 
 ```bash
-# 1. 一键安装 Skill（挂载到 Claude Code / Codex / Antigravity）与全局 `idd` CLI
 curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh
+```
 
-# 2. 启动本地进度雷达与一键接力看板
+### 2. 启动本地实时看板并连接平台
+
+```bash
 idd board
 ```
 
-> 每 6 小时会在后台安全检查并快进同步 `origin/main`（仅当本地技能仓库位于干净 `main` 分支时更新，也可手动 `idd upgrade [--check]`）。随时可运行 `idd uninstall`（或兜底脚本 `curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh -s -- --uninstall -y`）安全清理，绝不影响业务仓库。
+> 首次打开 `idd board` 会弹出引导向导：点击跳转生成 GitHub 或自建 GitLab 令牌后直接在网页粘贴保存即可，无需手动敲登录命令。
+
+### 3. 直接在任意 Agent 窗口用自然语言驱动
+
+| 场景 | 对 Agent 说 | 底层触发动作 |
+| :--- | :--- | :--- |
+| **聊完需求立项** | *「先出个原型看看，没问题按 idd 建个 Issue」* | `idd preview` → `idd issue create` |
+| **多窗口并行开工** | *「开工 #115」*（另一个窗口同时 *「开工 #51」*） | `idd start` 建独立 Worktree 并推远端 |
+| **中途切换 Agent** | 在 `idd board` 点击 **「复制接力词」** 后粘贴到新窗口 | `idd start` 幂等复用现场并读取 `TASK/` |
+| **提交验收与合入** | *「提 PR」* / *「合入 #115」* | `idd pr` → `idd ci --watch` → `idd land` |
+
+> [!TIP]
+> 首次接管仓库建议执行一次 `idd repo-init --apply`（在 `idd start` / `idd issue create` 时也会自动探测提醒），将 GitHub 锁定为仅 Squash 合入或将 GitLab 设为 `ff` + `squash` 且保留分支；若希望 CI 全绿后自动完成合入，可执行 `idd config auto-merge on` 或在 `idd board` 顶栏打开开关。
+
+> [!NOTE]
+> `idd` 每 6 小时会在后台安全检查 `origin/main`，仅当本地技能仓库位于干净的 `main` 分支时自动快进同步（也可随时手动运行 `idd upgrade [--check]`）。需要卸载时执行 `idd uninstall`（或兜底命令 `curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh -s -- --uninstall -y`），绝不影响你的任何业务仓库。
 
 <details>
 <summary><strong>可选：将 IDD 设为默认工作流</strong>（个人全局规则 / 项目 <code>AGENTS.md</code> 模板，安装脚本绝不自动写入）</summary>
@@ -109,8 +196,22 @@ idd board
 
 ---
 
+## 支持生态
+
+| 类别 | 支持对象 | 挂载方式 / 特性 |
+| :--- | :--- | :--- |
+| **AI 编程 Agent** | **Claude Code** | 自动软链至 `~/.claude/skills/idd` |
+| **AI 编程 Agent** | **Codex** | 自动软链至 `~/.codex/skills/idd` |
+| **AI 编程 Agent** | **Antigravity** | 自动软链至 `~/.gemini/config/skills/idd` |
+| **代码托管平台** | **GitHub / GitHub Enterprise** | Issue 进度条、PR 自动汇总、Actions CI 日志、`Squash` 直线合入 |
+| **代码托管平台** | **自建 GitLab** | Issue 进度条、MR 自动汇总、Pipeline 日志、`ff` + `squash` 直线合入 |
+
+---
+
+## CLI 命令与规范速查
+
 <details>
-<summary><strong>CLI 命令与分支规范速查</strong>（主要由 Agent 自动调用，也可在终端手动运行）</summary>
+<summary><strong>展开完整 CLI 命令表、8 类标准前缀与零 Hook 拦截规则</strong>（主要由 Agent 自动调用，也可终端手动执行）</summary>
 
 ### 常用命令
 
@@ -136,22 +237,51 @@ idd board
 
 ### Issue 与分支规范（零 Git Hooks 侵入）
 
-Issue 标题、分支前缀与 Commit `<type>` 共用以下 **8 类标准词表**（Issue 标题为 `<type>: <描述>` 或 `<type>(<scope>): <描述>`，可选 `scope` 须为 ≤ 16 字符的小写英文标识；绑定 Issue 分支为 `<type>/<issue#>-<slug>`，纯本地为 `<type>/<slug>`）：
+Issue 标题、分支前缀与 Commit `<type>` 共用以下 **8 类标准词表**：
 
-`feat` · `fix` · `refactor` · `perf` · `docs` · `test` · `ci` · `chore`
+```text
+feat · fix · refactor · perf · docs · test · ci · chore
+```
 
-`idd` 内置拦截 `codex/*`、`claude/*`、`agy/*`、`feature/*`、`bugfix/*`、`tmp/*` 等不规范前缀，并在报错时给出标准 `git branch -m` 修复命令，不在业务仓库写入任何 Git Hook。
+- **Issue 标题**：`<type>: <描述>` 或 `<type>(<scope>): <描述>`（可选 `scope` 须为 ≤ 16 字符的小写英文/数字/连字符标识）。
+- **分支命名**：绑定 Issue 时为 `<type>/<issue#>-<slug>`，纯本地无远端仓库为 `<type>/<slug>`。
+- **零侵入拦截**：`idd` 在入口/出口自动拦截 `codex/*`、`claude/*`、`agy/*`、`feature/*`、`bugfix/*`、`tmp/*` 等混写前缀，并给出精确 `git branch -m` 修复命令，不在业务仓库写入任何 Git Hook。
 
 </details>
 
 ---
 
-## 开发、测试与发版
+## 开发测试与发版
 
 零外部依赖，使用 Python 3 标准库直接运行全部单元测试，并以 [SKILL.md](SKILL.md) 中的 `metadata.version` 作为唯一版本源：
 
 ```bash
+# 运行全部单元测试
 python3 -m unittest discover -s tests -v
+
+# 校验 SKILL.md / README / CLI 版本一致性
 python3 scripts/release.py --check
-python3 scripts/release.py patch --tag && git push origin main && git push origin v0.0.2
+
+# 发版并自动打 Tag 推送
+python3 scripts/release.py patch --tag --push
 ```
+
+---
+
+## Star History
+
+<a href="https://www.star-history.com/#j-tide/idd&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=j-tide/idd&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=j-tide/idd&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=j-tide/idd&type=Date" width="100%" />
+  </picture>
+</a>
+
+---
+
+<div align="center">
+  <sub>如果 IDD 帮你顺畅地并行驾驭了多个 AI 编程工具，欢迎点个 ⭐ Star 或提交 <a href="https://github.com/j-tide/idd/issues">Issue</a> / <a href="https://github.com/j-tide/idd/pulls">PR</a>。</sub>
+</div>
+
+<p align="right"><a href="#readme-top">↑ 返回顶部</a></p>

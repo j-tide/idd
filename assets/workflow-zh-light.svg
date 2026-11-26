@@ -28,7 +28,7 @@
   <rect x="38" y="78" width="186" height="62" rx="8" fill="#f8fafc" stroke="#bae6fd" stroke-width="1"/>
   <circle cx="52" cy="96" r="4" fill="#0284c7"/>
   <text x="63" y="100" fill="#0f172a" font-size="12" font-weight="600" class="sans">Claude Code</text>
-  <text x="50" y="118" fill="#475569" font-size="10.5" class="sans">沟通需求并开工 #115</text>
+  <text x="50" y="118" fill="#475569" font-size="10.5" class="sans">原型对齐并开工 #115</text>
   <text x="50" y="132" fill="#0369a1" font-size="9.5" class="mono">idd start 115</text>
 
   <!-- Agent 2 -->
@@ -63,7 +63,7 @@
   <text x="562" y="34" text-anchor="middle" fill="#047857" font-size="10" font-weight="600" class="mono">feat: #115</text>
   <circle cx="644" cy="48" r="5" fill="#ffffff" stroke="#0284c7" stroke-width="2.2"/>
   <text x="644" y="34" text-anchor="middle" fill="#0369a1" font-size="10" font-weight="600" class="mono">fix: #51</text>
-  <text x="284" y="70" fill="#64748b" font-size="9.8" class="sans">main 保持单条直线 · Squash 合入 · 零 TASK/ 残留</text>
+  <text x="284" y="70" fill="#64748b" font-size="9.8" class="sans">main 保持单条直线 · Squash / 自动准入 · 零 TASK/ 残留</text>
 
   <!-- Landing Arrow from Worktrees to main -->
   <path d="M 608 100 C 608 82, 562 88, 562 57" fill="none" stroke="#059669" stroke-width="1.7" marker-end="url(#arr-green-zhl)"/>
