@@ -1,7 +1,7 @@
 # TASK-04：自动化单测补全、真实浏览器性能/视口实测与 PR 交付
 
 - Issue: 33-ui
-- Status: planned
+- Status: in_progress
 - Depends on: TASK-02, TASK-03
 - Test: python3 -m unittest discover -s tests -v
 
