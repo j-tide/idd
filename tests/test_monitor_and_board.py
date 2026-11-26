@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import errno
+from http import HTTPStatus
 from http.server import ThreadingHTTPServer
+import io
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -25,6 +30,7 @@ from test_idd_cli import FAKE_GH_SCRIPT, IDD_BIN, SCRIPTS_DIR, parse_skill_versi
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import board_ui  # noqa: E402
 import monitor  # noqa: E402
 
 
@@ -789,6 +795,145 @@ class TestMonitorAndBoard(unittest.TestCase):
 
             status_ahead = self._run(env, repo, "status", "--local-only").stdout
             self.assertIn("↑1 待推送", status_ahead)
+
+    @staticmethod
+    def _make_handler(path: str, wfile: object) -> board_ui.BoardRequestHandler:
+        handler = board_ui.BoardRequestHandler.__new__(board_ui.BoardRequestHandler)
+        handler.path = path
+        handler.command = "GET"
+        handler.requestline = f"GET {path} HTTP/1.1"
+        handler.request_version = "HTTP/1.1"
+        handler.headers = {}
+        handler.close_connection = False
+        handler.wfile = wfile
+        handler.cache = monitor.ForgeSnapshotCache(ttl_seconds=30.0)
+        handler.root = None
+        handler.global_mode = False
+        handler.local_only = True
+        handler.version = "0.0.3"
+        return handler
+
+    def test_board_handler_ignores_client_disconnect_without_double_error(self) -> None:
+        class _BrokenPipeWfile:
+            def __init__(self, exc: BaseException) -> None:
+                self.exc = exc
+
+            def write(self, _data: bytes) -> int:
+                raise self.exc
+
+        for endpoint in ("/api/snapshot", "/api/auth/status"):
+            for exc in (BrokenPipeError("broken pipe"), ConnectionResetError("reset by peer")):
+                handler = self._make_handler(endpoint, _BrokenPipeWfile(exc))
+                with (
+                    mock.patch.object(monitor, "collect_scope_snapshot", return_value={"issues": []}),
+                    mock.patch.object(monitor, "collect_auth_hosts_status", return_value={"hosts": []}),
+                    mock.patch.object(handler, "_send_json", wraps=handler._send_json) as spy_send,
+                ):
+                    handler.do_GET()
+                self.assertTrue(handler.close_connection)
+                self.assertEqual([call.args[0] for call in spy_send.call_args_list], [HTTPStatus.OK])
+
+        # Real business exception still returns 500 JSON when client is connected
+        ok_buf = io.BytesIO()
+        handler_500 = self._make_handler("/api/snapshot", ok_buf)
+        with mock.patch.object(monitor, "collect_scope_snapshot", side_effect=RuntimeError("boom")):
+            handler_500.do_GET()
+        raw_resp = ok_buf.getvalue().decode("utf-8")
+        self.assertIn("500 Internal Server Error", raw_resp)
+        self.assertIn('"error": "boom"', raw_resp)
+
+        # Business exception followed by client disconnect during 500 write still exits cleanly
+        handler_500_broken = self._make_handler("/api/auth/status", _BrokenPipeWfile(BrokenPipeError("gone")))
+        with mock.patch.object(monitor, "collect_auth_hosts_status", side_effect=RuntimeError("auth boom")):
+            handler_500_broken.do_GET()
+        self.assertTrue(handler_500_broken.close_connection)
+
+    def test_board_server_handle_error_suppresses_disconnects_only(self) -> None:
+        server = board_ui.BoardHTTPServer(("127.0.0.1", 0), board_ui.BoardRequestHandler, bind_and_activate=False)
+        try:
+            for exc in (
+                BrokenPipeError("broken"),
+                ConnectionResetError("reset"),
+                ConnectionAbortedError("aborted"),
+                OSError(errno.EPIPE, "epipe"),
+            ):
+                stderr_buf = io.StringIO()
+                try:
+                    raise exc
+                except BaseException:
+                    with mock.patch("sys.stderr", new=stderr_buf):
+                        server.handle_error(None, ("127.0.0.1", 12345))
+                self.assertEqual(stderr_buf.getvalue(), "")
+
+            unexpected_buf = io.StringIO()
+            try:
+                raise RuntimeError("unexpected server error")
+            except RuntimeError:
+                with mock.patch("sys.stderr", new=unexpected_buf):
+                    server.handle_error(None, ("127.0.0.1", 12345))
+            self.assertIn("RuntimeError: unexpected server error", unexpected_buf.getvalue())
+        finally:
+            server.server_close()
+
+    def test_board_live_server_aborted_clients_produce_no_stderr_tracebacks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            cfg.mkdir(parents=True, exist_ok=True)
+            empty_dir = root / "workspace"
+            empty_dir.mkdir(parents=True, exist_ok=True)
+
+            sub_env = dict(os.environ)
+            sub_env["IDD_CONFIG_DIR"] = str(cfg)
+            sub_env["IDD_NO_BROWSER"] = "1"
+            sub_env["PYTHONUNBUFFERED"] = "1"
+
+            proc = subprocess.Popen(
+                [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--local-only", "--no-open"],
+                cwd=str(empty_dir),
+                env=sub_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                assert proc.stdout is not None
+                banner = proc.stdout.readline().strip()
+                m = re.search(r"http://127\.0\.0\.1:(\d+)", banner)
+                self.assertIsNotNone(m, f"Unexpected board startup output: {banner!r}")
+                port = int(m.group(1))
+                linger_rst = struct.pack("ii", 1, 0)
+
+                # (a) Connect and immediately send RST without sending request bytes
+                for _ in range(3):
+                    sock = socket.create_connection(("127.0.0.1", port), timeout=3)
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger_rst)
+                    sock.close()
+
+                # (b) Send HTTP requests (HTML + API) and immediately abort socket before reading
+                for req_path in ("/", "/api/snapshot", "/api/auth/status"):
+                    for _ in range(3):
+                        sock = socket.create_connection(("127.0.0.1", port), timeout=3)
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger_rst)
+                        sock.sendall(f"GET {req_path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".encode("ascii"))
+                        sock.close()
+
+                # Confirm server stays healthy after aborted connections
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=5) as resp:
+                    self.assertEqual(resp.status, 200)
+                    health = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(health["ok"])
+            finally:
+                proc.terminate()
+                try:
+                    _, stderr_out = proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    _, stderr_out = proc.communicate(timeout=5)
+
+            self.assertNotIn("Traceback", stderr_out)
+            self.assertNotIn("BrokenPipeError", stderr_out)
+            self.assertNotIn("ConnectionResetError", stderr_out)
 
 
 if __name__ == "__main__":
