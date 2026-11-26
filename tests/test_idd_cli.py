@@ -607,6 +607,16 @@ class TestIddCli(unittest.TestCase):
             self.assertEqual(final_state["prs"][pr_num]["state"], "MERGED")
             self.assertEqual(final_state["issues"]["42"]["state"], "CLOSED")
             self.assertIn("### TASK-01 增加 CSV 后端导出接口", final_state["prs"][pr_num]["body"])
+            self.assertIn("- **Test:** `pytest tests/test_export.py` — 5 passed", final_state["prs"][pr_num]["body"])
+            squash_msg = subprocess.check_output(
+                ["git", "-C", str(h.repo), "log", "-1", "--format=%B", "main"],
+                text=True,
+            )
+            self.assertIn("TASK-01: 增加 CSV 后端导出接口", squash_msg)
+            self.assertIn("Test: pytest tests/test_export.py — 5 passed", squash_msg)
+            self.assertNotIn("### ", squash_msg)
+            self.assertNotIn("**Test:**", squash_msg)
+            self.assertNotIn("<details>", squash_msg)
             wt_head = subprocess.check_output(["git", "-C", str(wt), "rev-parse", "HEAD"], text=True).strip()
             merge_calls = [c for c in final_state["calls"] if c[:2] == ["pr", "merge"]]
             self.assertTrue(merge_calls)
@@ -1794,11 +1804,37 @@ class TestIddCli(unittest.TestCase):
     def test_build_issue_summary_markdown_and_test_formatting(self) -> None:
         self.assertEqual(
             idd_cli._format_test_summary_line("uv run --offline --locked --extra dev python -m pytest -o addopts='' -q tests/ — 95 passed"),
-            "- **Test:** `uv run --offline --locked --extra dev python -m pytest -o addopts='' -q tests/` — 95 passed",
+            "- **Test:** `pytest tests/` — 95 passed",
         )
         self.assertEqual(
             idd_cli._format_test_summary_line("uv run pytest tests/ — 4505 passed, 11 skipped; tests/packaging/ — 3 passed"),
-            "- **Test:** `uv run pytest tests/` — 4505 passed, 11 skipped; `tests/packaging/` — 3 passed",
+            "**Test:**\n\n- `pytest tests/` — 4505 passed, 11 skipped\n- `tests/packaging/` — 3 passed",
+        )
+        self.assertEqual(
+            idd_cli._format_test_summary_line(
+                "uv run --offline --locked --extra dev python -m pytest -o addopts='' -q "
+                "tests/integrations/test_wecom_rendering.py tests/integrations/test_wecom.py "
+                "tests/integrations/test_wecom_connection.py tests/integrations/test_wecom_group_names.py "
+                "tests/integrations/test_wecom_relay.py tests/review/test_notifications.py "
+                "tests/architecture/test_dependencies.py — 379 passed; compileall/alembic/diff-check passed"
+            ),
+            "**Test:**\n\n- `pytest (7 个测试文件)` — 379 passed\n- `compileall/alembic/diff-check` — passed",
+        )
+        self.assertEqual(
+            idd_cli._format_test_summary_line(
+                "corepack pnpm test --maxWorkers=2 — 93 files, 1219 passed; "
+                "corepack pnpm typecheck — 0 errors; "
+                "corepack pnpm test:architecture — 4 passed"
+            ),
+            "**Test:**\n\n- `pnpm test` — 93 files, 1219 passed\n- `pnpm typecheck` — 0 errors\n- `pnpm test:architecture` — 4 passed",
+        )
+        self.assertEqual(
+            idd_cli._format_test_summary_line("PYTHONPATH=tests python3 -m unittest test_monitor_and_board -v — 23 passed"),
+            "- **Test:** `unittest test_monitor_and_board` — 23 passed",
+        )
+        self.assertEqual(
+            idd_cli._format_test_summary_line("python3 -m unittest discover -s tests -v — 89 passed"),
+            "- **Test:** `unittest tests` — 89 passed",
         )
         self.assertEqual(
             idd_cli._format_test_summary_line("cmd1; cmd2 — 10 passed"),
@@ -1855,22 +1891,41 @@ class TestIddCli(unittest.TestCase):
             subprocess.run(["git", "-C", str(repo), "commit", "-m", commit_msg_1], check=True, capture_output=True)
 
             # Single TASK with issue_title=None must not leak '###' or 'TASK-01' into suggested_title
-            single_title, single_body = idd_cli.build_issue_summary(repo, "6-review", 6, "main", issue_title=None)
+            single_title, single_pr_body, single_commit_body = idd_cli.build_issue_summaries(
+                repo, "6-review", 6, "main", issue_title=None
+            )
             self.assertEqual(single_title, "feat: 扩展独立复核上下文 (#6)")
             self.assertNotIn("###", single_title)
             self.assertNotIn("TASK-01", single_title)
-            expected_single = (
+            expected_single_pr = (
                 "Closes #6\n\n"
                 "### TASK-01 扩展独立复核上下文\n\n"
                 "第一段说明包含上下文细节。\n\n"
                 "第二段列出关键点：\n"
                 "- 含文件头与扩展窗口\n"
                 "- 零 I/O 关联符号变更\n\n"
-                "- **Test:** `uv run --offline --locked -q tests/review/` — 95 passed\n"
+                "- **Test:** `tests/review/` — 95 passed\n\n"
+                "<details>\n"
+                "<summary>完整验证命令</summary>\n\n"
+                "- **TASK-01:** `uv run --offline --locked -q tests/review/`\n\n"
+                "</details>\n"
             )
-            self.assertEqual(single_body, expected_single)
+            self.assertEqual(single_pr_body, expected_single_pr)
+            expected_single_commit = (
+                "Closes #6\n\n"
+                "TASK-01: 扩展独立复核上下文\n\n"
+                "第一段说明包含上下文细节。\n\n"
+                "第二段列出关键点：\n"
+                "- 含文件头与扩展窗口\n"
+                "- 零 I/O 关联符号变更\n\n"
+                "Test: tests/review/ — 95 passed\n"
+            )
+            self.assertEqual(single_commit_body, expected_single_commit)
+            self.assertNotIn("###", single_commit_body)
+            self.assertNotIn("**", single_commit_body)
+            self.assertNotIn("<details>", single_commit_body)
 
-            # Second TASK without extra body should still separate heading and Test with blank line
+            # Second TASK with multiple Test: lines should accumulate and avoid <details> when not simplified
             (task_dir / "TASK-02-docs.md").write_text(
                 "# TASK-02：同步文档\n\n"
                 "- Issue: #6\n- Status: done\n- Depends on: TASK-01\n- Test: pytest\n",
@@ -1881,15 +1936,44 @@ class TestIddCli(unittest.TestCase):
             subprocess.run(
                 [
                     "git", "-C", str(repo), "commit", "-m",
-                    "docs: 同步文档\n\nTask: 6-review/TASK-02\nRefs: #6\nTest: pytest tests/a.py — 10 passed; tests/b.py — 3 passed",
+                    "docs: 同步文档\n\nTask: 6-review/TASK-02\nRefs: #6\n"
+                    "Test: pytest tests/a.py — 10 passed\n"
+                    "Test: pytest tests/b.py — 3 passed",
                 ],
                 check=True,
                 capture_output=True,
             )
-            _, multi_body = idd_cli.build_issue_summary(repo, "6-review", 6, "main", issue_title="fix(review): 收敛噪音")
+            _, multi_pr_body, multi_commit_body = idd_cli.build_issue_summaries(
+                repo, "6-review", 6, "main", issue_title="fix(review): 收敛噪音"
+            )
             self.assertIn(
-                "### TASK-02 同步文档\n\n- **Test:** `pytest tests/a.py` — 10 passed; `tests/b.py` — 3 passed\n",
-                multi_body,
+                "### TASK-02 同步文档\n\n**Test:**\n\n- `pytest tests/a.py` — 10 passed\n- `pytest tests/b.py` — 3 passed\n",
+                multi_pr_body,
+            )
+            self.assertIn(
+                "TASK-02: 同步文档\nTest:\n- pytest tests/a.py — 10 passed\n- pytest tests/b.py — 3 passed\n",
+                multi_commit_body,
+            )
+
+            # Short unsimplified commands must not produce a redundant <details> block
+            (task_dir / "TASK-01-context.md").unlink()
+            (repo / "c.py").write_text("z = 3\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(repo), "commit", "-m",
+                    "docs: 精简验证\n\nTask: 6-review/TASK-02\nRefs: #6\nTest: pytest tests/b.py — 3 passed",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            _, short_pr_body, short_commit_body = idd_cli.build_issue_summaries(
+                repo, "6-review", 6, "main", issue_title="docs: 精简验证"
+            )
+            self.assertNotIn("<details>", short_pr_body)
+            self.assertEqual(
+                short_commit_body,
+                "Closes #6\n\nTASK-02: 精简验证\nTest: pytest tests/b.py — 3 passed\n",
             )
 
     def test_land_blocks_unfinished_tasks_and_allows_force_or_terminal_states(self) -> None:
