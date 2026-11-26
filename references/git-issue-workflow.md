@@ -99,7 +99,7 @@ config/local.*.json
 
 ### 一次锁定仓库仅 Squash 直线合入（同时保留需求分支）
 
-首次接管仓库时，可检查或一键启用线性合并策略且合入后保留需求分支：
+首次接管仓库时，可检查或一键启用线性合并策略且合入后保留需求分支（首次在带远端的仓库运行 `idd issue create`、`idd start` 或 `idd repos add` 时，CLI 也会自动只读探测一次并在未锁定该策略时输出一次性 `💡 首次接管提示`，结果记录于 `~/.config/idd/repos.json` 的 `repo_init_state`；Agent 看到提示后先向用户确认，再执行 `--apply`）：
 
 ```bash
 idd repo-init          # 只读检查当前设置

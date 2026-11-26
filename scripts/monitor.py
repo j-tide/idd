@@ -178,11 +178,15 @@ def load_registered_repos(*, prune_missing: bool = True) -> list[dict[str, Any]]
                     continue
             elif key != raw_path:
                 dirty = True
-            seen[key] = {
+            entry_out: dict[str, Any] = {
                 "path": key,
                 "name": str(item.get("name") or resolved.name),
                 "last_seen_at": ts,
             }
+            existing_state = item.get("repo_init_state")
+            if isinstance(existing_state, str) and existing_state:
+                entry_out["repo_init_state"] = existing_state
+            seen[key] = entry_out
 
         entries = sorted(seen.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
         if dirty:
@@ -195,7 +199,7 @@ def register_repo(main_worktree: Path) -> dict[str, Any]:
     resolved = main_worktree.expanduser().resolve()
     key = str(resolved)
     now = time.time()
-    entry = {"path": key, "name": resolved.name, "last_seen_at": now}
+    entry: dict[str, Any] = {"path": key, "name": resolved.name, "last_seen_at": now}
 
     with _REPOS_LOCK:
         raw_items = _read_raw_repos_unlocked()
@@ -206,15 +210,70 @@ def register_repo(main_worktree: Path) -> dict[str, Any]:
             except OSError:
                 continue
             if p.is_dir() and (p / ".git").exists():
-                by_path[str(p)] = {
+                rec: dict[str, Any] = {
                     "path": str(p),
                     "name": str(item.get("name") or p.name),
                     "last_seen_at": float(item.get("last_seen_at") or 0.0),
                 }
+                existing_state = item.get("repo_init_state")
+                if isinstance(existing_state, str) and existing_state:
+                    rec["repo_init_state"] = existing_state
+                by_path[str(p)] = rec
+        prev_entry = by_path.get(key)
+        if prev_entry and isinstance(prev_entry.get("repo_init_state"), str) and prev_entry["repo_init_state"]:
+            entry["repo_init_state"] = prev_entry["repo_init_state"]
         by_path[key] = entry
         entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
         _save_repos_unlocked(entries)
     return entry
+
+
+def get_repo_init_state(main_worktree: Path) -> str:
+    """Return persisted `repo_init_state` ('aligned', 'prompted', or '') for a repository."""
+    key = str(main_worktree.expanduser().resolve())
+    with _REPOS_LOCK:
+        for item in _read_raw_repos_unlocked():
+            try:
+                p = str(Path(item["path"]).expanduser().resolve())
+            except OSError:
+                continue
+            if p == key:
+                val = item.get("repo_init_state")
+                return val if isinstance(val, str) else ""
+    return ""
+
+
+def set_repo_init_state(main_worktree: Path, state: str) -> None:
+    """Persist `repo_init_state` for a repository main worktree in `repos.json`."""
+    resolved = main_worktree.expanduser().resolve()
+    key = str(resolved)
+    now = time.time()
+    with _REPOS_LOCK:
+        raw_items = _read_raw_repos_unlocked()
+        by_path: dict[str, dict[str, Any]] = {}
+        for item in raw_items:
+            try:
+                p = Path(item["path"]).expanduser().resolve()
+            except OSError:
+                continue
+            if p.is_dir() and (p / ".git").exists():
+                rec: dict[str, Any] = {
+                    "path": str(p),
+                    "name": str(item.get("name") or p.name),
+                    "last_seen_at": float(item.get("last_seen_at") or 0.0),
+                }
+                existing_state = item.get("repo_init_state")
+                if isinstance(existing_state, str) and existing_state:
+                    rec["repo_init_state"] = existing_state
+                by_path[str(p)] = rec
+        target = by_path.get(key) or {"path": key, "name": resolved.name, "last_seen_at": now}
+        if state:
+            target["repo_init_state"] = state
+        else:
+            target.pop("repo_init_state", None)
+        by_path[key] = target
+        entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
+        _save_repos_unlocked(entries)
 
 
 def unregister_repo(target: Path) -> bool:
