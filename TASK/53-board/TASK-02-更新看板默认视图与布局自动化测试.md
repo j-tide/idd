@@ -1,7 +1,7 @@
 # TASK-02：更新看板默认视图与布局自动化测试
 
 - Issue: 53-board
-- Status: planned
+- Status: done
 - Depends on: 53-board/TASK-01
 - Test: `python3 -m unittest discover -s tests -v`
 
@@ -13,8 +13,8 @@
 
 ## 验收标准
 
-- [ ] `test_board_web_server_serves_offline_ui_and_live_snapshots` 与 `test_board_redesigned_layout_removes_worktree_rail_and_surfaces_cleanable_worktrees` 全面覆盖新默认视图与交互边界。
-- [ ] `python3 -m unittest discover -s tests -v` 全部通过。
+- [x] `test_board_web_server_serves_offline_ui_and_live_snapshots` 与 `test_board_redesigned_layout_removes_worktree_rail_and_surfaces_cleanable_worktrees` 全面覆盖新默认视图与交互边界。
+- [x] `python3 -m unittest discover -s tests -v` 全部通过。
 
 ## 实现注意事项
 
@@ -27,8 +27,8 @@
 
 ## 执行结果
 
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已补充覆盖旧 `cockpit` 缓存迁移、按仓库分组排序、可清理抽屉及详情抽屉 5 阶段快捷命令校验，全量 89 项测试全部通过。
 
 ### 当前阻塞
 
@@ -36,4 +36,7 @@
 
 ### 验证记录
 
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-26 | `PYTHONPATH=tests python3 -m unittest test_monitor_and_board.TestMonitorAndBoard.test_board_redesigned_layout_removes_worktree_rail_and_surfaces_cleanable_worktrees -v` | passed (1 passed) | `tests/test_monitor_and_board.py` |
+| 2026-11-26 | `python3 -m unittest discover -s tests -v` | passed (89 passed) | `tests/` |
