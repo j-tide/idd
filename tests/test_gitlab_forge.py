@@ -326,6 +326,90 @@ class TestGitLabForge(unittest.TestCase):
 
         self.assertIsNone(forge.parse_remote_url("/tmp/bare/origin.git"))
 
+    def test_normalize_mr_prefers_diff_refs_head_sha_and_tracks_checking_states(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            gl = forge.GitLabForge(
+                Path(tmp),
+                forge.RemoteSpec("https", "gitlab.example.com", "gitlab.example.com", None, "org/repo", "https://gitlab.example.com"),
+                {"token": "glpat-test"},
+            )
+            for status in ("checking", "unchecked", "preparing"):
+                normalized = gl._normalize_mr(
+                    {
+                        "iid": 12,
+                        "title": "fix: test",
+                        "state": "opened",
+                        "sha": "new_branch_sha",
+                        "diff_refs": {"head_sha": "old_diff_sha"},
+                        "detailed_merge_status": status,
+                        "source_branch": "fix/1-test",
+                        "target_branch": "main",
+                    },
+                    fetch_jobs=False,
+                )
+                self.assertEqual(normalized["headRefOid"], "old_diff_sha")
+                self.assertEqual(normalized["rawSha"], "new_branch_sha")
+                self.assertEqual(normalized["mergeStateStatus"], "CHECKING")
+                self.assertEqual(normalized["detailedMergeStatus"], status)
+
+            fallback = gl._normalize_mr(
+                {
+                    "iid": 13,
+                    "title": "fix: list item",
+                    "state": "opened",
+                    "sha": "list_sha",
+                    "merge_status": "unchecked",
+                    "source_branch": "fix/2-test",
+                    "target_branch": "main",
+                },
+                fetch_jobs=False,
+            )
+            self.assertEqual(fallback["headRefOid"], "list_sha")
+            self.assertEqual(fallback["rawSha"], "list_sha")
+            self.assertEqual(fallback["mergeStateStatus"], "CHECKING")
+
+    def test_merge_squash_passes_expected_sha_and_http_status_on_error(self) -> None:
+        captured: list[tuple[str, str, dict | None]] = []
+
+        class StubGitLabForge(forge.GitLabForge):
+            def _request(self, method, path, *, query=None, json_body=None, raw_text=False, check=True):
+                captured.append((method, path, json_body))
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gl = StubGitLabForge(
+                root,
+                forge.RemoteSpec("https", "gitlab.example.com", "gitlab.example.com", None, "org/repo", "https://gitlab.example.com"),
+                {"token": "glpat-test"},
+            )
+            gl.merge_squash(15, "fix: title", "Closes #1", auto=False, expected_sha="abc123")
+            self.assertEqual(len(captured), 1)
+            self.assertEqual(captured[0][0], "PUT")
+            self.assertEqual(captured[0][2]["sha"], "abc123")
+
+            gh = forge.GitHubForge(root)
+            calls: list[list[str]] = []
+            orig_run = forge._run
+            try:
+                def fake_run(args, *, cwd=None, check=True, env=None):
+                    calls.append(args)
+                    return forge.subprocess.CompletedProcess(args, 0, "", "")
+
+                forge._run = fake_run
+                gh.merge_squash(9, "fix: title", "Closes #1", auto=True, expected_sha="def456")
+            finally:
+                forge._run = orig_run
+
+            self.assertEqual(len(calls), 1)
+            self.assertIn("--auto", calls[0])
+            self.assertIn("--match-head-commit", calls[0])
+            idx = calls[0].index("--match-head-commit")
+            self.assertEqual(calls[0][idx + 1], "def456")
+
+            err = forge.ForgeError("conflict", exit_code=1, http_status=409)
+            self.assertEqual(err.http_status, 409)
+
     def test_self_hosted_gitlab_end_to_end_workflow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
