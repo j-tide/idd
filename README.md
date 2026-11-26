@@ -82,8 +82,8 @@ idd board
 | `idd status [-g\|--global]` | 终端一次性输出 Open Issues、Worktree `TASK` 进度、脉搏与 PR/MR CI |
 | `idd repos [list\|add\|remove\|prune]` | 查看或管理全局自动监控的仓库索引（`~/.config/idd/repos.json`） |
 | `idd issue create --title "..."` | 创建 GitHub / GitLab Issue |
-| `idd start <issue# \| slug>` | 创建或幂等复用独立 Worktree，同步 `.worktreeinclude` 并校验分支名 |
-| `idd sync [issue#]` | 将本地 `TASK` 勾选进度同步回 Issue 正文 |
+| `idd start <issue# \| slug>` | 创建或幂等复用独立 Worktree，`--no-track` 建分支并立即推远端 `origin`，同步 `.worktreeinclude` |
+| `idd sync [issue#]` | 将本地 `TASK` 勾选进度同步回 Issue 正文并自动推送当前开发分支 |
 | `idd pr` / `idd mr` | 汇总 `TASK` 与测试记录（附 `Closes #id`）创建或更新 PR / MR |
 | `idd ci [issue# \| pr# \| !mr#] [--logs]` | 检查 PR / MR 的 CI 状态并拉取失败日志 |
 | `idd land [issue# \| slug]` | Rebase、清理 `TASK/<issue>/` 并 Squash 直线合入（默认保留分支与工作树，可选 `--rm-worktree`） |

@@ -82,8 +82,8 @@ idd board
 | `idd status [-g\|--global]` | One-shot terminal summary of Open Issues, `TASK` progress, pulse, and PR/MR CI |
 | `idd repos [list\|add\|remove\|prune]` | Inspect or manage the global monitored repository index (`~/.config/idd/repos.json`) |
 | `idd issue create --title "..."` | Create a GitHub or GitLab Issue |
-| `idd start <issue# \| slug>` | Create or idempotently reuse an isolated worktree, sync `.worktreeinclude`, and validate branch naming |
-| `idd sync [issue#]` | Sync local `TASK` checklist progress back to the Issue body |
+| `idd start <issue# \| slug>` | Create or idempotently reuse an isolated worktree, create `--no-track` branch & push to `origin`, and sync `.worktreeinclude` |
+| `idd sync [issue#]` | Sync local `TASK` checklist progress back to the Issue body and auto-push branch commits |
 | `idd pr` / `idd mr` | Summarize `TASK` and test records (`Closes #id`) to create or update a PR / MR |
 | `idd ci [issue# \| pr# \| !mr#] [--logs]` | Check PR / MR CI status and fetch failing job logs |
 | `idd land [issue# \| slug]` | Rebase, clean `TASK/<issue>/`, and Squash-merge onto `main` (keeps branches & worktrees by default; optional `--rm-worktree`) |

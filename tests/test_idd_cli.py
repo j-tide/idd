@@ -806,6 +806,110 @@ class TestIddCli(unittest.TestCase):
             state_json = json.loads((cache_dir / "update_state.json").read_text(encoding="utf-8"))
             self.assertEqual(state_json["behind_count"], 0)
 
+    def test_start_auto_pushes_branch_sets_correct_upstream_and_supports_no_push(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            first = json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json").stdout)
+            wt42 = Path(first["worktree"])
+            self.assertTrue(first["pushed"])
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "--git-dir", str(h.origin), "show-ref", "--verify", "--quiet", "refs/heads/feat/42-export-csv"]
+                ).returncode,
+                0,
+            )
+            upstream42 = subprocess.check_output(
+                ["git", "-C", str(wt42), "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                text=True,
+            ).strip()
+            self.assertEqual(upstream42, "origin/feat/42-export-csv")
+
+            # `--no-push` keeps branch local and MUST NOT bind upstream to origin/main
+            second = json.loads(h.run_idd("start", "43", "--no-push", "--json").stdout)
+            wt43 = Path(second["worktree"])
+            self.assertFalse(second["pushed"])
+            self.assertNotEqual(
+                subprocess.run(
+                    [
+                        "git",
+                        "--git-dir",
+                        str(h.origin),
+                        "show-ref",
+                        "--verify",
+                        "--quiet",
+                        "refs/heads/fix/43-fix-dark-mode-flicker",
+                    ]
+                ).returncode,
+                0,
+            )
+            up_proc = subprocess.run(
+                ["git", "-C", str(wt43), "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(up_proc.returncode, 0)
+
+            # Reusing existing unpushed worktree via `idd start 43` auto-pushes it to origin
+            reused = json.loads(h.run_idd("start", "43", "--json").stdout)
+            self.assertTrue(reused["reused"])
+            self.assertTrue(reused["pushed"])
+            self.assertEqual(
+                subprocess.run(
+                    [
+                        "git",
+                        "--git-dir",
+                        str(h.origin),
+                        "show-ref",
+                        "--verify",
+                        "--quiet",
+                        "refs/heads/fix/43-fix-dark-mode-flicker",
+                    ]
+                ).returncode,
+                0,
+            )
+            upstream43 = subprocess.check_output(
+                ["git", "-C", str(wt43), "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                text=True,
+            ).strip()
+            self.assertEqual(upstream43, "origin/fix/43-fix-dark-mode-flicker")
+
+    def test_sync_auto_pushes_commits_and_respects_no_push(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            wt = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+
+            initial_remote_sha = subprocess.check_output(
+                ["git", "--git-dir", str(h.origin), "rev-parse", "refs/heads/feat/42-export-csv"],
+                text=True,
+            ).strip()
+
+            self._write_task(wt, "42-export-csv", 1, "增加 CSV 导出", "done")
+            (wt / "csv.py").write_text("ok = True\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "feat: 增加 CSV 导出"], check=True, capture_output=True)
+            local_sha = subprocess.check_output(["git", "-C", str(wt), "rev-parse", "HEAD"], text=True).strip()
+            self.assertNotEqual(local_sha, initial_remote_sha)
+
+            # `--no-push` updates Issue body without pushing branch
+            h.run_idd("sync", "42", "--no-push")
+            self.assertIn("- [x] TASK-01：增加 CSV 导出", h.load_state()["issues"]["42"]["body"])
+            remote_after_no_push = subprocess.check_output(
+                ["git", "--git-dir", str(h.origin), "rev-parse", "refs/heads/feat/42-export-csv"],
+                text=True,
+            ).strip()
+            self.assertEqual(remote_after_no_push, initial_remote_sha)
+
+            # Default `idd sync` updates Issue body AND pushes local commit to origin
+            sync_out = h.run_idd("sync", "42").stdout
+            self.assertIn("已同步推送分支至远端：origin/feat/42-export-csv", sync_out)
+            remote_after_sync = subprocess.check_output(
+                ["git", "--git-dir", str(h.origin), "rev-parse", "refs/heads/feat/42-export-csv"],
+                text=True,
+            ).strip()
+            self.assertEqual(remote_after_sync, local_sha)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,8 +26,8 @@ metadata:
 | `idd status [-g\|--global] [--open-only] [--local-only] [--json]` | 聚合并展示 Issue、`TASK` 进度、实时脉搏与 PR/MR CI 状态（非 Git 目录自动全局聚合） |
 | `idd repos [list\|add\|remove\|prune]` | 查看或管理本机全局监控的活跃仓库索引（`~/.config/idd/repos.json`） |
 | `idd issue create --title "..." [--body "..."] [--label ...]` | 聊天确认需求后创建 GitHub / GitLab Issue |
-| `idd start <issue# \| slug> [--slug ...] [--prefix ...]` | 认领 Issue 创建（或**幂等复用**已有）独立 Worktree，自动同步 `.worktreeinclude` |
-| `idd sync [issue#] [--dry-run]` | 将当前 Worktree 的 `TASK` 勾选进度同步回 Issue 正文（渲染原生进度条） |
+| `idd start <issue# \| slug> [--slug ...] [--prefix ...] [--no-push]` | 认领 Issue 创建（或**幂等复用**已有）独立 Worktree，使用 `--no-track` 建分支并立即 `push -u origin HEAD` 推远端，同时同步 `.worktreeinclude` |
+| `idd sync [issue#] [--no-push] [--dry-run]` | 将当前 Worktree 的 `TASK` 勾选进度同步回 Issue 正文（渲染原生进度条），并自动推送当前开发分支到远端 |
 | `idd pr [issue# \| slug]` / `idd mr ...` | 基于 `TASK` 与提交记录生成结构化描述（含 `Closes #<id>`）并创建/更新 PR 或 MR |
 | `idd ci [issue# \| pr# \| !mr#] [--watch] [--logs] [--json]` | 查看 PR / MR 的 CI 状态并拉取失败 Job/Run 日志 |
 | `idd land [issue# \| slug] [--keep-tasks] [--rm-worktree] [--auto] [--dry-run]` | 自动 Rebase、汇总正文、清理 `TASK/<issue>/` 并 Squash 直线合入（默认保留分支与工作树） |
@@ -41,11 +41,11 @@ metadata:
 
 ## 二、核心映射与目录约定
 
-一个可独立验收的需求优先绑定一个远端 Issue，全链路使用稳定一致的命名映射：
+只要当前仓库已配置 GitHub / GitLab 远端，所有可独立验收的开发需求（功能、修复、重构、样式与文档改动）**必须先绑定一个远端 Issue**，全链路使用稳定一致的命名映射：
 
 - **Issue ↔ 目录 ↔ Worktree ↔ 分支**：
   - `Issue #42` ↔ 任务目录 `42-<slug>` ↔ 独立工作树 `../<主仓库名>-worktrees/42-<slug>` ↔ 分支 `<type>/42-<slug>`（例如 `feat/42-export-csv`、`fix/43-dark-flicker`）。
-  - 纯本地/无远端场景使用 `<issue-slug>` 与 `<type>/<issue-slug>`。
+  - **仅当仓库完全没有配置 GitHub / GitLab 远端（纯本地仓库）时**，才允许回退使用无 Issue 编号的 `<issue-slug>` 与 `<type>/<issue-slug>`。
   - **分支与提交共用 8 类合法 `<type>`**：`feat | fix | refactor | perf | docs | test | ci | chore`。
   - **严禁使用不规范分支前缀**：禁止 `codex/*`、`claude/*`、`agy/*`、`antigravity/*`、`cursor/*`、`ai/*` 等工具前缀，也禁止 `feature/*`、`bugfix/*`、`tmp/*`、`wip/*` 等混写或临时前缀。`idd` 命令会在入口和出口直接拦截并给出 `git branch -m` 重命名提示。
 - **任务记录**：`TASK/<issue>/TASK-XX-<任务名称>.md`。
@@ -66,11 +66,13 @@ metadata:
 2. 明确背景（Why）、范围与明确边界（Scope / Non-goals）、风险以及可勾选的验收标准（`- [ ]`）。
 3. 调用 `idd issue create` 创建 Issue（自动适配当前仓库所属 GitHub 或自建 GitLab），向用户返回 Issue 编号与链接，**不修改当前工作树代码**。
 
-### 模式 B｜认领 Issue 或跨工具接手（Start / Handoff）
-当用户指定要做某个 Issue（如“做 `#42`”、“用 Codex/Claude 接手 `#42`”）：
+### 模式 B｜新开发需求建单、认领 Issue 或跨工具接手（Start / Handoff）
+**硬性前置规则**：若当前仓库已配置 GitHub / GitLab 远端且用户直接提出了新的功能/修复/重构需求、尚未关联已有 Issue，必须先运行 `idd issue create` 建单（需求清晰低风险可直接建单后立即 `idd start <issue#>`；需求模糊或存在重大设计取舍则先简明确认边界再建单）。**严禁在有远端仓库里跳过建单直接开无 Issue 分支或本地快进合入 `main`。**
+
+当用户指定要做某个 Issue（如“做 `#42`”、“用 Codex/Claude 接手 `#42`”）或刚通过 `idd issue create` 完成建单后：
 1. **统一入口**：在项目根目录或任意工作树先运行 `idd start <issue#>`。
-   - 若该 Issue **尚无工作树**：`idd start` 会拉取最新 `origin/<default_branch>`，在同级 `../<repo>-worktrees/<id>-<slug>` 创建工作树和分支，并同步 `.worktreeinclude` 里的 `.env` 等本地文件。
-   - 若该 Issue **已有工作树（跨工具接手）**：`idd start` 幂等返回现有工作树路径、分支、`git status`、最近提交与 `TASK/` 进度。**严禁各工具自行在 `.claude/worktrees/` 或其他私有目录另起炉灶。**
+   - 若该 Issue **尚无工作树**：`idd start` 会拉取最新 `origin/<default_branch>`，在同级 `../<repo>-worktrees/<id>-<slug>` 以 `--no-track` 创建工作树和分支（绝不将 upstream 错绑到 `origin/main`），同步 `.worktreeinclude` 里的 `.env` 等本地文件，并立即执行 `git push -u origin HEAD` 将开发分支推到远端（若无特殊原因禁止传 `--no-push`）。
+   - 若该 Issue **已有工作树（跨工具接手）**：`idd start` 幂等返回现有工作树路径、分支、`git status`、最近提交与 `TASK/` 进度，并自动修复错绑上游且为未推分支补推 `origin/<branch>`。**严禁各工具自行在 `.claude/worktrees/` 或其他私有目录另起炉灶。**
 2. 后续所有代码阅读、TASK 创建、测试和提交均在该独立工作树目录中进行。
 3. **并行边界**：**不同 Issue 之间可通过各自独立 Worktree 完全并行开发；同一个 Issue 内的多个 TASK 默认按依赖串行执行。**
 
@@ -129,7 +131,7 @@ python3 "$HOME/.agents/skills/idd/scripts/task_status.py" --root . --open-only
    - 两轮后仍失败则标记 `blocked`，按[阻塞与恢复](references/task-records.md#长期阻塞与恢复)写明原因、影响、解除条件和下一步并停止依赖链工作。
    - **没有实际运行并通过的测试，绝不能声称通过。**
 7. 约定范围、必要验证及证据留存都满足后，将 `Status` 设为 `done`、分别记录 `Outcome` 与验证记录表（纯文档检查也必须实际执行）。
-8. 在工作树分支上为该 `TASK` 创建一次开发提交（只含本任务改动、测试及任务记录），关键节点可顺手运行 `idd sync` 同步 Issue 进度条。
+8. 在工作树分支上为该 `TASK` 创建一次开发提交（只含本任务改动、测试及任务记录），提交后**必须立即推送到远端开发分支**（通过 `idd sync` 自动同步进度条并推送，或显式执行 `git push -u origin HEAD`），不得把已提交的开发分支长期只留在本地。
 9. 发现新增范围时先按[范围增长](references/task-records.md#范围增长与任务依赖)评估：同一 Issue 验收范围内追加编号任务，独立交付拆为新 Issue。不得把新工作塞进已完成任务。
 
 ### 提交标题与正文
@@ -206,5 +208,5 @@ Test: <本任务实际执行的验证及结果>
   - 除非确有必要且理由充分，否则不要增加依赖；
   - 不修改无关文件，不覆盖用户已有修改；
   - 没有实际运行并通过的测试，绝不能声称通过；
-  - 未经明确授权，不执行破坏性操作、部署或越权外部写入；
-  - 若当前项目的 `AGENTS.md` 或自身指令更严格，以项目指令为准。
+  - **常规开发分支推送默认允许且必须执行**：有 `origin` 远端时，向当前需求开发分支（`<type>/*`）执行 `git push -u origin HEAD`（含 `idd start` / `idd sync` 自动推送）属于标准开发动作，不属于“越权外部写入”；未经明确授权不得执行的是强推主干/重写共享历史、未经验收擅自合入 `main`、发版打 Tag、部署或生产变更；
+  - 若当前项目的 `AGENTS.md` 在技术栈、测试门禁、安全边界等业务规则上更严格，以项目指令为准；若项目文档中仍残留已废弃的旧 `TaskFlow` 工作流引用，一律以本 IDD 流程替代（先建 Issue、独立 Worktree、PR/MR 与 Squash 直线合入），不得退回无 Issue 的旧流程。

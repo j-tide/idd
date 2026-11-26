@@ -166,8 +166,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
     body.sidebar-collapsed .hide-collapsed {
       display: none !important;
     }
-    .show-collapsed { display: none; }
-    body.sidebar-collapsed .show-collapsed { display: inline-flex; }
+    .show-collapsed { display: none !important; }
+    body.sidebar-collapsed .show-collapsed { display: inline-grid !important; }
 
     /* Sidebar Search */
     .sb-search {
@@ -2293,6 +2293,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           "待处理": "Queued",
           "开发中": "In Progress",
           "本地开发": "Local",
+          "已完成": "Completed",
           "修 CI": "Fix CI",
           "受阻": "Blocked",
           "待合入": "Ready to Land",
@@ -2305,7 +2306,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           else if (canonical.startsWith("待提")) label = "Ready for PR";
         }
         if (canonical === "修 CI" || canonical === "受阻") return { key: canonical, label, tone: "tone-danger", dot: "fail" };
-        if (canonical === "待合入" || canonical.startsWith("待提")) return { key: canonical, label, tone: "tone-success", dot: "active" };
+        if (canonical === "待合入" || canonical === "已完成" || canonical.startsWith("待提")) return { key: canonical, label, tone: "tone-success", dot: "active" };
         if (canonical === "CI 运行中") return { key: canonical, label, tone: "tone-warning", dot: "warm" };
         if (canonical.startsWith("草稿")) return { key: canonical, label, tone: "tone-violet", dot: "quiet" };
         if (canonical === "待处理") return { key: canonical, label, tone: "tone-muted", dot: "quiet" };
@@ -2329,11 +2330,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
         for (const loc of snap.local_only_items || []) {
           const blockedCnt = (loc.counts && loc.counts.blocked) || 0;
+          const locTotal = Number(loc.total || 0);
+          const locDone = Number(loc.done || 0);
+          const allDone = locTotal > 0 && locDone === locTotal;
+          const mrLbl = loc.mr_label || (loc.forge_type === "gitlab" ? "MR" : (loc.forge_type === "github" ? "PR" : ""));
+          const locStage = blockedCnt > 0
+            ? "受阻"
+            : (allDone ? (mrLbl ? ("待提 " + mrLbl) : "已完成") : "本地开发");
           list.push(Object.assign({
             _kind: "local",
             _key: loc.repo_path + "#local#" + loc.issue + "#" + (loc.worktree || ""),
             title: loc.issue,
-            stage: blockedCnt > 0 ? "受阻" : "本地开发",
+            stage: locStage,
             task_progress: loc.done + " / " + loc.total,
             forge_type: "local"
           }, loc));
@@ -2395,8 +2403,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return parts.slice(-2).join("/");
       }
 
-      function shortDirSlug(wt) {
+      function shortDirSlug(wt, repoName, branch) {
         const parts = String(wt || "").split("/").filter(Boolean);
+        if (parts.length >= 2 && repoName && parts[parts.length - 1] === repoName && parts[parts.length - 2] !== "worktrees") {
+          return parts[parts.length - 2];
+        }
+        if (parts.length) {
+          const leaf = parts[parts.length - 1];
+          if (!repoName || leaf !== repoName) return leaf;
+        }
+        if (branch && branch !== "(detached)") {
+          return String(branch).replace(/^[^/]+\//, "");
+        }
         return parts.length ? parts[parts.length - 1] : "";
       }
 
@@ -2436,6 +2454,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
             } else if (stInfo.key === "待合入") {
               lines.push("- Status: " + done + "/" + total + " TASK completed, PR/MR CI is green and ready to land");
               lines.push("Enter this worktree directory, verify the diff, and run `idd land " + targetArg + "` for a linear Squash merge into main.");
+            } else if (stInfo.key.startsWith("待提") || stInfo.key === "已完成") {
+              lines.push("- Status: Completed all " + done + "/" + total + " TASKs; PR/MR not opened yet");
+              lines.push("Enter this worktree directory, verify the diff, and run `idd pr " + targetArg + "` per the idd skill to open a PR/MR and check CI.");
             } else {
               const progTxt = total > 0
                 ? (done + "/" + total + " TASK completed" + (item.current_task ? " (current: " + item.current_task + ")" : ""))
@@ -2469,6 +2490,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
           } else if (stInfo.key === "待合入") {
             lines.push("- 状态：已完成 " + done + "/" + total + " 个 TASK，PR/MR CI 已全绿待合入");
             lines.push("请进入该工作目录确认后，运行 `idd land " + targetArg + "` 线性 Squash 合入 main。");
+          } else if (stInfo.key.startsWith("待提") || stInfo.key === "已完成") {
+            lines.push("- 状态：已完成全部 " + done + "/" + total + " 个 TASK，尚未提交 PR/MR");
+            lines.push("请进入该工作目录复核改动，按 idd 规范运行 `idd pr " + targetArg + "`（GitLab 可用 `idd mr " + targetArg + "`）创建合并请求并检查 CI。");
           } else {
             const progTxt = total > 0
               ? ("已完成 " + done + "/" + total + " 个 TASK" + (item.current_task ? "（当前：" + item.current_task + "）" : ""))
@@ -2603,6 +2627,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
         } else {
           parts.push(tr("干净", "Clean"));
         }
+        const remoteState = String(pulse.remote_state || "");
+        const unpushed = Number(pulse.unpushed_commits || 0);
+        if (remoteState === "unpushed_branch") {
+          parts.push('<span style="color:var(--amber);font-weight:600;">' + tr("未推远端", "Unpushed") + "</span>");
+        } else if (unpushed > 0) {
+          parts.push('<span style="color:var(--amber);font-weight:600;">↑' + unpushed + " " + tr("待推送", "unpushed") + "</span>");
+        }
         return parts.join(" · ");
       }
 
@@ -2725,7 +2756,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const { total, done } = getProgressNumbers(it);
           const isCiFail = it.change && it.change.checks_overall === "FAIL";
           const rightTag = isCiFail ? ":CI!" : (total > 0 ? (":" + done + "/" + total) : ":wt");
-          const slug = shortDirSlug(it.worktree) || it.branch || ("#" + it.issue_number);
+          const slug = shortDirSlug(it.worktree, it.repo_name, it.branch) || it.branch || ("#" + it.issue_number);
           const shortBadge = it.issue_number != null ? ("#" + it.issue_number) : "wt";
           return (
             '<button class="sb-item ' + (isSel ? "active" : "") + '" data-jump-key="' + escapeHtml(it._key) + '" type="button" title="' + escapeHtml(slug + " · " + (it.title || "")) + '">' +
@@ -3169,13 +3200,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
       }
 
       function cardBucket(item) {
-        if (item._kind === "local") return "developing";
         if (item._kind === "orphan") {
           return item.checks_overall === "FAIL" || item.checks_overall === "PENDING" || item.isDraft ? "review" : "ready";
         }
         const key = parseStage(item.stage).key;
         if (key === "待处理" || key === "待认领") return "todo";
-        if (key === "待合入") return "ready";
+        if (key === "待合入" || key === "已完成" || key.startsWith("待提")) return "ready";
         if (key === "修 CI" || key === "CI 运行中" || key.startsWith("草稿")) return "review";
         return "developing";
       }

@@ -31,7 +31,7 @@
 - 禁止工具/身份前缀：`codex/*`、`claude/*`、`agy/*`、`antigravity/*`、`cursor/*`、`copilot/*`、`ai/*`
 - 禁止混写/临时前缀：`feature/*`（用 `feat/*`）、`bugfix/*` / `hotfix/*`（用 `fix/*`）、`tmp/*`、`temp/*`、`wip/*`、`dev/*`
 
-> **关键约束**：永远保留主工作树干净地停留在 `main`（或仓库默认分支），不要在主工作树直接切分支改代码。
+> **关键约束**：永远保留主工作树干净地停留在 `main`（或仓库默认分支），不要在主工作树直接切分支改代码。存在 `origin` 远端时，`idd start` 建分支会使用 `--no-track` 避免错绑 `origin/main`，并立即 `git push -u origin HEAD` 推送到远端。
 
 ## 2. 双平台支持（GitHub & 自建 GitLab）
 
@@ -69,13 +69,13 @@ config/local.*.json
 在不同工具间交接同一个 Issue 时，**不依赖各自工具的私有聊天历史，全部通过同一工作树 + `TASK/` 文件交接**：
 
 1. **进入或接手 Issue**：新打开任意一个工具，首先在仓库下运行 `idd start <issue#>`。
-   - 因为幂等设计，`idd start` 会定位到已经存在的工作树路径，并输出当前 `git status`、最近 5 条提交与各 `TASK` 的实际状态。
+   - 因为幂等设计，`idd start` 会定位到已经存在的工作树路径，自动修复错绑的上游并为未推分支补推 `origin/<branch>`，输出当前 `git status`、最近 5 条提交与各 `TASK` 的实际状态。
 2. **续接现场**：
    - 先运行 `idd status` 或阅读 `TASK/<issue>/TASK-*.md` 与 `git log -5`；
    - 已标 `done` 且验证记录完整的 TASK **绝不重做**；
    - 若正在处理挂掉的 CI，先跑 `idd ci <issue#> --logs` 读失败日志再改代码；
    - 若是 `blocked` 状态，先读“当前阻塞”摘要并核对解除条件是否已满足。
-3. **同步进度到远端 Issue**：完成关键 TASK 后运行 `idd sync`（在工作树内可省略编号），将 `TASK` 勾选进度写入 Issue 正文的 `<!-- idd:progress:start --> ... <!-- idd:progress:end -->` 受控块中，网页端与手机端可实时看到进度条，同时不会破坏 Issue 原本的正文内容。
+3. **同步进度并推送开发分支**：完成每个 `TASK` 提交后，运行 `idd sync`（在工作树内可省略编号），将 `TASK` 勾选进度写入 Issue 正文的 `<!-- idd:progress:start --> ... <!-- idd:progress:end -->` 受控块中并自动推送当前分支最新提交至 `origin/<branch>`（若为无远端仓库或手工补推，执行 `git push -u origin HEAD`），确保网页端与手机端可实时看到进度条且代码不滞留本地。
 
 ## 5. PR / MR 创建与 CI 自愈闭环
 
@@ -130,7 +130,7 @@ idd repo-init --apply
 
 ## 纯本地 / 无远端回退流程
 
-当项目没有配置 GitHub / GitLab 远端（仅在本地 Git 仓库开发）时，依然保持「一需求一单提交 + 直线历史」：
+当项目**没有配置 GitHub / GitLab 远端**（仅在本地 Git 仓库开发）时，依然保持「一需求一单提交 + 直线历史」（若仓库实际存在 `origin` 远端，即使暂未走 PR/MR 也应先 `git push -u origin HEAD` 备份开发分支）：
 
 1. 在工作树固定已验收提交 `issue_tip=$(git rev-parse HEAD)` 与分叉点 `issue_base=$(git merge-base "$main_branch" "$issue_tip")`。
 2. 基于 `TASK/` 与 `git log --reverse "$issue_base..$issue_tip"` 整理出标准需求提交正文写入临时文件 `issue_message`。

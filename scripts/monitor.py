@@ -442,6 +442,9 @@ def _format_pulse_summary(
     insertions: int,
     deletions: int,
     git_op: str,
+    *,
+    remote_state: str = "",
+    unpushed_commits: int = 0,
 ) -> str:
     if activity_state == "active":
         time_part = "🟢 刚刚活跃" if last_active_ago == "刚刚" else f"🟢 {last_active_ago}"
@@ -464,10 +467,82 @@ def _format_pulse_summary(
         parts.append(f"✏️ {dirty_count}文件{diff_suffix}")
     else:
         parts.append("干净")
+
+    if remote_state == "unpushed_branch":
+        parts.append("⚠️ 未推远端")
+    elif unpushed_commits > 0:
+        parts.append(f"↑{unpushed_commits}待推送")
     return " · ".join(parts)
 
 
-def inspect_worktree_pulse(wt_path: Path, *, in_progress_count: int = 0) -> dict[str, Any]:
+def _inspect_remote_sync_ro(
+    wt_path: Path,
+    *,
+    branch: str = "",
+    has_origin: bool | None = None,
+    default_branch: str = "main",
+) -> dict[str, Any]:
+    """Inspect local-only remote-tracking & unpushed commit status without network calls."""
+    result: dict[str, Any] = {
+        "remote_state": "local_only",
+        "remote_branch_exists": False,
+        "unpushed_commits": 0,
+        "behind_commits": 0,
+        "upstream": "",
+        "upstream_misbound": False,
+    }
+    if not wt_path.is_dir():
+        return result
+
+    if has_origin is None:
+        rem = _run_git_ro(wt_path, ["remote"])
+        remotes = {line.strip() for line in rem.stdout.splitlines() if line.strip()} if rem and rem.returncode == 0 else set()
+        has_origin = "origin" in remotes
+    if not has_origin:
+        return result
+
+    if not branch:
+        br_proc = _run_git_ro(wt_path, ["branch", "--show-current"])
+        branch = br_proc.stdout.strip() if br_proc and br_proc.returncode == 0 else ""
+    if not branch or branch == "(detached)":
+        return result
+
+    up_proc = _run_git_ro(wt_path, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    upstream = up_proc.stdout.strip() if up_proc and up_proc.returncode == 0 else ""
+    result["upstream"] = upstream
+    if branch != default_branch and upstream == f"origin/{default_branch}":
+        result["upstream_misbound"] = True
+
+    rem_ref_proc = _run_git_ro(wt_path, ["show-ref", "--verify", "--quiet", f"refs/remotes/origin/{branch}"])
+    if rem_ref_proc and rem_ref_proc.returncode == 0:
+        result["remote_branch_exists"] = True
+        lr_proc = _run_git_ro(wt_path, ["rev-list", "--left-right", "--count", f"refs/remotes/origin/{branch}...HEAD"])
+        if lr_proc and lr_proc.returncode == 0 and lr_proc.stdout.strip():
+            counts = lr_proc.stdout.strip().split()
+            if len(counts) == 2 and counts[0].isdigit() and counts[1].isdigit():
+                result["behind_commits"] = int(counts[0])
+                result["unpushed_commits"] = int(counts[1])
+        result["remote_state"] = "ahead" if result["unpushed_commits"] > 0 else "synced"
+    else:
+        result["remote_branch_exists"] = False
+        result["remote_state"] = "unpushed_branch"
+        base_ref_proc = _run_git_ro(wt_path, ["show-ref", "--verify", "--quiet", f"refs/remotes/origin/{default_branch}"])
+        if base_ref_proc and base_ref_proc.returncode == 0:
+            ahead_proc = _run_git_ro(wt_path, ["rev-list", "--count", f"refs/remotes/origin/{default_branch}..HEAD"])
+            if ahead_proc and ahead_proc.returncode == 0 and ahead_proc.stdout.strip().isdigit():
+                result["unpushed_commits"] = int(ahead_proc.stdout.strip())
+
+    return result
+
+
+def inspect_worktree_pulse(
+    wt_path: Path,
+    *,
+    in_progress_count: int = 0,
+    branch: str = "",
+    has_origin: bool | None = None,
+    default_branch: str = "main",
+) -> dict[str, Any]:
     """Collect pure-local, non-locking live activity signals for a single git worktree."""
     mtimes: list[float] = []
     changed_files: list[dict[str, str]] = []
@@ -562,6 +637,12 @@ def inspect_worktree_pulse(wt_path: Path, *, in_progress_count: int = 0) -> dict
     last_active_ago = format_relative_time(idle_seconds)
     has_active_work = bool(dirty_count > 0 or in_progress_count > 0 or git_op)
     activity_state = _classify_activity(idle_seconds, has_active_work)
+    remote_sync = _inspect_remote_sync_ro(
+        wt_path,
+        branch=branch,
+        has_origin=has_origin,
+        default_branch=default_branch,
+    )
     pulse_summary = _format_pulse_summary(
         activity_state,
         last_active_ago,
@@ -569,6 +650,8 @@ def inspect_worktree_pulse(wt_path: Path, *, in_progress_count: int = 0) -> dict
         insertions,
         deletions,
         git_op,
+        remote_state=remote_sync["remote_state"],
+        unpushed_commits=remote_sync["unpushed_commits"],
     )
 
     return {
@@ -587,6 +670,12 @@ def inspect_worktree_pulse(wt_path: Path, *, in_progress_count: int = 0) -> dict
         "last_active_ago": last_active_ago,
         "activity_state": activity_state,
         "git_op": git_op,
+        "remote_state": remote_sync["remote_state"],
+        "remote_branch_exists": remote_sync["remote_branch_exists"],
+        "unpushed_commits": remote_sync["unpushed_commits"],
+        "behind_commits": remote_sync["behind_commits"],
+        "upstream": remote_sync["upstream"],
+        "upstream_misbound": remote_sync["upstream_misbound"],
         "pulse_summary": pulse_summary,
     }
 
@@ -914,11 +1003,21 @@ def _extract_task_dirs_from_paths(lines: list[str], *, strip_porcelain: bool) ->
     return dirs
 
 
-def _get_worktree_touched_task_dirs(wt_path: Path, default_branch: str, *, is_main: bool) -> set[str]:
-    touched: set[str] = set()
+def _get_worktree_dirty_task_dirs(wt_path: Path) -> set[str]:
     st_proc = _run_git_ro(wt_path, ["status", "--porcelain=v1", "--", "TASK"])
     if st_proc and st_proc.returncode == 0 and st_proc.stdout.strip():
-        touched |= _extract_task_dirs_from_paths(st_proc.stdout.splitlines(), strip_porcelain=True)
+        return _extract_task_dirs_from_paths(st_proc.stdout.splitlines(), strip_porcelain=True)
+    return set()
+
+
+def _get_worktree_touched_task_dirs(
+    wt_path: Path,
+    default_branch: str,
+    *,
+    is_main: bool,
+    dirty_dirs: set[str] | None = None,
+) -> set[str]:
+    touched: set[str] = set(dirty_dirs) if dirty_dirs is not None else _get_worktree_dirty_task_dirs(wt_path)
     if not is_main:
         for base_ref in (default_branch, f"origin/{default_branch}"):
             diff_proc = _run_git_ro(wt_path, ["diff", "--name-only", f"{base_ref}...HEAD", "--", "TASK"])
@@ -963,7 +1062,13 @@ def _collect_all_worktrees_ro(
         if issue_filter is not None or not entries:
             return entries, warnings, matched
 
-        touched_dirs = _get_worktree_touched_task_dirs(wt_path, default_branch, is_main=is_main)
+        dirty_task_dirs = _get_worktree_dirty_task_dirs(wt_path)
+        touched_dirs = _get_worktree_touched_task_dirs(
+            wt_path,
+            default_branch,
+            is_main=is_main,
+            dirty_dirs=dirty_task_dirs,
+        )
         if is_main:
             kept = [
                 e for e in entries
@@ -975,13 +1080,25 @@ def _collect_all_worktrees_ro(
             wt_inum = _infer_worktree_issue_num(branch, wt_path)
             branch_slug = branch.split("/")[-1] if branch and branch != "(detached)" else ""
             dir_slug = wt_path.name
-            kept = [
-                e for e in entries
-                if (e["issue"] not in main_task_dirs)
-                or (e["issue"] in touched_dirs)
-                or (wt_inum is not None and e.get("issue_number") == wt_inum)
-                or (e["issue"] in {branch_slug, dir_slug})
-            ]
+            kept = []
+            for e in entries:
+                in_main = e["issue"] in main_task_dirs
+                is_done_main_local = (
+                    in_main
+                    and e.get("issue_number") is None
+                    and e["issue"] not in dirty_task_dirs
+                    and e.get("total", 0) > 0
+                    and e.get("done", 0) == e.get("total", 0)
+                )
+                if is_done_main_local:
+                    continue
+                if (
+                    (not in_main)
+                    or (e["issue"] in touched_dirs)
+                    or (wt_inum is not None and e.get("issue_number") == wt_inum)
+                    or (e["issue"] in {branch_slug, dir_slug})
+                ):
+                    kept.append(e)
         kept_issues = {e["issue"] for e in kept}
         kept_warnings = [w for w in warnings if any(f"TASK/{issue_name}/" in w for issue_name in kept_issues)] if warnings else []
         return kept, kept_warnings, matched
@@ -1162,10 +1279,19 @@ def collect_repo_snapshot(
                 seen_wt_inspect.add(wt_str)
                 unique_wts_to_inspect.append(wt_str)
 
+    branch_by_wt = {
+        str(Path(w["path"]).resolve()): w.get("branch", "")
+        for w in all_worktrees
+        if w.get("path")
+    }
+
     def probe_wt(wt_str: str) -> tuple[str, dict[str, Any]]:
         return wt_str, inspect_worktree_pulse(
             Path(wt_str),
             in_progress_count=in_progress_by_wt.get(wt_str, 0),
+            branch=branch_by_wt.get(wt_str, ""),
+            has_origin=has_origin,
+            default_branch=default_branch,
         )
 
     pulse_by_wt: dict[str, dict[str, Any]] = {}

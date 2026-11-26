@@ -345,6 +345,9 @@ class TestMonitorAndBoard(unittest.TestCase):
                     ):
                         self.assertIn(loading_token, html)
                     self.assertIn("forge-chip", html)
+                    self.assertIn("shortDirSlug(it.worktree, it.repo_name, it.branch)", html)
+                    self.assertIn("display: none !important;", html)
+                    self.assertIn("body.sidebar-collapsed .show-collapsed { display: inline-grid !important; }", html)
                     node_bin = shutil.which("node")
                     if node_bin:
                         script_match = re.search(r"<script>(.*)</script>", html, re.S)
@@ -462,8 +465,9 @@ class TestMonitorAndBoard(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = root / "config"
-            repo, _, _, env = _create_repo_harness(root / "h", "legacy-repo", cfg)
+            repo, origin, _, env = _create_repo_harness(root / "h", "legacy-repo", cfg)
             subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin", "https://github.com/acme/legacy-repo.git"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", f"url.{origin}.insteadOf", "https://github.com/acme/legacy-repo.git"], check=True)
 
             # Seed 8 historical non-issue TASK directories committed on main
             for idx in range(1, 9):
@@ -475,6 +479,14 @@ class TestMonitorAndBoard(unittest.TestCase):
                 )
             subprocess.run(["git", "-C", str(repo), "add", "TASK"], check=True)
             subprocess.run(["git", "-C", str(repo), "commit", "-m", "chore: seed legacy tasks"], check=True, capture_output=True)
+
+            # Also create a worktree matching an already-done non-issue main/TASK/old-feature-1 dir -> should be filtered out
+            done_wt = root / "done-legacy-wt"
+            subprocess.run(
+                ["git", "-C", str(repo), "worktree", "add", "-b", "feature/old-feature-1", str(done_wt), "main"],
+                check=True,
+                capture_output=True,
+            )
 
             # Create an isolated worktree for #42 with 2 split TASKs
             wt42 = Path(json.loads(self._run(env, repo, "start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
@@ -711,6 +723,65 @@ class TestMonitorAndBoard(unittest.TestCase):
                     proc.stderr.close()
                 gl_server.shutdown()
                 gl_server.server_close()
+
+    def test_pulse_detects_unpushed_branch_and_ahead_commits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            repo, _, _, env = _create_repo_harness(root / "h", "pulse-repo", cfg)
+
+            wt = Path(
+                json.loads(self._run(env, repo, "start", "42", "--slug", "export-csv", "--no-push", "--json").stdout)[
+                    "worktree"
+                ]
+            )
+            subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+
+            pulse_unpushed = monitor.inspect_worktree_pulse(
+                wt,
+                branch="feat/42-export-csv",
+                has_origin=True,
+                default_branch="main",
+            )
+            self.assertEqual(pulse_unpushed["remote_state"], "unpushed_branch")
+            self.assertFalse(pulse_unpushed["remote_branch_exists"])
+            self.assertIn("未推远端", pulse_unpushed["pulse_summary"])
+
+            status_unpushed = self._run(env, repo, "status", "--local-only").stdout
+            watch_unpushed = self._run(env, repo, "watch", "--once", "--local-only").stdout
+            self.assertIn("未推远端", status_unpushed)
+            self.assertIn("未推远端", watch_unpushed)
+
+            # Push branch -> synced
+            subprocess.run(["git", "-C", str(wt), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
+            pulse_synced = monitor.inspect_worktree_pulse(
+                wt,
+                branch="feat/42-export-csv",
+                has_origin=True,
+                default_branch="main",
+            )
+            self.assertEqual(pulse_synced["remote_state"], "synced")
+            self.assertTrue(pulse_synced["remote_branch_exists"])
+            self.assertEqual(pulse_synced["unpushed_commits"], 0)
+
+            # Add 1 local commit without pushing -> ahead
+            (wt / "app.py").write_text("line1 = 1\nline2 = 2\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt), "add", "app.py"], check=True)
+            subprocess.run(["git", "-C", str(wt), "commit", "-m", "feat: local only commit"], check=True, capture_output=True)
+
+            pulse_ahead = monitor.inspect_worktree_pulse(
+                wt,
+                branch="feat/42-export-csv",
+                has_origin=True,
+                default_branch="main",
+            )
+            self.assertEqual(pulse_ahead["remote_state"], "ahead")
+            self.assertEqual(pulse_ahead["unpushed_commits"], 1)
+            self.assertIn("↑1待推送", pulse_ahead["pulse_summary"])
+
+            status_ahead = self._run(env, repo, "status", "--local-only").stdout
+            self.assertIn("↑1 待推送", status_ahead)
 
 
 if __name__ == "__main__":

@@ -96,6 +96,7 @@ def run_cmd(
     cwd: Path | None = None,
     check: bool = True,
     input_text: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a subprocess capturing UTF-8 output; raise IddError on failure when check=True."""
     try:
@@ -105,6 +106,7 @@ def run_cmd(
             capture_output=True,
             text=True,
             input=input_text,
+            env=env,
         )
     except FileNotFoundError as exc:
         raise IddError(f"找不到可执行文件 `{args[0]}`，请确认已安装并在 PATH 中。") from exc
@@ -605,6 +607,34 @@ def _require_clean_worktree(worktree: Path) -> None:
         raise IddError(f"工作树 `{worktree}` 存在未提交改动，请先提交或暂存：\n{st.stdout.strip()}")
 
 
+def _fix_misbound_upstream(wt_path: Path, branch: str, default_branch: str) -> None:
+    """Unset branch upstream if it was accidentally bound to `origin/<default_branch>`."""
+    if not branch or branch == "(detached)" or branch == default_branch:
+        return
+    up_proc = run_cmd(
+        ["git", "-C", str(wt_path), "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        check=False,
+    )
+    if up_proc.returncode == 0 and up_proc.stdout.strip() == f"origin/{default_branch}":
+        run_cmd(["git", "-C", str(wt_path), "branch", "--unset-upstream"], check=False)
+
+
+def _push_feature_branch(wt_path: Path, branch: str, *, default_branch: str) -> tuple[bool, str]:
+    """Fix misbound upstream if needed and push current branch to `origin` with tracking."""
+    _fix_misbound_upstream(wt_path, branch, default_branch)
+    env = dict(os.environ)
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    proc = run_cmd(
+        ["git", "-C", str(wt_path), "push", "-u", "origin", "HEAD"],
+        check=False,
+        env=env,
+    )
+    if proc.returncode == 0:
+        return True, ""
+    detail = proc.stderr.strip() or proc.stdout.strip() or f"退出码 {proc.returncode}"
+    return False, detail
+
+
 # ---------------------------------------------------------------------------
 # Subcommand handlers & rich terminal status renderer
 # ---------------------------------------------------------------------------
@@ -759,6 +789,13 @@ def _style_pulse(pulse: dict[str, Any] | None, use_color: bool) -> tuple[str, st
         parts.append(dirty_txt)
     else:
         parts.append(_ansi("2", "工作区干净", use_color))
+
+    remote_state = str(pulse.get("remote_state") or "")
+    unpushed = int(pulse.get("unpushed_commits") or 0)
+    if remote_state == "unpushed_branch":
+        parts.append(_ansi("1;33", "未推远端", use_color))
+    elif unpushed > 0:
+        parts.append(_ansi("1;33", f"↑{unpushed} 待推送", use_color))
 
     sep = _ansi("2", " · ", use_color)
     return dot, sep.join(parts), is_stalled
@@ -1306,21 +1343,50 @@ def cmd_start(args: argparse.Namespace) -> int:
         branch = existing.get("branch", "")
         issue_dir, issue_num = _infer_issue_dir_and_number(wt_path, branch, args.target)
         validate_branch_name(branch, issue_num, wt_path)
+        _fix_misbound_upstream(wt_path, branch, repo.default_branch)
+
+        pushed = False
+        newly_pushed = False
+        push_warning = ""
+        if repo.has_origin:
+            remote_exists = _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}")
+            if not remote_exists and not args.no_push:
+                pushed, push_warning = _push_feature_branch(wt_path, branch, default_branch=repo.default_branch)
+                if pushed:
+                    newly_pushed = True
+                else:
+                    print(
+                        f"⚠️ 自动推送分支 `{branch}` 至远端失败（已保留本地工作树）：{push_warning}\n"
+                        f"请稍后在工作树中执行：git -C {wt_path} push -u origin HEAD",
+                        file=sys.stderr,
+                    )
+            elif remote_exists:
+                up_proc = run_cmd(
+                    ["git", "-C", str(wt_path), "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                    check=False,
+                )
+                if up_proc.returncode != 0 or not up_proc.stdout.strip():
+                    run_cmd(["git", "-C", str(wt_path), "branch", f"--set-upstream-to=origin/{branch}"], check=False)
+                pushed = True
+
         st = run_cmd(["git", "-C", str(wt_path), "status", "--short"], check=False).stdout.strip()
         log_out = run_cmd(["git", "-C", str(wt_path), "log", "-5", "--oneline"], check=False).stdout.strip()
         task_summary = None
         if (wt_path / "TASK").is_dir() and issue_dir and (wt_path / "TASK" / issue_dir).is_dir():
             task_summary = task_status.collect(wt_path / "TASK", issue_dir, open_only=False)
-        payload = {
+        payload: dict[str, Any] = {
             "reused": True,
             "worktree": str(wt_path),
             "branch": branch,
             "issue": issue_dir,
             "issue_number": issue_num,
+            "pushed": pushed,
             "git_status": st,
             "recent_commits": log_out.splitlines() if log_out else [],
             "tasks": task_summary,
         }
+        if push_warning:
+            payload["push_warning"] = push_warning
         if args.json:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
         else:
@@ -1330,6 +1396,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                 f"任务目录：TASK/{issue_dir}/",
                 f"工作区状态：{st or '干净'}",
             ]
+            if newly_pushed:
+                lines.append(f"已补推分支至远端：origin/{branch}")
             if log_out:
                 lines.append("最近提交：")
                 lines.extend(f"  {line}" for line in log_out.splitlines())
@@ -1379,10 +1447,23 @@ def cmd_start(args: argparse.Namespace) -> int:
     elif repo.has_origin and _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
         run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "-b", branch, str(wt_path), f"origin/{branch}"])
     else:
-        run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "-b", branch, str(wt_path), base_ref])
+        run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "--no-track", "-b", branch, str(wt_path), base_ref])
 
     copied = sync_worktree_includes(repo.main_worktree, wt_path)
-    payload = {
+    _fix_misbound_upstream(wt_path, branch, repo.default_branch)
+
+    pushed = False
+    push_warning = ""
+    if repo.has_origin and not args.no_push:
+        pushed, push_warning = _push_feature_branch(wt_path, branch, default_branch=repo.default_branch)
+        if not pushed:
+            print(
+                f"⚠️ 自动推送分支 `{branch}` 至远端失败（已保留本地工作树）：{push_warning}\n"
+                f"请稍后在工作树中执行：git -C {wt_path} push -u origin HEAD",
+                file=sys.stderr,
+            )
+
+    payload: dict[str, Any] = {
         "reused": False,
         "worktree": str(wt_path),
         "branch": branch,
@@ -1390,8 +1471,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         "issue_number": issue_num,
         "base_ref": base_ref,
         "copied_includes": copied,
+        "pushed": pushed,
         "issue_detail": issue_data,
     }
+    if push_warning:
+        payload["push_warning"] = push_warning
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
@@ -1400,6 +1484,8 @@ def cmd_start(args: argparse.Namespace) -> int:
             f"分支：{branch} (基于 {base_ref})",
             f"TASK 目录建议：TASK/{issue_dir}/",
         ]
+        if pushed:
+            lines.append(f"已推送分支至远端：origin/{branch}")
         if copied:
             lines.append(f"已同步 .worktreeinclude 文件：{', '.join(copied)}")
         if issue_data:
@@ -1455,6 +1541,30 @@ def cmd_sync(args: argparse.Namespace) -> int:
     done_count = collected["issues"][0]["done"]
     total_count = collected["issues"][0]["total"]
     print(f"已同步 Issue #{issue_num} 进度（{done_count}/{total_count}）：{issue_data.get('url', '')}")
+
+    if repo.has_origin and not args.no_push and branch != repo.default_branch:
+        _fix_misbound_upstream(wt_path, branch, repo.default_branch)
+        local_head = run_cmd(["git", "-C", str(wt_path), "rev-parse", "HEAD"], check=False).stdout.strip()
+        remote_proc = run_cmd(
+            ["git", "-C", str(wt_path), "rev-parse", f"refs/remotes/origin/{branch}"],
+            check=False,
+        )
+        remote_head = remote_proc.stdout.strip() if remote_proc.returncode == 0 else ""
+        up_proc = run_cmd(
+            ["git", "-C", str(wt_path), "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            check=False,
+        )
+        upstream = up_proc.stdout.strip() if up_proc.returncode == 0 else ""
+        if (not remote_head) or (local_head != remote_head) or (upstream != f"origin/{branch}"):
+            ok, detail = _push_feature_branch(wt_path, branch, default_branch=repo.default_branch)
+            if ok:
+                print(f"已同步推送分支至远端：origin/{branch}")
+            else:
+                print(
+                    f"⚠️ Issue 进度已更新，但自动推送分支 `{branch}` 失败：{detail}\n"
+                    f"若刚执行过 rebase，请核对后运行：git -C {wt_path} push --force-with-lease -u origin HEAD",
+                    file=sys.stderr,
+                )
     return 0
 
 
@@ -2536,6 +2646,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_start.add_argument("--slug", help="覆盖自动生成的英文短别名")
     p_start.add_argument("--prefix", choices=list(ALLOWED_TYPES), help="分支前缀（允许 8 类标准 type）")
     p_start.add_argument("--base", help="基准分支（默认 origin/<default_branch> 或本地主分支）")
+    p_start.add_argument("--no-push", action="store_true", help="仅创建本地工作树与分支，跳过自动推送到远端 origin")
     p_start.add_argument("--json", action="store_true", help="输出 JSON")
     p_start.set_defaults(func=cmd_start)
 
@@ -2543,6 +2654,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync = sub.add_parser("sync", help="将本地 TASK 进度同步为 Issue 原生进度条")
     p_sync.add_argument("issue_number", nargs="?", help="Issue 编号（在对应工作树内可省略）")
     p_sync.add_argument("--root", type=Path, default=Path.cwd(), help="工作树或仓库路径")
+    p_sync.add_argument("--no-push", action="store_true", help="仅同步 Issue 进度条，不自动推送当前分支")
     p_sync.add_argument("--dry-run", action="store_true", help="仅预览合并后的 Issue 正文")
     p_sync.set_defaults(func=cmd_sync)
 
