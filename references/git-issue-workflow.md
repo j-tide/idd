@@ -107,7 +107,7 @@ idd repo-init --apply
 ```
 
 - **GitHub**：关闭 merge commit，开启 squash merge，设置 `delete_branch_on_merge=false`（建议同步在 Branch Ruleset 勾选 `Require linear history`）。
-- **GitLab**：将项目设置为 `merge_method="ff"`（Fast-Forward 零 Merge 节点）、`squash_option="always"`、`remove_source_branch_after_merge=false`。
+- **GitLab**：将项目设置为 `merge_method="ff"`（Fast-Forward 零 Merge 节点）、`squash_option="always"`、`remove_source_branch_after_merge=false`。`idd land` 在修改工作树前检查前两项，并在请求合入时再次核对。
 
 ### `idd land` 标准执行顺序
 
@@ -117,7 +117,7 @@ idd repo-init --apply
 2. **先持久化汇总，再清理目录**：在删除 `TASK/` 前读取 `TASK/<issue>/` 与提交历史生成完整的 `Closes #<id>` + 逐 `TASK` 验证清单。
 3. **清理 `TASK/<issue>/` 目录**：默认执行 `git rm -rf TASK/<issue>` 并提交 `chore: 清理已汇总的任务记录 (<issue>)`，确保 `main` 主干不堆积临时任务目录（传 `--keep-tasks` 可保留）。
    - **证据保护**：若 `TASK/<issue>/evidence/` 内存在附件文件，默认会安全拦截并列出清单；需确认附件已不再需要或已转存后，传 `--force-clean-evidence` 才一并清理。
-4. **同步 PR/MR、Squash 直线合入并收口 Issue 验收框**：刷新描述、如有新提交则 `--force-with-lease` 推送；确认 CI 通过后执行 Squash 直线合入（保留远端分支；若刚强推需要等新一轮 CI，可传 `--auto` 挂起自动合入）。真正完成合入后默认自动勾选 Issue 正文「验收标准」节内未勾选的复选框并保底刷新 `TASK` 进度块（传 `--no-check-acceptance` 可跳过，`--auto` 等待 CI 时不提前勾选）。
+4. **同步 PR/MR、Squash 直线合入并收口 Issue 验收框**。刷新描述，有新提交时使用 `--force-with-lease` 推送，确认 CI 通过后执行合入。GitLab 需要 MR 状态与远端目标分支一致，且目标分支新提交的唯一父提交是合入前的分支头。核对失败时，命令返回错误并提示检查远端历史。使用 `--auto` 时，若 GitLab 尚未合入，命令只报告合入请求待确认。完成核对后默认勾选 Issue 正文「验收标准」节内的复选框并刷新进度，可用 `--no-check-acceptance` 跳过。
 5. **默认保留与快进主线**：**默认同时保留本地需求分支与本地 Worktree 目录**（如希望合入时顺带移除工作树目录可显式传 `--rm-worktree`），随后将干净的主工作树 `main` 快进（`git merge --ff-only`）到最新 `origin/main`。
 
 ### `idd cleanup` 安全释放工作树磁盘空间

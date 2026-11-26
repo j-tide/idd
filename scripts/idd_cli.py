@@ -2044,6 +2044,52 @@ def _is_transient_gitlab_merge_error(forge: Any, exc: ForgeError) -> bool:
     return False
 
 
+def _require_gitlab_squash(forge: Any) -> None:
+    try:
+        settings = forge.repo_init(apply=False).get("settings") or {}
+    except ForgeError as exc:
+        raise IddError(f"无法核对 GitLab 项目合入设置，已停止合入。请先执行 `idd repo-init` 检查。\n{exc}") from exc
+    merge_method = settings.get("merge_method") or "未知"
+    squash_option = settings.get("squash_option") or "未知"
+    if merge_method != "ff" or squash_option != "always":
+        raise IddError(
+            f"GitLab 合入需要快进合并和强制 Squash，当前 merge_method={merge_method}、squash_option={squash_option}。\n"
+            "请在 GitLab 项目设置中启用，或由有权限的维护者执行 `idd repo-init --apply` 后重试。"
+        )
+
+
+def _fetch_target_tip(worktree: Path, base_branch: str) -> str:
+    run_cmd(["git", "fetch", "--no-tags", "origin", f"refs/heads/{base_branch}"], cwd=worktree)
+    return run_cmd(["git", "rev-parse", "--verify", "FETCH_HEAD^{commit}"], cwd=worktree).stdout.strip()
+
+
+def _gitlab_land_result(
+    forge: Any, change_num: int, worktree: Path, base_branch: str, before: str, *, auto: bool
+) -> str | None:
+    """Return the verified new target tip, or None while automatic merge is pending."""
+    try:
+        merged = forge.get_change(number=change_num, check=False) or {}
+        if auto and merged.get("state") == "OPEN":
+            return None
+        if merged.get("state") != "MERGED":
+            raise IddError("GitLab 尚未确认 MR 已合入。")
+
+        after = _fetch_target_tip(worktree, base_branch)
+        merged_oid = merged.get("squashCommitOid") or merged.get("mergeCommitOid") or merged.get("headRefOid")
+        parents = run_cmd(["git", "rev-list", "--parents", "-n", "1", after], cwd=worktree).stdout.split()
+        if parents != [after, before] or after != merged_oid:
+            count = run_cmd(["git", "rev-list", "--count", f"{before}..{after}"], cwd=worktree).stdout.strip()
+            raise IddError(
+                f"远端 `{base_branch}` 从 `{before[:12]}` 变为 `{after[:12]}`，区间有 {count} 条提交。"
+                "未能确认本次 MR 只新增一条直接后继提交。"
+            )
+        return after
+    except (ForgeError, IddError) as exc:
+        raise IddError(
+            f"未能验证 GitLab MR !{change_num} 的合入结果。GitLab 可能已经合入，请检查远端历史。\n{exc}"
+        ) from exc
+
+
 def _merge_squash_with_retry(
     forge: Any,
     change_num: int,
@@ -2056,6 +2102,8 @@ def _merge_squash_with_retry(
     """Execute squash merge with SHA lock and bounded retries on transient GitLab mergeability errors."""
     retry_delay = _get_float_env("IDD_LAND_MERGE_RETRY_DELAY", LAND_MERGE_RETRY_DELAY_SECONDS, minimum=0.0)
     for attempt in range(LAND_MERGE_MAX_RETRIES):
+        if forge.forge_type == "gitlab":
+            _require_gitlab_squash(forge)
         try:
             forge.merge_squash(change_num, title, body, auto=auto, expected_sha=expected_sha)
             return
@@ -2086,6 +2134,9 @@ def cmd_land(args: argparse.Namespace) -> int:
 
     change_num = change["number"]
     base_branch = change.get("baseRefName") or repo.default_branch
+    is_gitlab = forge.forge_type == "gitlab"
+    if is_gitlab:
+        _require_gitlab_squash(forge)
 
     if repo.has_origin:
         run_cmd(["git", "-C", str(wt_path), "fetch", "origin", base_branch])
@@ -2202,36 +2253,32 @@ def cmd_land(args: argparse.Namespace) -> int:
     fresh_change = _wait_for_change_head_sync(forge, change_num, local_head, change)
     overall = fresh_change.get("checks_overall") or "NONE"
 
-    if args.auto:
-        _merge_squash_with_retry(
-            forge,
-            change_num,
-            final_title,
-            summary,
-            auto=True,
-            expected_sha=local_head,
-        )
-        print(
-            f"已为 {forge.mr_label} {forge.mr_prefix}{change_num} 开启自动 Squash 合并（CI 通过后将直线合入 {base_branch}，保留需求分支）：{change.get('url', '')}\n"
-            "本地工作树与需求分支已保留；合并完成后如需释放工作树目录可执行 `idd cleanup`。"
-        )
-        return 0
-
-    if overall in ("FAIL", "PENDING"):
+    if not args.auto and overall in ("FAIL", "PENDING"):
         raise IddError(
             f"{forge.mr_label} {forge.mr_prefix}{change_num} 当前 CI 状态为 `{overall}`，暂不执行合入。\n"
             f"请运行 `idd ci {issue_num or change_num} --watch` 等待/排查 CI，或传 `--auto` 启用自动合入。",
             exit_code=3,
         )
 
+    before = _fetch_target_tip(wt_path, base_branch) if is_gitlab else ""
     _merge_squash_with_retry(
         forge,
         change_num,
         final_title,
         summary,
-        auto=False,
+        auto=args.auto,
         expected_sha=local_head,
     )
+    verified_tip = _gitlab_land_result(forge, change_num, wt_path, base_branch, before, auto=args.auto) if is_gitlab else None
+    if args.auto and verified_tip is None:
+        if is_gitlab:
+            print(f"已提交 MR !{change_num} 的自动 Squash 合入请求。合入结果待确认。{change.get('url', '')}")
+        else:
+            print(
+                f"已为 {forge.mr_label} {forge.mr_prefix}{change_num} 开启自动 Squash 合并（CI 通过后将直线合入 {base_branch}，保留需求分支）：{change.get('url', '')}"
+            )
+        print("本地工作树与需求分支已保留；合并完成后如需释放工作树目录可执行 `idd cleanup`。")
+        return 0
 
     acceptance_note = ""
     if issue_num is not None:
@@ -2272,6 +2319,8 @@ def cmd_land(args: argparse.Namespace) -> int:
         f"已通过 Squash Merge 直线合入 {forge.mr_label} {forge.mr_prefix}{change_num}（无 Merge 节点）：{change.get('url', '')}",
         f"已保留本地与远端分支：{branch}",
     ]
+    if verified_tip:
+        lines.append(f"已核对远端 `{base_branch}` 只新增一条提交 `{verified_tip[:12]}`。")
     if acceptance_note:
         lines.append(acceptance_note)
     if args.rm_worktree:

@@ -855,6 +855,8 @@ class GitLabForge:
             "headRefName": raw.get("source_branch", ""),
             "headRefOid": head_oid,
             "rawSha": raw_sha,
+            "squashCommitOid": raw.get("squash_commit_sha"),
+            "mergeCommitOid": raw.get("merge_commit_sha"),
             "detailedMergeStatus": detailed or legacy_merge_status,
             "isDraft": is_draft,
             "mergeStateStatus": merge_state,

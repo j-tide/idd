@@ -58,6 +58,8 @@ class MockGitLabState:
         self.merge_transient_failures: list[tuple[int, str]] = []
         self.merge_attempts: int = 0
         self.mr_get_calls: int = 0
+        self.merge_without_squash = False
+        self.defer_auto_merge = False
 
     def origin_sha(self, branch: str) -> str:
         proc = subprocess.run(
@@ -315,8 +317,15 @@ def make_handler(state: MockGitLabState):
                 if oid:
                     mr["sha"] = oid
                     mr.setdefault("diff_refs", {})["head_sha"] = oid
+                if body.get("merge_when_pipeline_succeeds") and state.defer_auto_merge:
+                    self._send_json(200, mr)
+                    return
                 msg = body.get("squash_commit_message") or mr["title"]
-                state.perform_ff_squash(mr, msg)
+                if state.merge_without_squash:
+                    subprocess.check_call(["git", "--git-dir", str(state.origin_dir), "update-ref",
+                                           f"refs/heads/{mr['target_branch']}", oid])
+                else:
+                    mr["squash_commit_sha"] = state.perform_ff_squash(mr, msg)
                 mr["state"] = "merged"
                 for m in re.finditer(r"Closes\s+#(\d+)", msg):
                     num = int(m.group(1))
@@ -682,7 +691,7 @@ class TestGitLabForge(unittest.TestCase):
             )
 
         run_idd("auth", "login", base_url, "--token", "glpat-secret")
-        run_idd("issue", "create", "--title", "Async land test", "--body", "Verify sha sync", "--label", "fix")
+        run_idd("issue", "create", "--title", "Land test", "--body", "## 验收标准\n\n- [ ] 确认合入", "--label", "fix")
         started = json.loads(run_idd("start", "1", "--slug", "async-land", "--json").stdout)
         wt = Path(started["worktree"])
         task_dir = wt / "TASK/1-async-land"
@@ -708,6 +717,7 @@ class TestGitLabForge(unittest.TestCase):
         run_idd("sync", "1")
         state.jobs[701]["status"] = "success"
         run_idd("mr", "1")
+        state.project_settings.update(merge_method="ff", squash_option="always")
         return root, repo, wt, state, server, env, run_idd
 
     def test_gitlab_land_waits_for_async_head_sha_refresh_and_retries_transient_merge(self) -> None:
@@ -730,8 +740,15 @@ class TestGitLabForge(unittest.TestCase):
                 state.merge_transient_failures = [(406, "Branch cannot be merged")]
                 state.mr_get_calls = 0
 
+                before = state.origin_sha("main")
                 land_res = run_idd("land", "1")
                 self.assertIn("已通过 Squash Merge 直线合入 MR !10", land_res.stdout)
+                after = state.origin_sha("main")
+                self.assertIn(f"已核对远端 `main` 只新增一条提交 `{after[:12]}`", land_res.stdout)
+                self.assertEqual(state.mrs[10]["squash_commit_sha"], after)
+                self.assertEqual(subprocess.check_output(
+                    ["git", "-C", str(repo), "rev-list", "--parents", "-n", "1", "main"], text=True
+                ).split(), [after, before])
                 self.assertGreaterEqual(state.mr_get_calls, 3)
                 self.assertEqual(state.merge_attempts, 2)
 
@@ -743,6 +760,70 @@ class TestGitLabForge(unittest.TestCase):
             finally:
                 server.shutdown()
                 server.server_close()
+
+    def test_gitlab_land_requires_fast_forward_and_mandatory_squash_before_side_effects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, wt, state, server, _, run_idd = self._setup_gitlab_mr_repo(tmp)
+            try:
+                before = state.origin_sha("main")
+                original_mr = state.mrs[10].copy()
+                for method, squash in (("ff", "never"), ("ff", "default_on"), ("merge", "always"), ("ff", None)):
+                    with self.subTest(method=method, squash=squash):
+                        state.project_settings.update(merge_method=method, squash_option=squash)
+                        land = run_idd("land", "1", check=False)
+                        self.assertNotEqual(land.returncode, 0)
+                        self.assertIn("强制 Squash", land.stderr)
+                        self.assertIn("idd repo-init --apply", land.stderr)
+                        self.assertTrue((wt / "TASK/1-async-land").is_dir())
+                        self.assertEqual(state.mrs[10], original_mr)
+                        self.assertEqual(state.merge_attempts, 0)
+                        self.assertEqual(state.origin_sha("main"), before)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_gitlab_land_rejects_success_response_when_five_commits_reach_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, repo, wt, state, server, _, run_idd = self._setup_gitlab_mr_repo(tmp)
+            try:
+                state.merge_without_squash = True
+                before = state.origin_sha("main")
+                for index in range(3):
+                    subprocess.run(["git", "-C", str(wt), "commit", "--allow-empty", "-m", f"fix: change {index}"],
+                                   check=True, capture_output=True)
+                land = run_idd("land", "1", check=False)
+                self.assertNotEqual(land.returncode, 0)
+                self.assertIn("区间有 5 条提交", land.stderr)
+                self.assertIn("GitLab 可能已经合入", land.stderr)
+                self.assertNotIn("已通过 Squash Merge", land.stdout)
+                self.assertEqual(state.mrs[10]["state"], "merged")
+                self.assertIn("- [ ] 确认合入", state.issues[1]["description"])
+                self.assertEqual(subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                                         text=True).strip(), before)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_gitlab_auto_land_reports_pending_or_verified_result(self) -> None:
+        for deferred in (True, False):
+            with self.subTest(deferred=deferred), tempfile.TemporaryDirectory() as tmp:
+                _, _, _, state, server, _, run_idd = self._setup_gitlab_mr_repo(tmp)
+                try:
+                    state.defer_auto_merge = deferred
+                    before = state.origin_sha("main")
+                    land = run_idd("land", "1", "--auto")
+                    self.assertTrue(state.last_merge_payload["merge_when_pipeline_succeeds"])
+                    if deferred:
+                        self.assertEqual(state.origin_sha("main"), before)
+                        self.assertIn("合入结果待确认", land.stdout)
+                        self.assertNotIn("已通过 Squash Merge", land.stdout)
+                        self.assertIn("- [ ] 确认合入", state.issues[1]["description"])
+                    else:
+                        self.assertIn("已核对远端 `main` 只新增一条提交", land.stdout)
+                        self.assertIn("- [x] 确认合入", state.issues[1]["description"])
+                finally:
+                    server.shutdown()
+                    server.server_close()
 
     def test_gitlab_land_fails_safely_when_head_sha_refresh_times_out(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
