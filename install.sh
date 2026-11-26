@@ -597,3 +597,5 @@ printf '\n  %s✓%s  %s已安装 %s%s\n\n' \
 printf '     %sidd status%s     %s查看全局 Issue / Worktree 进度%s\n' "$C_CYAN" "$C_RESET" "$C_DIM" "$C_RESET"
 printf '     %sidd board%s      %s启动本地 Web 实时监控看板%s\n' "$C_CYAN" "$C_RESET" "$C_DIM" "$C_RESET"
 printf '     %sidd uninstall%s  %s随时安全完全卸载%s\n\n' "$C_CYAN" "$C_RESET" "$C_DIM" "$C_RESET"
+printf '  %si%s  %s零侵入安装：未修改任何 AGENTS.md / 全局规则；如需设为默认工作流，见 README 可选模板。%s\n\n' \
+    "$C_CYAN" "$C_RESET" "$C_DIM" "$C_RESET"
