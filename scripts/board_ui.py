@@ -82,6 +82,17 @@ BOARD_HTML = r"""<!DOCTYPE html>
       --radius-sm: 8px;
       --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
       --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+      --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+      --ease-in-out: cubic-bezier(0.42, 0, 0.2, 1);
+      --ease-snap: cubic-bezier(0.2, 0, 0, 1);
+      --dur-press: 90ms;
+      --dur-micro: 150ms;
+      --dur-state: 220ms;
+      --dur-surface: 300ms;
+      --dur-exit: 180ms;
+      --dur-data: 360ms;
+      --shadow-pill: 0 1px 4px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.08);
     }
 
     html[data-theme="light"] {
@@ -119,6 +130,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       --skel-base: rgba(15, 23, 42, 0.065);
       --skel-shine: rgba(15, 23, 42, 0.13);
       --shadow-panel: 0 20px 50px rgba(15, 23, 42, 0.14);
+      --shadow-pill: 0 1px 3px rgba(15, 23, 42, 0.10), 0 0 0 1px rgba(15, 23, 42, 0.06);
     }
 
     * { box-sizing: border-box; }
@@ -160,7 +172,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       gap: 6px;
-      transition: width 0.16s ease, padding 0.16s ease;
+      transition: width var(--dur-surface) var(--ease-spring), padding var(--dur-surface) var(--ease-spring);
     }
     body.sidebar-collapsed .sidebar {
       width: 58px;
@@ -184,15 +196,20 @@ BOARD_HTML = r"""<!DOCTYPE html>
       height: 36px;
       padding: 0 10px;
       gap: 8px;
-      transition: border-color 0.14s, background 0.14s;
+      transition: border-color var(--dur-micro) var(--ease-snap), background var(--dur-micro) var(--ease-snap), box-shadow var(--dur-micro) var(--ease-snap);
     }
-    .sb-search:focus-within { border-color: var(--border-strong); }
+    .sb-search:focus-within {
+      border-color: var(--accent-ring);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
     .sb-search-ic {
       color: var(--text-dim);
       display: grid;
       place-items: center;
       flex-shrink: 0;
+      transition: color var(--dur-micro) var(--ease-snap);
     }
+    .sb-search:focus-within .sb-search-ic { color: var(--accent); }
     .sb-search input {
       width: 100%;
       min-width: 0;
@@ -213,6 +230,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       border-radius: 4px;
       border: 1px solid var(--border);
       flex-shrink: 0;
+      transition: opacity var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out);
     }
     .sb-search-clear {
       border: 0;
@@ -220,12 +238,34 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--text-faint);
       cursor: pointer;
       padding: 2px;
-      display: none;
+      display: grid;
       place-items: center;
+      border-radius: 5px;
+      opacity: 0;
+      transform: scale(0.8);
+      pointer-events: none;
+      width: 0;
+      overflow: hidden;
+      transition: opacity var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-snap);
     }
-    .sb-search.has-value .sb-search-clear { display: grid; }
+    .sb-search-clear:hover { color: var(--text); }
+    .sb-search.has-value .sb-search-clear {
+      opacity: 1;
+      transform: scale(1);
+      pointer-events: auto;
+      width: auto;
+      overflow: visible;
+    }
     .sb-search.has-value .sb-kbd,
-    .sb-search:focus-within .sb-kbd { display: none; }
+    .sb-search:focus-within .sb-kbd {
+      opacity: 0;
+      transform: scale(0.85);
+      pointer-events: none;
+      width: 0;
+      padding: 0;
+      border: 0;
+      overflow: hidden;
+    }
 
     body.sidebar-collapsed .sb-search {
       width: 38px;
@@ -263,10 +303,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
       justify-content: space-between;
       gap: 8px;
       cursor: pointer;
-      transition: background 0.12s, color 0.12s;
+      transition: background var(--dur-micro) var(--ease-snap), color var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
       position: relative;
     }
     .sb-item:hover { background: var(--bg-tile); color: var(--text); }
+    .sb-item:active { transform: scale(0.992); transition-duration: var(--dur-press); }
     .sb-item.active { background: var(--bg-tile-active); color: var(--text); }
     .sb-item-left {
       display: inline-flex;
@@ -336,10 +377,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: grid;
       place-items: center;
       position: relative;
-      transition: background 0.14s, color 0.14s, border-color 0.14s;
+      transition: background var(--dur-micro) var(--ease-snap), color var(--dur-micro) var(--ease-snap), border-color var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
     body.sidebar-collapsed .sb-tile { width: 38px; height: 38px; }
     .sb-tile:hover { background: var(--bg-tile-active); color: var(--text); }
+    .sb-tile:active { transform: scale(0.96); transition-duration: var(--dur-press); }
     .sb-tile.active {
       background: var(--bg-tile-active);
       border-color: var(--border-strong);
@@ -405,6 +447,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       flex-shrink: 0;
       display: inline-block;
       background: var(--text-faint);
+      transition: background var(--dur-state) var(--ease-in-out);
     }
     .status-dot.active { background: var(--green); }
     .status-dot.warm { background: var(--amber); }
@@ -491,9 +534,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
       cursor: pointer;
       display: grid;
       place-items: center;
-      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      transition: background var(--dur-micro) var(--ease-snap), color var(--dur-micro) var(--ease-snap), border-color var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
     .icon-btn:hover { background: var(--bg-tile); color: var(--text); border-color: var(--border); }
+    .icon-btn:active { transform: scale(0.95); transition-duration: var(--dur-press); }
 
     .ws-logo {
       width: 32px;
@@ -570,12 +614,15 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: inline-grid;
       place-items: center;
       color: var(--text-faint);
-      transition: background 0.12s, color 0.12s;
+      transition: background var(--dur-micro) var(--ease-snap), color var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
+    .sb-ext-link svg { transition: transform var(--dur-micro) var(--ease-snap); }
     .sb-ext-link:hover {
       background: var(--bg-card);
       color: var(--accent);
     }
+    .sb-ext-link:hover svg { transform: translate(1.5px, -1.5px); }
+    .sb-ext-link:active { transform: scale(0.94); transition-duration: var(--dur-press); }
 
     .forge-chip {
       display: inline-flex;
@@ -590,7 +637,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: var(--bg-inset);
       color: var(--text-dim);
       white-space: nowrap;
-      transition: background 0.12s, border-color 0.12s, color 0.12s;
+      transition: background var(--dur-micro) var(--ease-snap), border-color var(--dur-micro) var(--ease-snap), color var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
     .forge-chip.is-compact {
       padding: 1.5px 6.5px;
@@ -602,6 +649,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: var(--bg-tile-active);
       color: var(--text);
     }
+    a.forge-chip:active { transform: scale(0.97); transition-duration: var(--dur-press); }
     .forge-chip.is-github {
       background: rgba(243, 244, 246, 0.08);
       border-color: rgba(243, 244, 246, 0.16);
@@ -641,8 +689,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .forge-chip-plat { font-weight: 640; }
     .forge-chip-sep { opacity: 0.45; }
     .forge-chip-name { max-width: 165px; overflow: hidden; text-overflow: ellipsis; }
-    .forge-chip-ext { opacity: 0.68; display: inline-flex; align-items: center; }
-    a.forge-chip:hover .forge-chip-ext { opacity: 1; }
+    .forge-chip-ext { opacity: 0.68; display: inline-flex; align-items: center; transition: opacity var(--dur-micro) var(--ease-snap), transform var(--dur-micro) var(--ease-snap); }
+    a.forge-chip:hover .forge-chip-ext { opacity: 1; transform: translate(1.5px, -1.5px); }
 
     .btn-warn {
       background: var(--amber-soft);
@@ -692,9 +740,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
       align-items: center;
       gap: 6px;
       white-space: nowrap;
-      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      transition: background var(--dur-micro) var(--ease-snap), color var(--dur-micro) var(--ease-snap), border-color var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
-    .btn:hover { background: var(--bg-card-hover); color: var(--text); border-color: var(--border-strong); }
+    .btn:hover:not(:disabled) { background: var(--bg-card-hover); color: var(--text); border-color: var(--border-strong); }
+    .btn:active:not(:disabled) { transform: scale(0.97); transition-duration: var(--dur-press); }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
     .btn-sm { height: 26px; padding: 0 9px; font-size: 11.5px; border-radius: 7px; }
     .btn-xs { height: 24px; padding: 0 8px; font-size: 11px; border-radius: 6px; }
     .btn-icon-only { width: 26px; height: 26px; padding: 0; justify-content: center; }
@@ -704,15 +754,33 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--accent);
       font-weight: 580;
     }
-    .btn-primary:hover { background: rgba(96, 165, 250, 0.20); color: var(--accent); }
+    .btn-primary:hover:not(:disabled) { background: rgba(96, 165, 250, 0.20); color: var(--accent); }
     .btn.copied {
       background: var(--green-soft) !important;
       border-color: rgba(74, 222, 128, 0.35) !important;
       color: var(--green) !important;
     }
     #sync-btn { min-width: 88px; justify-content: center; }
-    .btn.spin svg { animation: spin 0.8s linear infinite; }
+    .btn.spin svg { animation: spin 0.85s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes checkDraw {
+      0% { stroke-dashoffset: 24; transform: scale(0.8); }
+      60% { stroke-dashoffset: 0; transform: scale(1.1); }
+      100% { stroke-dashoffset: 0; transform: scale(1); }
+    }
+    @keyframes iconPop {
+      0% { transform: scale(0.74); opacity: 0.55; }
+      65% { transform: scale(1.12); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .btn.copied.is-pop svg,
+    .copy-chip.copied.is-pop svg {
+      stroke-dasharray: 24;
+      animation: checkDraw 260ms var(--ease-out) both;
+    }
+    .icon-pop svg {
+      animation: iconPop 220ms var(--ease-spring) both;
+    }
 
     .status-cluster {
       position: relative;
@@ -750,9 +818,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
       cursor: pointer;
       display: inline-grid;
       place-items: center;
-      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      transition: background var(--dur-micro) var(--ease-snap), color var(--dur-micro) var(--ease-snap), border-color var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
     .cluster-icon-btn:hover { background: var(--bg-tile); color: var(--text); }
+    .cluster-icon-btn:active { transform: scale(0.93); transition-duration: var(--dur-press); }
     .cluster-icon-btn.is-paused {
       background: var(--amber-soft);
       border-color: rgba(251, 191, 36, 0.32);
@@ -778,23 +847,38 @@ BOARD_HTML = r"""<!DOCTYPE html>
       align-items: center;
       gap: 5px;
       white-space: nowrap;
-      transition: background 0.12s, color 0.12s, border-color 0.12s, opacity 0.12s;
+      transition: background var(--dur-micro) var(--ease-snap), color var(--dur-micro) var(--ease-snap), border-color var(--dur-micro) var(--ease-snap), opacity var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
     .forge-status-btn:hover,
     .forge-status-btn.is-open { background: var(--bg-tile); color: var(--text); }
     .forge-status-btn.is-open { border-color: var(--border-strong); }
+    .forge-status-btn:active { transform: scale(0.96); transition-duration: var(--dur-press); }
     .forge-status-btn.is-gitlab svg { color: #fb923c; }
     html[data-theme="light"] .forge-status-btn.is-gitlab svg { color: #c2410c; }
     .forge-status-dot {
+      position: relative;
       width: 6px;
       height: 6px;
       border-radius: 50%;
       flex-shrink: 0;
       background: var(--text-faint);
+      color: var(--text-faint);
+      transition: background var(--dur-state) var(--ease-in-out);
     }
-    .forge-status-btn.is-connected .forge-status-dot { background: var(--green); }
+    .forge-status-dot::after,
+    .dot-pulse::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .forge-status-btn.is-connected .forge-status-dot { background: var(--green); color: var(--green); }
     .forge-status-btn.is-connected { color: var(--text); }
-    .forge-status-btn.is-syncing .forge-status-dot { background: var(--accent); animation: pulse 1.2s infinite; }
+    .forge-status-btn.is-syncing .forge-status-dot { background: var(--accent); color: var(--accent); }
+    .forge-status-btn.is-syncing .forge-status-dot::after { animation: pulseRing 1.3s var(--ease-out) infinite; }
     .forge-status-btn.is-syncing { color: var(--text); }
     .forge-status-btn.is-auth .forge-status-dot,
     .forge-status-btn.is-partial .forge-status-dot { background: var(--amber); }
@@ -961,17 +1045,27 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: transparent;
       border-radius: 6px;
     }
-    .live-pill.is-live .dot-pulse { background: var(--green); animation: pulse 2s infinite; }
+    .live-pill.is-live .dot-pulse { background: var(--green); color: var(--green); }
+    .live-pill.is-live .dot-pulse::after { animation: pulseRing 2.1s var(--ease-out) infinite; }
     .live-pill.is-loading .dot-pulse,
-    .live-pill.is-syncing .dot-pulse { background: var(--accent); animation: pulse 1.2s infinite; }
+    .live-pill.is-syncing .dot-pulse { background: var(--accent); color: var(--accent); }
+    .live-pill.is-loading .dot-pulse::after,
+    .live-pill.is-syncing .dot-pulse::after { animation: pulseRing 1.3s var(--ease-out) infinite; }
     .live-pill.is-loading,
     .live-pill.is-syncing { border-color: var(--accent-ring); color: var(--text); }
-    .live-pill.is-local .dot-pulse { background: var(--text-faint); }
+    .live-pill.is-local .dot-pulse { background: var(--text-faint); color: var(--text-faint); }
     .live-pill.is-err { color: var(--red); border-color: rgba(248, 113, 113, 0.32); }
-    .dot-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.45; }
+    .dot-pulse {
+      position: relative;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--text-faint);
+      transition: background var(--dur-state) var(--ease-in-out);
+    }
+    @keyframes pulseRing {
+      0% { transform: scale(1); opacity: 0.55; }
+      70%, 100% { transform: scale(2.25); opacity: 0; }
     }
 
     /* Global Top Indeterminate Progress Bar */
@@ -985,7 +1079,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       pointer-events: none;
       overflow: hidden;
       opacity: 0;
-      transition: opacity 0.2s ease;
+      transition: opacity var(--dur-state) var(--ease-out);
     }
     .top-progress.is-active { opacity: 1; }
     .top-progress-bar {
@@ -996,14 +1090,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
       width: 38%;
       border-radius: 999px;
       background: linear-gradient(90deg, transparent, var(--accent), transparent);
-      animation: topProgressSlide 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+      animation: topProgressSlide 1.35s var(--ease-in-out) infinite;
     }
     @keyframes topProgressSlide {
-      0% { transform: translateX(-110%); }
-      100% { transform: translateX(360%); }
+      0% { transform: translate3d(-110%, 0, 0); }
+      100% { transform: translate3d(360%, 0, 0); }
     }
 
-    /* Skeleton Loading Primitives */
+    /* Skeleton Loading Primitives (GPU-Composited Sweep) */
     .init-status-left svg {
       animation: spin 1s linear infinite;
       flex-shrink: 0;
@@ -1035,21 +1129,29 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-size: 11.5px;
       color: var(--text-faint);
     }
+    .skel-block,
+    .seg-pill.skel {
+      position: relative;
+      overflow: hidden;
+      background: var(--skel-base);
+    }
     .skel-block {
       display: inline-block;
       border-radius: 6px;
-      background: linear-gradient(90deg, var(--skel-base) 25%, var(--skel-shine) 50%, var(--skel-base) 75%);
-      background-size: 220% 100%;
-      animation: skelShimmer 1.45s ease-in-out infinite;
     }
-    @keyframes skelShimmer {
-      0% { background-position: 200% 0; }
-      100% { background-position: -200% 0; }
+    .skel-block::after,
+    .seg-pill.skel::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent, var(--skel-shine), transparent);
+      transform: translate3d(-100%, 0, 0);
+      animation: skelSweep 1.35s var(--ease-in-out) infinite;
+      pointer-events: none;
     }
-    .seg-pill.skel {
-      background: linear-gradient(90deg, var(--skel-base) 25%, var(--skel-shine) 50%, var(--skel-base) 75%);
-      background-size: 220% 100%;
-      animation: skelShimmer 1.45s ease-in-out infinite;
+    @keyframes skelSweep {
+      0% { transform: translate3d(-100%, 0, 0); }
+      100% { transform: translate3d(100%, 0, 0); }
     }
     .sb-skel-row {
       height: 32px;
@@ -1069,9 +1171,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
       border-radius: var(--radius-row);
     }
     @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
       .top-progress-bar,
-      .skel-block,
-      .seg-pill.skel,
+      .skel-block::after,
+      .seg-pill.skel::after,
+      .dot-pulse::after,
+      .forge-status-dot::after,
       .init-status-left svg,
       .btn.spin svg {
         animation: none !important;
@@ -1098,10 +1207,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--text);
       display: flex;
       flex-direction: column;
-      transition: border-color 0.14s, background 0.14s;
+      transition: border-color var(--dur-micro) var(--ease-snap), background var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
     button.bento-metric { cursor: pointer; }
     button.bento-metric:hover { background: var(--bg-card-hover); border-color: var(--border-strong); }
+    button.bento-metric:active { transform: scale(0.992); transition-duration: var(--dur-press); }
     .bento-metric.is-filtered { border-color: var(--accent-ring); }
     .bento-metric.is-warn { border-color: var(--border); }
 
@@ -1149,6 +1259,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       height: 14px;
       border-radius: 3.5px;
       background: var(--bar-empty);
+      transition: background var(--dur-data) var(--ease-in-out);
     }
     .seg-pill.on { background: var(--bar-fill); }
     .seg-pill.dim { background: var(--bar-muted); }
@@ -1225,10 +1336,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
       padding: 10px 12px;
       border-radius: var(--radius-row);
       cursor: pointer;
-      transition: background 0.12s;
+      transition: background var(--dur-micro) var(--ease-snap), border-color var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
       border: 1px solid transparent;
     }
     .wt-row:hover { background: var(--bg-tile); }
+    .wt-row:active { transform: scale(0.994); transition-duration: var(--dur-press); }
     .wt-row.is-selected {
       background: var(--bg-row-active);
       border-color: var(--border-subtle);
@@ -1375,7 +1487,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-weight: 500;
       border-radius: 6px;
       cursor: pointer;
+      position: relative;
+      z-index: 1;
+      transition: color var(--dur-micro) var(--ease-snap), background var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
+    .console-tab:hover { color: var(--text); }
+    .console-tab:active { transform: scale(0.96); transition-duration: var(--dur-press); }
     .console-tab.active {
       background: var(--bg-tile-active);
       color: var(--text);
@@ -1394,6 +1511,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: var(--bg-inset);
       color: var(--text-dim);
       white-space: nowrap;
+      transition: background var(--dur-state) var(--ease-in-out), color var(--dur-state) var(--ease-in-out);
     }
     .tone-info { background: var(--accent-soft); color: var(--accent); }
     .tone-success { background: var(--green-soft); color: var(--green); }
@@ -1407,6 +1525,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-weight: 600;
       font-size: 12px;
       color: var(--text-dim);
+      transition: color var(--dur-micro) var(--ease-snap);
     }
     .id-link:hover { color: var(--accent); }
 
@@ -1430,9 +1549,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
       min-width: 0;
       cursor: pointer;
       text-align: left;
-      transition: background 0.12s, color 0.12s;
+      transition: background var(--dur-micro) var(--ease-snap), color var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
     .copy-chip:hover { background: var(--bg-tile-active); color: var(--text); }
+    .copy-chip:active { transform: scale(0.97); transition-duration: var(--dur-press); }
     .copy-chip.copied { background: var(--green-soft); color: var(--green); }
     .copy-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .copy-chip svg { flex-shrink: 0; }
@@ -1474,9 +1594,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
       border-radius: 12px;
       padding: 12px;
       cursor: pointer;
-      transition: border-color 0.14s, background 0.14s;
+      transition: border-color var(--dur-micro) var(--ease-snap), background var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
     .card:hover { border-color: var(--border-strong); background: var(--bg-card-hover); }
+    .card:active { transform: scale(0.992); transition-duration: var(--dur-press); }
     .card.is-selected { border-color: var(--accent-ring); }
     .card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .card-meta { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-faint); min-width: 0; }
@@ -1486,7 +1607,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .card-task span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .card-prog { display: flex; align-items: center; gap: 8px; }
     .progress-track { flex: 1; height: 4px; border-radius: 999px; background: var(--bar-empty); overflow: hidden; }
-    .progress-fill { height: 100%; background: var(--green); border-radius: 999px; }
+    .progress-fill {
+      height: 100%;
+      background: var(--green);
+      border-radius: 999px;
+      transition: width var(--dur-data) var(--ease-out);
+    }
     .prog-num { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
     .card-foot { margin-top: 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--text-faint); }
 
@@ -1528,7 +1654,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
       border-bottom: 1px solid var(--border);
     }
     .list-table td { padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; }
-    .list-table tbody tr { cursor: pointer; }
+    .list-table tbody tr {
+      cursor: pointer;
+      transition: background var(--dur-micro) var(--ease-snap);
+    }
     .list-table tbody tr:hover { background: var(--bg-tile); }
     .list-table tbody tr.is-selected { background: var(--bg-row-active); }
     .list-table tbody tr:last-child td { border-bottom: 0; }
@@ -1613,7 +1742,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: inline-flex;
       align-items: center;
       gap: 6px;
+      position: relative;
+      transition: color var(--dur-micro) var(--ease-snap), border-color var(--dur-state) var(--ease-spring), transform var(--dur-press) var(--ease-snap);
     }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn:active { transform: scale(0.97); transition-duration: var(--dur-press); }
     .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
     .tab-pane { margin-top: 12px; }
     .task-row { padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border-subtle); background: var(--bg-well); margin-bottom: 7px; }
@@ -1697,14 +1830,34 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-family: var(--mono);
       font-size: 12px;
       outline: none;
-      transition: border-color 0.14s;
+      transition: border-color var(--dur-micro) var(--ease-snap), box-shadow var(--dur-micro) var(--ease-snap);
     }
-    .token-input:focus { border-color: var(--accent); }
+    .token-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .token-input.is-invalid-shake {
+      border-color: var(--red);
+      box-shadow: 0 0 0 3px var(--red-soft);
+      animation: invalidShake 280ms var(--ease-out);
+    }
+    @keyframes invalidShake {
+      0%, 100% { transform: translateX(0); }
+      20% { transform: translateX(-5px); }
+      40% { transform: translateX(4px); }
+      60% { transform: translateX(-3px); }
+      80% { transform: translateX(2px); }
+    }
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translate3d(0, 4px, 0); }
+      to { opacity: 1; transform: translate3d(0, 0, 0); }
+    }
     .token-input::placeholder { font-family: var(--sans); color: var(--text-faint); }
     .auth-err-msg {
       font-size: 11.5px;
       color: var(--red);
       margin-top: 2px;
+      animation: fadeSlideIn var(--dur-micro) var(--ease-out) both;
     }
     .policy-check-row {
       display: flex;
@@ -1774,9 +1927,32 @@ BOARD_HTML = r"""<!DOCTYPE html>
       align-items: center;
       gap: 3px;
       flex-shrink: 0;
+      transition: background var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
     .sb-policy-btn:hover { background: rgba(251, 191, 36, 0.24); }
+    .sb-policy-btn:active:not(:disabled) { transform: scale(0.96); transition-duration: var(--dur-press); }
     .sb-policy-btn:disabled { opacity: 0.55; cursor: wait; }
+
+    /* Focus-visible Ring for Keyboard Navigation */
+    .btn:focus-visible,
+    .icon-btn:focus-visible,
+    .cluster-icon-btn:focus-visible,
+    .sb-tile:focus-visible,
+    .sb-item:focus-visible,
+    .forge-status-btn:focus-visible,
+    .wizard-nav-btn:focus-visible,
+    .console-tab:focus-visible,
+    .tab-btn:focus-visible,
+    .copy-chip:focus-visible,
+    .sb-policy-btn:focus-visible,
+    .ghost-link-btn:focus-visible,
+    .am-seg-btn:focus-visible,
+    .am-header-pill:focus-visible,
+    button.bento-metric:focus-visible,
+    a.forge-chip:focus-visible {
+      outline: 2px solid var(--accent-ring);
+      outline-offset: 2px;
+    }
 
     /* Auto-Merge Switch, 3-State Segmented Control & Header Pill */
     .am-toggle-switch {
@@ -1800,7 +1976,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: var(--bg-tile-active);
       border: 1px solid var(--border-strong);
       position: relative;
-      transition: background 0.16s ease, border-color 0.16s ease;
+      transition: background var(--dur-state) var(--ease-in-out), border-color var(--dur-state) var(--ease-in-out);
       flex-shrink: 0;
     }
     .am-toggle-track::after {
@@ -1812,7 +1988,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       height: 14px;
       border-radius: 50%;
       background: var(--text-dim);
-      transition: transform 0.16s ease, background 0.16s ease;
+      transition: transform var(--dur-state) var(--ease-spring), background var(--dur-state) var(--ease-in-out);
     }
     .am-toggle-switch input:checked + .am-toggle-track {
       background: var(--green-soft);
@@ -1822,6 +1998,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
       transform: translateX(14px);
       background: var(--green);
     }
+    .am-toggle-switch input:focus-visible + .am-toggle-track {
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
     .am-toggle-switch input:disabled + .am-toggle-track {
       opacity: 0.55;
       cursor: wait;
@@ -1830,6 +2009,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-size: 12px;
       font-weight: 600;
       color: var(--text-dim);
+      transition: color var(--dur-micro) var(--ease-in-out);
     }
     .am-toggle-switch input:checked ~ .am-toggle-label {
       color: var(--green);
@@ -1854,12 +2034,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-size: 11px;
       font-weight: 560;
       cursor: pointer;
-      transition: background 0.12s ease, color 0.12s ease;
+      transition: background var(--dur-micro) var(--ease-snap), color var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
     .am-seg-btn:hover:not(:disabled) {
       color: var(--text);
       background: var(--bg-tile);
     }
+    .am-seg-btn:active:not(:disabled) { transform: scale(0.96); transition-duration: var(--dur-press); }
     .am-seg-btn.active {
       background: var(--bg-tile-active);
       color: var(--text);
@@ -1891,13 +2072,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-size: 11.5px;
       font-weight: 560;
       cursor: pointer;
-      transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+      transition: background var(--dur-micro) var(--ease-snap), border-color var(--dur-micro) var(--ease-snap), color var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
     .am-header-pill:hover:not(:disabled) {
       background: var(--bg-tile-active);
       color: var(--text);
       border-color: var(--border-strong);
     }
+    .am-header-pill:active:not(:disabled) { transform: scale(0.97); transition-duration: var(--dur-press); }
     .am-header-pill.is-on {
       background: var(--green-soft);
       border-color: rgba(74, 222, 128, 0.36);
@@ -1908,15 +2090,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
       cursor: wait;
     }
     .am-dot {
+      position: relative;
       width: 7px;
       height: 7px;
       border-radius: 50%;
       background: var(--text-faint);
       flex-shrink: 0;
+      transition: background var(--dur-state) var(--ease-in-out);
     }
     .am-header-pill.is-on .am-dot {
       background: var(--green);
-      box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
     }
 
     /* Setup & Quickstart Onboarding Wizard Modal (Clean Minimalist Hierarchy) */
@@ -1985,9 +2168,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      transition: background 0.14s, color 0.14s, box-shadow 0.14s;
+      transition: background var(--dur-micro) var(--ease-snap), color var(--dur-micro) var(--ease-snap), box-shadow var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
     .wizard-nav-btn:hover { color: var(--text); }
+    .wizard-nav-btn:active { transform: scale(0.97); transition-duration: var(--dur-press); }
     .wizard-nav-btn.active {
       background: var(--bg-card);
       color: var(--text);
@@ -2003,6 +2187,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-weight: 700;
       background: var(--bg-tile-active);
       color: var(--text-dim);
+      transition: background var(--dur-state) var(--ease-in-out), color var(--dur-state) var(--ease-in-out);
     }
     .wizard-nav-btn.active .wizard-num {
       background: var(--accent);
@@ -2084,7 +2269,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-size: 12px;
       font-weight: 450;
       color: var(--text-dim);
-      transition: color 0.12s;
+      transition: color var(--dur-micro) var(--ease-snap);
     }
     .host-url-link:hover { color: var(--accent); }
     .host-repo-list {
@@ -2102,9 +2287,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: inline-flex;
       align-items: center;
       gap: 2px;
-      transition: color 0.12s;
+      transition: color var(--dur-micro) var(--ease-snap);
     }
+    .host-repo-link svg { transition: transform var(--dur-micro) var(--ease-snap); }
     .host-repo-link:hover { color: var(--accent); }
+    .host-repo-link:hover svg { transform: translate(1.5px, -1.5px); }
     .host-flow {
       padding-top: 13px;
       border-top: 1px solid var(--border-subtle);
@@ -2197,8 +2384,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: inline-flex;
       align-items: center;
       gap: 5px;
+      transition: color var(--dur-micro) var(--ease-snap), transform var(--dur-press) var(--ease-snap);
     }
     .ghost-link-btn:hover { color: var(--accent); }
+    .ghost-link-btn:active { transform: scale(0.97); transition-duration: var(--dur-press); }
     .guide-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2483,7 +2672,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
         initError: "",
         slowInit: false,
         lastClockStr: initialLang === "en" ? "Scanning..." : "扫描仓库...",
-        lastSig: ""
+        lastSig: "",
+        copiedFeedback: new Map(),
+        shakeFieldKey: "",
+        lastSyncBtnKey: "",
+        lastPauseBtnKey: "",
+        lastSetupBtnKey: ""
       };
 
       const SNAP_CACHE_KEY = "idd_board_last_snap:" + window.location.host;
@@ -2561,6 +2755,83 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }, 1800);
       }
 
+      function prefersReducedMotion() {
+        return Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      }
+
+      function preserveScroll(specs, fn) {
+        const saved = [];
+        for (const spec of specs) {
+          const el = spec.root ? spec.root.querySelector(spec.selector) : document.querySelector(spec.selector);
+          if (el) {
+            saved.push({ spec, top: el.scrollTop, left: el.scrollLeft });
+          }
+        }
+        fn();
+        for (const item of saved) {
+          const nextEl = item.spec.root ? item.spec.root.querySelector(item.spec.selector) : document.querySelector(item.spec.selector);
+          if (nextEl) {
+            nextEl.scrollTop = item.top;
+            nextEl.scrollLeft = item.left;
+          }
+        }
+      }
+
+      function getCopyFeedbackKey(btnEl) {
+        if (!btnEl) return "";
+        const val = btnEl.getAttribute("data-copy-val") || "";
+        const region = btnEl.closest("#inspector-panel")
+          ? "inspector"
+          : (btnEl.closest("#cockpit-console-slot") ? "console" : "main");
+        const row = btnEl.closest("[data-select-key],[data-open-key]");
+        const rowKey = row ? (row.getAttribute("data-select-key") || row.getAttribute("data-open-key") || "") : "";
+        return region + "|" + rowKey + "|" + val;
+      }
+
+      function setButtonCopiedVisual(btnEl, animatePop) {
+        if (!btnEl) return;
+        if (!btnEl.dataset.prevHtml) {
+          btnEl.dataset.prevHtml = btnEl.innerHTML;
+        }
+        btnEl.classList.add("copied");
+        btnEl.classList.toggle("is-pop", Boolean(animatePop));
+        btnEl.innerHTML = btnEl.classList.contains("btn-icon-only")
+          ? icon("check", 12)
+          : icon("check", 11) + "<span>" + tr("已复制", "Copied") + "</span>";
+      }
+
+      function applyCopiedStates(root) {
+        const scope = root || document;
+        const now = Date.now();
+        for (const [k, entry] of state.copiedFeedback.entries()) {
+          if (!entry || entry.expiresAt <= now) {
+            state.copiedFeedback.delete(k);
+          }
+        }
+        if (state.copiedFeedback.size === 0) return;
+        scope.querySelectorAll("[data-copy-val]").forEach((btn) => {
+          const key = getCopyFeedbackKey(btn);
+          if (state.copiedFeedback.has(key)) {
+            setButtonCopiedVisual(btn, false);
+          }
+        });
+      }
+
+      function triggerFieldShake(container, fieldKey) {
+        if (!container || !fieldKey) return;
+        const sel = fieldKey === "__custom__"
+          ? "#custom-host-token"
+          : '[data-token-draft="' + CSS.escape(fieldKey) + '"]';
+        const inp = container.querySelector(sel);
+        if (!inp) return;
+        if (!prefersReducedMotion()) {
+          inp.classList.remove("is-invalid-shake");
+          void inp.offsetWidth;
+          inp.classList.add("is-invalid-shake");
+        }
+        inp.focus();
+      }
+
       async function copyText(text, btnEl, toastMsg) {
         try {
           if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -2576,18 +2847,20 @@ BOARD_HTML = r"""<!DOCTYPE html>
             document.body.removeChild(ta);
           }
           if (btnEl) {
-            const prevHtml = btnEl.dataset.prevHtml || btnEl.innerHTML;
-            btnEl.dataset.prevHtml = prevHtml;
-            btnEl.classList.add("copied");
-            btnEl.innerHTML = btnEl.classList.contains("btn-icon-only")
-              ? icon("check", 12)
-              : icon("check", 11) + "<span>" + tr("已复制", "Copied") + "</span>";
-            clearTimeout(Number(btnEl.dataset.timerId || 0));
+            const copyKey = getCopyFeedbackKey(btnEl);
+            const prevEntry = state.copiedFeedback.get(copyKey);
+            if (prevEntry && prevEntry.timerId) clearTimeout(prevEntry.timerId);
+            setButtonCopiedVisual(btnEl, true);
             const tid = setTimeout(() => {
-              btnEl.classList.remove("copied");
-              btnEl.innerHTML = prevHtml;
+              state.copiedFeedback.delete(copyKey);
+              document.querySelectorAll("[data-copy-val]").forEach((cand) => {
+                if (getCopyFeedbackKey(cand) === copyKey && cand.classList.contains("copied")) {
+                  cand.classList.remove("copied", "is-pop");
+                  if (cand.dataset.prevHtml) cand.innerHTML = cand.dataset.prevHtml;
+                }
+              });
             }, 1400);
-            btnEl.dataset.timerId = String(tid);
+            state.copiedFeedback.set(copyKey, { timerId: tid, expiresAt: Date.now() + 1400 });
           }
           showToast(toastMsg || tr("已复制到剪贴板", "Copied to clipboard"));
         } catch (err) {
@@ -2906,20 +3179,34 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const unconfCnt = state.authStatus && typeof state.authStatus.unconfigured_count === "number"
             ? state.authStatus.unconfigured_count
             : authAlerts.length;
-          setupBtn.classList.toggle("btn-warn", unconfCnt > 0);
-          setupBtn.title = tr("打开连接配置与 IDD 四步上手指南", "Open GitHub/GitLab setup & IDD 4-step guide");
-          setupBtn.innerHTML =
-            icon(unconfCnt > 0 ? "key" : "compass", 12) +
-            "<span>" + (unconfCnt > 0 ? tr("配置令牌", "Setup Token") : tr("引导与配置", "Setup & Guide")) + "</span>" +
-            (unconfCnt > 0 ? '<span class="setup-badge-cnt num">' + unconfCnt + "</span>" : "");
+          const setupKey = unconfCnt + "|" + state.lang;
+          if (setupKey !== state.lastSetupBtnKey) {
+            state.lastSetupBtnKey = setupKey;
+            setupBtn.classList.toggle("btn-warn", unconfCnt > 0);
+            setupBtn.title = tr("打开连接配置与 IDD 四步上手指南", "Open GitHub/GitLab setup & IDD 4-step guide");
+            setupBtn.innerHTML =
+              icon(unconfCnt > 0 ? "key" : "compass", 12) +
+              "<span>" + (unconfCnt > 0 ? tr("配置令牌", "Setup Token") : tr("引导与配置", "Setup & Guide")) + "</span>" +
+              (unconfCnt > 0 ? '<span class="setup-badge-cnt num">' + unconfCnt + "</span>" : "");
+          }
         }
         const pauseBtn = document.getElementById("pause-btn");
         if (pauseBtn) {
-          const pLabel = state.paused ? tr("继续自动轮询", "Resume auto-refresh") : tr("暂停自动轮询", "Pause auto-refresh");
-          pauseBtn.classList.toggle("is-paused", Boolean(state.paused));
-          pauseBtn.title = pLabel;
-          pauseBtn.setAttribute("aria-label", pLabel);
-          pauseBtn.innerHTML = state.paused ? icon("play", 12) : icon("pause", 12);
+          const pauseKey = Boolean(state.paused) + "|" + state.lang;
+          if (pauseKey !== state.lastPauseBtnKey) {
+            const hadPrev = state.lastPauseBtnKey !== "";
+            state.lastPauseBtnKey = pauseKey;
+            const pLabel = state.paused ? tr("继续自动轮询", "Resume auto-refresh") : tr("暂停自动轮询", "Pause auto-refresh");
+            pauseBtn.classList.toggle("is-paused", Boolean(state.paused));
+            pauseBtn.title = pLabel;
+            pauseBtn.setAttribute("aria-label", pLabel);
+            pauseBtn.innerHTML = state.paused ? icon("play", 12) : icon("pause", 12);
+            if (hadPrev && !prefersReducedMotion()) {
+              pauseBtn.classList.remove("icon-pop");
+              void pauseBtn.offsetWidth;
+              pauseBtn.classList.add("icon-pop");
+            }
+          }
         }
         const isBusy =
           (!state.hasLiveSnapshot && !state.initError) ||
@@ -2928,11 +3215,15 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const syncBtn = document.getElementById("sync-btn");
         if (syncBtn) {
           const localOnly = Boolean(state.snapshot && state.snapshot.local_only);
-          syncBtn.classList.toggle("spin", isBusy);
-          syncBtn.title = localOnly
-            ? tr("当前为仅本地模式 (快捷键 r 刷新本地)", "Local-only mode (press r to refresh)")
-            : tr("同步 GitHub / GitLab 远端 (快捷键 r)", "Sync GitHub / GitLab (shortcut r)");
-          syncBtn.innerHTML = icon("refresh", 12) + "<span>" + (isBusy ? tr("同步中", "Syncing") : tr("同步远端", "Sync Forge")) + "</span>";
+          const syncKey = Boolean(isBusy) + "|" + localOnly + "|" + state.lang;
+          if (syncKey !== state.lastSyncBtnKey) {
+            state.lastSyncBtnKey = syncKey;
+            syncBtn.classList.toggle("spin", isBusy);
+            syncBtn.title = localOnly
+              ? tr("当前为仅本地模式 (快捷键 r 刷新本地)", "Local-only mode (press r to refresh)")
+              : tr("同步 GitHub / GitLab 远端 (快捷键 r)", "Sync GitHub / GitLab (shortcut r)");
+            syncBtn.innerHTML = icon("refresh", 12) + "<span>" + (isBusy ? tr("同步中", "Syncing") : tr("同步远端", "Sync Forge")) + "</span>";
+          }
         }
 
         renderForgeStatus(false);
@@ -3441,7 +3732,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             ? tr("自动初始化失败：" + ri.error + "（点击重试）", "Auto-init failed: " + ri.error + " (Click to retry)")
             : tr("点击一键初始化仓库线性 Squash 策略与提交模板", "Click to initialize linear Squash policy & commit templates");
           const policyBtn = isPolicyPending
-            ? '<button class="sb-policy-btn hide-collapsed" type="button" data-stop-repo="1" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" title="' + escapeHtml(policyTitle) + '" ' + (riBusy ? "disabled" : "") + ">" +
+            ? '<button class="sb-policy-btn hide-collapsed' + (riBusy ? " spin" : "") + '" type="button" data-stop-repo="1" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" title="' + escapeHtml(policyTitle) + '" ' + (riBusy ? "disabled" : "") + ">" +
                 (riBusy ? tr("执行中", "...") : (ri.error ? tr("重试", "Retry") : tr("待初始化", "Init"))) +
               "</button>"
             : "";
@@ -3521,7 +3812,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             const activePending = (activeRepo.forge === "github" || activeRepo.forge === "gitlab") && (ari.state === "pending" || ari.state === "prompted");
             const activeBusy = Boolean(state.repoInitRunning[activeRepo.repo_path]);
             const policyHdrBtn = activePending
-              ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="' + escapeHtml(activeRepo.repo_path) + '" ' + (activeBusy ? "disabled" : "") + ">" +
+              ? '<button class="btn btn-xs btn-warn' + (activeBusy ? " spin" : "") + '" type="button" data-apply-repo-init="' + escapeHtml(activeRepo.repo_path) + '" ' + (activeBusy ? "disabled" : "") + ">" +
                   icon(activeBusy ? "refresh" : "alertTriangle", 11) +
                   "<span>" + (activeBusy ? tr("初始化中...", "Applying...") : (ari.error ? tr("策略初始化失败 · 点击重试", "Policy Init Failed · Retry") : tr("待初始化策略 · 点击执行", "Policy Pending · Apply"))) + "</span>" +
                 "</button>"
@@ -4283,7 +4574,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
 
         if (state.viewMode === "cockpit") {
-          container.innerHTML = renderCockpitView(items);
+          preserveScroll([{ root: container, selector: ".console-well" }], () => {
+            container.innerHTML = renderCockpitView(items);
+          });
+          applyCopiedStates(container);
           return;
         }
 
@@ -4328,7 +4622,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             const gPending = (grp.forge === "github" || grp.forge === "gitlab") && (gri.state === "pending" || gri.state === "prompted");
             const gBusy = Boolean(state.repoInitRunning[grp.path]);
             const gPolicyBtn = gPending
-              ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="' + escapeHtml(grp.path) + '" ' + (gBusy ? "disabled" : "") + ">" +
+              ? '<button class="btn btn-xs btn-warn' + (gBusy ? " spin" : "") + '" type="button" data-apply-repo-init="' + escapeHtml(grp.path) + '" ' + (gBusy ? "disabled" : "") + ">" +
                   icon(gBusy ? "refresh" : "alertTriangle", 11) +
                   "<span>" + (gBusy ? tr("初始化中...", "Applying...") : (gri.error ? tr("初始化失败 · 重试", "Init Failed · Retry") : tr("待初始化策略 · 一键执行", "Policy Pending · Apply"))) + "</span>" +
                 "</button>"
@@ -4351,8 +4645,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
             );
           }).join("");
         } else {
-          container.innerHTML = renderListTable(items);
+          preserveScroll([{ root: container, selector: ".list-wrap" }], () => {
+            container.innerHTML = renderListTable(items);
+          });
         }
+        applyCopiedStates(container);
       }
 
       function renderInspector() {
@@ -4401,31 +4698,34 @@ BOARD_HTML = r"""<!DOCTYPE html>
               tasks.map((t) => '<div class="task-row"><div class="task-row-top"><span>' + escapeHtml(t.title || t.id) + '</span><span class="badge">' + escapeHtml(t.status || "planned") + "</span></div></div>").join("");
         }
 
-        panel.innerHTML =
-          '<div class="inspector-hdr">' +
-            '<div style="min-width:0;flex:1;">' +
-              '<div class="card-meta" style="flex-wrap:wrap;">' + renderRepoChip(item, { compact: true }) + renderIdHtml(item) + '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" + renderPrimaryLinkBtn(item, "btn-xs", { stopOpen: false }) + "</div>" +
-              '<h2 class="inspector-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</h2>" +
+        preserveScroll([{ root: panel, selector: ".inspector-body" }], () => {
+          panel.innerHTML =
+            '<div class="inspector-hdr">' +
+              '<div style="min-width:0;flex:1;">' +
+                '<div class="card-meta" style="flex-wrap:wrap;">' + renderRepoChip(item, { compact: true }) + renderIdHtml(item) + '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" + renderPrimaryLinkBtn(item, "btn-xs", { stopOpen: false }) + "</div>" +
+                '<h2 class="inspector-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</h2>" +
+              "</div>" +
+              '<button class="icon-btn" id="inspector-close-btn" type="button" aria-label="' + tr("关闭详情", "Close details") + '">' + icon("x", 15) + "</button>" +
             "</div>" +
-            '<button class="icon-btn" id="inspector-close-btn" type="button" aria-label="' + tr("关闭详情", "Close details") + '">' + icon("x", 15) + "</button>" +
-          "</div>" +
-          '<div class="inspector-body">' +
-            '<div class="meta-grid">' +
-              '<div class="meta-row"><span class="meta-key">' + tr("分支", "Branch") + '</span><span class="meta-val">' + escapeHtml(item.branch || "—") + "</span>" + (item.branch ? '<button class="btn btn-xs btn-icon-only" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" type="button">' + icon("copy", 11) + "</button>" : "") + "</div>" +
-              '<div class="meta-row"><span class="meta-key">' + tr("工作目录", "Worktree") + '</span><span class="meta-val">' + escapeHtml(item.worktree || tr("尚未创建", "Not created")) + "</span>" + (item.worktree ? '<button class="btn btn-xs btn-icon-only" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" type="button">' + icon("copy", 11) + "</button>" : "") + "</div>" +
-            "</div>" +
-            '<div class="handoff-box">' +
-              '<div class="handoff-box-hdr"><span>' + tr("跨 Agent 接力提示词", "Cross-Agent Handoff Prompt") + '</span><button class="btn btn-xs btn-primary" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" type="button">' + icon("copy", 11) + "<span>" + tr("复制接力词", "Copy Handoff") + "</span></button></div>" +
-              '<pre class="handoff-pre">' + escapeHtml(handoffPrompt) + "</pre>" +
-            "</div>" +
-            (startCmd ? '<div class="cmd-box"><div class="cmd-box-hdr"><span>' + tr("终端快捷命令", "Quick CLI Command") + '</span><button class="btn btn-xs" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="' + tr("已复制接手命令", "Copied command") + '" type="button">' + icon("copy", 11) + "<span>" + tr("复制", "Copy") + '</span></button></div><div class="cmd-code">$ ' + escapeHtml(startCmd) + "</div></div>" : "") +
-            '<div class="tabs">' +
-              '<button class="tab-btn ' + (state.inspectorTab === "tasks" ? "active" : "") + '" data-inspector-tab="tasks" type="button">' + tr("任务步骤", "Steps") + " (" + tasks.length + ")</button>" +
-              '<button class="tab-btn ' + (state.inspectorTab === "files" ? "active" : "") + '" data-inspector-tab="files" type="button">' + tr("改动文件", "Files") + " (" + ((pulse && pulse.dirty_count) || 0) + ")</button>" +
-            "</div>" +
-            '<div class="tab-pane">' + tabBody + "</div>" +
-          "</div>";
+            '<div class="inspector-body">' +
+              '<div class="meta-grid">' +
+                '<div class="meta-row"><span class="meta-key">' + tr("分支", "Branch") + '</span><span class="meta-val">' + escapeHtml(item.branch || "—") + "</span>" + (item.branch ? '<button class="btn btn-xs btn-icon-only" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" type="button">' + icon("copy", 11) + "</button>" : "") + "</div>" +
+                '<div class="meta-row"><span class="meta-key">' + tr("工作目录", "Worktree") + '</span><span class="meta-val">' + escapeHtml(item.worktree || tr("尚未创建", "Not created")) + "</span>" + (item.worktree ? '<button class="btn btn-xs btn-icon-only" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" type="button">' + icon("copy", 11) + "</button>" : "") + "</div>" +
+              "</div>" +
+              '<div class="handoff-box">' +
+                '<div class="handoff-box-hdr"><span>' + tr("跨 Agent 接力提示词", "Cross-Agent Handoff Prompt") + '</span><button class="btn btn-xs btn-primary" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" type="button">' + icon("copy", 11) + "<span>" + tr("复制接力词", "Copy Handoff") + "</span></button></div>" +
+                '<pre class="handoff-pre">' + escapeHtml(handoffPrompt) + "</pre>" +
+              "</div>" +
+              (startCmd ? '<div class="cmd-box"><div class="cmd-box-hdr"><span>' + tr("终端快捷命令", "Quick CLI Command") + '</span><button class="btn btn-xs" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="' + tr("已复制接手命令", "Copied command") + '" type="button">' + icon("copy", 11) + "<span>" + tr("复制", "Copy") + '</span></button></div><div class="cmd-code">$ ' + escapeHtml(startCmd) + "</div></div>" : "") +
+              '<div class="tabs">' +
+                '<button class="tab-btn ' + (state.inspectorTab === "tasks" ? "active" : "") + '" data-inspector-tab="tasks" type="button">' + tr("任务步骤", "Steps") + " (" + tasks.length + ")</button>" +
+                '<button class="tab-btn ' + (state.inspectorTab === "files" ? "active" : "") + '" data-inspector-tab="files" type="button">' + tr("改动文件", "Files") + " (" + ((pulse && pulse.dirty_count) || 0) + ")</button>" +
+              "</div>" +
+              '<div class="tab-pane">' + tabBody + "</div>" +
+            "</div>";
+        });
 
+        applyCopiedStates(panel);
         overlay.classList.add("open");
         panel.classList.add("open");
         overlay.setAttribute("aria-hidden", "false");
@@ -4511,6 +4811,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const cleaned = String(rawToken || "").trim();
         if (!cleaned) {
           state.authErrors[targetHost] = tr("请先粘贴生成的个人访问令牌（Token）", "Please paste your Personal Access Token first");
+          state.shakeFieldKey = targetHost;
           state.lastTopAlertsSig = "";
           renderTopAlerts(state.snapshot);
           if (state.setupOpen) renderSetupModal();
@@ -4565,6 +4866,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           return true;
         } catch (err) {
           state.authErrors[targetHost] = err.message || tr("保存失败", "Failed to save token");
+          state.shakeFieldKey = targetHost;
           state.lastTopAlertsSig = "";
           renderTopAlerts(state.snapshot);
           if (state.setupOpen) renderSetupModal();
@@ -4897,7 +5199,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                         '<div class="flow-step-hdr"><span class="flow-step-title"><span class="flow-num">2</span><span>' + tr("粘贴令牌并点击保存（自动验证，无需敲命令）", "Paste Token & Save (Verified Automatically)") + "</span></span></div>" +
                         '<div class="auth-alert-form">' +
                           '<input class="token-input" type="password" autocomplete="off" data-token-draft="' + escapeHtml(target) + '" value="' + escapeHtml(draftVal) + '" placeholder="' + escapeHtml(isGitLab ? tr("粘贴 GitLab 令牌（如 glpat-...）", "Paste GitLab Token (glpat-...)") : tr("粘贴 GitHub 令牌（如 ghp_... 或 github_pat_...）", "Paste GitHub Token (ghp_...)")) + '" />' +
-                          '<button class="btn btn-primary" style="height:34px;padding:0 14px;" type="button" data-save-host="' + escapeHtml(target) + '" data-save-forge="' + escapeHtml(h.forge) + '" ' + (saving ? "disabled" : "") + ">" +
+                          '<button class="btn btn-primary' + (saving ? " spin" : "") + '" style="height:34px;padding:0 14px;" type="button" data-save-host="' + escapeHtml(target) + '" data-save-forge="' + escapeHtml(h.forge) + '" ' + (saving ? "disabled" : "") + ">" +
                             icon(saving ? "refresh" : "check", 12) +
                             "<span>" + (saving ? tr("验证中...", "Verifying...") : tr("保存并连接", "Save & Connect")) + "</span>" +
                           "</button>" +
@@ -4910,6 +5212,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
               }).join("");
 
           const customErr = state.authErrors.__custom__ || "";
+          const customSaving = Boolean(state.authSavingHost && state.authSavingHost === state.customHostUrl.trim());
           const customForm = state.showCustomHostForm
             ? '<div class="host-card">' +
                 '<div class="host-card-hdr"><strong style="font-size:13px;">' + tr("添加其他 GitLab / GitHub 主机", "Add Custom GitLab / GitHub Host") + '</strong><button class="btn btn-xs" type="button" data-toggle-custom-host="0">' + tr("收起", "Close") + "</button></div>" +
@@ -4921,7 +5224,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 renderPermissionGuide(state.customHostForge) +
                 '<div class="auth-alert-form">' +
                   '<input class="token-input" type="password" id="custom-host-token" value="' + escapeHtml(state.customHostToken) + '" placeholder="' + escapeHtml(tr("粘贴生成的访问令牌 (Token)", "Paste Personal Access Token")) + '" />' +
-                  '<button class="btn btn-primary" style="height:34px;padding:0 14px;" type="button" id="custom-host-save-btn">' + icon("check", 12) + "<span>" + tr("保存并连接", "Save & Connect") + "</span></button>" +
+                  '<button class="btn btn-primary' + (customSaving ? " spin" : "") + '" style="height:34px;padding:0 14px;" type="button" id="custom-host-save-btn" ' + (customSaving ? "disabled" : "") + ">" + icon(customSaving ? "refresh" : "check", 12) + "<span>" + (customSaving ? tr("验证中...", "Verifying...") : tr("保存并连接", "Save & Connect")) + "</span></button>" +
                 "</div>" +
                 (customErr ? '<div class="auth-err-msg">' + escapeHtml(customErr) + "</div>" : "") +
               "</div>"
@@ -4945,7 +5248,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 '<div class="policy-section-hdr">' +
                   '<span style="font-size:12.5px;font-weight:600;color:var(--text);">' + tr("仓库合入策略与模板状态", "Repository Merge Policy & Templates") + "</span>" +
                   (pendingRemoteRepos.length > 1
-                    ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="__all__" ' + (allBusy ? "disabled" : "") + ">" +
+                    ? '<button class="btn btn-xs btn-warn' + (allBusy ? " spin" : "") + '" type="button" data-apply-repo-init="__all__" ' + (allBusy ? "disabled" : "") + ">" +
                         icon(allBusy ? "refresh" : "check", 11) +
                         "<span>" + (allBusy ? tr("全部初始化中...", "Applying All...") : tr("全部一键初始化 (" + pendingRemoteRepos.length + ")", "Apply All (" + pendingRemoteRepos.length + ")")) + "</span>" +
                       "</button>"
@@ -4966,11 +5269,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
                     const badgeHtml = isAligned
                       ? '<span class="badge tone-success">' + icon("check", 11) + "<span>" + tr("已对齐", "Aligned") + "</span></span>"
                       : (isPending
-                          ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
+                          ? '<button class="btn btn-xs btn-warn' + (busy ? " spin" : "") + '" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
                               icon(busy ? "refresh" : "alertTriangle", 11) +
                               "<span>" + (busy ? tr("初始化中...", "Applying...") : (errText ? tr("重试初始化", "Retry Init") : tr("一键初始化", "Apply Now"))) + "</span>" +
                             "</button>"
-                          : '<button class="btn btn-xs" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
+                          : '<button class="btn btn-xs' + (busy ? " spin" : "") + '" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
                               icon("refresh", 11) +
                               "<span>" + (busy ? tr("检测中...", "Checking...") : tr("立即初始化", "Initialize")) + "</span>" +
                             "</button>");
@@ -5061,22 +5364,29 @@ BOARD_HTML = r"""<!DOCTYPE html>
           : '<button class="btn" type="button" data-setup-tab="auth"><span>' + tr("← 返回平台配置", "<- Back to Setup") + "</span></button>" +
             '<button class="btn btn-primary" type="button" id="finish-onboarding-btn">' + icon("check", 13) + "<span>" + tr("开始使用看板", "Finish & Enter Board") + "</span></button>";
 
-        modal.innerHTML =
-          '<div class="setup-hdr">' +
-            '<div class="setup-topbar">' +
-              '<div class="wizard-nav">' +
-                '<button class="wizard-nav-btn ' + (!isGuide ? "active" : "") + '" type="button" data-setup-tab="auth"><span class="wizard-num">1</span><span>' + tr("连接代码平台", "Connect Platforms") + "</span></button>" +
-                '<button class="wizard-nav-btn ' + (isGuide ? "active" : "") + '" type="button" data-setup-tab="guide"><span class="wizard-num">2</span><span>' + tr("四步上手流程", "4-Step Workflow") + "</span></button>" +
+        preserveScroll([{ root: modal, selector: ".setup-body" }], () => {
+          modal.innerHTML =
+            '<div class="setup-hdr">' +
+              '<div class="setup-topbar">' +
+                '<div class="wizard-nav">' +
+                  '<button class="wizard-nav-btn ' + (!isGuide ? "active" : "") + '" type="button" data-setup-tab="auth"><span class="wizard-num">1</span><span>' + tr("连接代码平台", "Connect Platforms") + "</span></button>" +
+                  '<button class="wizard-nav-btn ' + (isGuide ? "active" : "") + '" type="button" data-setup-tab="guide"><span class="wizard-num">2</span><span>' + tr("四步上手流程", "4-Step Workflow") + "</span></button>" +
+                "</div>" +
+                '<button class="icon-btn" type="button" data-setup-close="1" aria-label="' + tr("关闭", "Close") + '">' + icon("x", 16) + "</button>" +
               "</div>" +
-              '<button class="icon-btn" type="button" data-setup-close="1" aria-label="' + tr("关闭", "Close") + '">' + icon("x", 16) + "</button>" +
+              "<div>" +
+                '<h2 class="setup-title">' + hdrTitle + "</h2>" +
+                '<p class="setup-sub">' + hdrSub + "</p>" +
+              "</div>" +
             "</div>" +
-            "<div>" +
-              '<h2 class="setup-title">' + hdrTitle + "</h2>" +
-              '<p class="setup-sub">' + hdrSub + "</p>" +
-            "</div>" +
-          "</div>" +
-          '<div class="setup-body">' + bodyHtml + "</div>" +
-          '<div class="setup-ftr">' + ftrHtml + "</div>";
+            '<div class="setup-body">' + bodyHtml + "</div>" +
+            '<div class="setup-ftr">' + ftrHtml + "</div>";
+        });
+        if (state.shakeFieldKey) {
+          const fk = state.shakeFieldKey;
+          state.shakeFieldKey = "";
+          triggerFieldShake(modal, fk);
+        }
       }
 
       function renderTopAlerts(snap) {
@@ -5144,7 +5454,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
               '<div class="auth-alert-form">' +
                 (tokenHref ? '<a class="btn btn-sm" href="' + escapeHtml(tokenHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 12) + "<span>" + tr("1. 去生成令牌 (勾选 " + scopeName + ")", "1. Create Token (" + scopeName + ")") + "</span></a>" : "") +
                 '<input class="token-input" type="password" autocomplete="off" data-token-draft="' + escapeHtml(target) + '" value="' + escapeHtml(draftVal) + '" placeholder="' + escapeHtml(tr("2. 粘贴生成的令牌，点右侧直接保存（无需执行命令）", "2. Paste token here and click Save")) + '" />' +
-                '<button class="btn btn-sm btn-primary" style="height:34px;padding:0 14px;" type="button" data-save-host="' + escapeHtml(target) + '" data-save-forge="' + escapeHtml(fg) + '" ' + (saving ? "disabled" : "") + ">" +
+                '<button class="btn btn-sm btn-primary' + (saving ? " spin" : "") + '" style="height:34px;padding:0 14px;" type="button" data-save-host="' + escapeHtml(target) + '" data-save-forge="' + escapeHtml(fg) + '" ' + (saving ? "disabled" : "") + ">" +
                   icon(saving ? "refresh" : "check", 12) +
                   "<span>" + (saving ? tr("验证中...", "Verifying...") : tr("保存并连接", "Save & Connect")) + "</span>" +
                 "</button>" +
@@ -5172,7 +5482,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                   "</div>" +
                   '<div style="font-size:11px;color:' + (errMsg ? "var(--red)" : "var(--text-dim)") + ';margin-top:2px;word-break:break-word;">' + escapeHtml(detail) + "</div>" +
                 "</div>" +
-                '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
+                '<button class="btn btn-xs btn-warn' + (busy ? " spin" : "") + '" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
                   icon(busy ? "refresh" : "check", 11) +
                   "<span>" + (busy ? tr("初始化中...", "Applying...") : (errMsg ? tr("重试初始化", "Retry") : tr("立即初始化", "Apply Now"))) + "</span>" +
                 "</button>" +
@@ -5190,7 +5500,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 "</div>" +
                 '<div style="display:inline-flex;align-items:center;gap:6px;">' +
                   (pendingPolicyRepos.length > 1
-                    ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="__all__" ' + (allBusy ? "disabled" : "") + ">" +
+                    ? '<button class="btn btn-xs btn-warn' + (allBusy ? " spin" : "") + '" type="button" data-apply-repo-init="__all__" ' + (allBusy ? "disabled" : "") + ">" +
                         icon(allBusy ? "refresh" : "check", 11) +
                         "<span>" + (allBusy ? tr("全部初始化中...", "Applying...") : tr("全部一键初始化", "Apply All")) + "</span>" +
                       "</button>"
@@ -5203,6 +5513,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
 
         topWrap.innerHTML = authHtml + policyHtml;
+        if (!state.setupOpen && state.shakeFieldKey) {
+          const fk = state.shakeFieldKey;
+          state.shakeFieldKey = "";
+          triggerFieldShake(topWrap, fk);
+        }
       }
 
       function computeRenderSignature(snap) {
@@ -5565,6 +5880,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const rawTok = (state.customHostToken || "").trim();
           if (!rawUrl || !rawTok) {
             state.authErrors.__custom__ = tr("请填写主机地址并粘贴访问令牌", "Please enter both host URL and token");
+            state.shakeFieldKey = "__custom__";
             renderSetupModal();
             return;
           }
@@ -5573,6 +5889,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const ok = await submitHostToken(rawUrl, state.customHostForge, rawTok, false);
           if (!ok && state.authErrors[rawUrl]) {
             state.authErrors.__custom__ = state.authErrors[rawUrl];
+            state.shakeFieldKey = "__custom__";
             renderSetupModal();
           }
         }
