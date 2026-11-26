@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+from http.server import ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
+import urllib.error
 import urllib.request
 
+from test_gitlab_forge import MockGitLabState, make_handler
 from test_idd_cli import FAKE_GH_SCRIPT, IDD_BIN, SCRIPTS_DIR, parse_skill_version
 
 if str(SCRIPTS_DIR) not in sys.path:
@@ -316,8 +321,30 @@ class TestMonitorAndBoard(unittest.TestCase):
                     self.assertNotIn("backlog", html.lower())
                     self.assertNotIn("__IDD_VERSION__", html)
                     self.assertNotIn("cdn.", html.lower())
-                    for element_id in ("view-cockpit", "view-kanban", "view-repos", "view-list", "inspector-panel", "lang-btn"):
+                    for element_id in (
+                        "top-progress",
+                        "sync-banner-wrap",
+                        "view-cockpit",
+                        "view-kanban",
+                        "view-repos",
+                        "view-list",
+                        "inspector-panel",
+                        "lang-btn",
+                        "setup-btn",
+                        "top-alerts-wrap",
+                        "setup-modal",
+                    ):
                         self.assertIn(element_id, html)
+                    for loading_token in (
+                        "renderLoadingState",
+                        "renderMainSkeleton",
+                        "idd_board_last_snap:",
+                        "data-retry-init",
+                        "初始化中",
+                        "Initializing",
+                    ):
+                        self.assertIn(loading_token, html)
+                    self.assertIn("forge-chip", html)
                     node_bin = shutil.which("node")
                     if node_bin:
                         script_match = re.search(r"<script>(.*)</script>", html, re.S)
@@ -512,6 +539,178 @@ class TestMonitorAndBoard(unittest.TestCase):
                 self.assertEqual(set(alert["repos"]), {"svc-one", "svc-two"})
                 self.assertIn("idd auth login http://127.0.0.1:19999 --token", alert["login_cmd"])
                 self.assertEqual(len(sync_snap["warnings"]), 1)
+
+    def test_board_in_browser_token_save_status_logout_and_repo_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            empty_dir = root / "workspace"
+            empty_dir.mkdir()
+            repo, origin, _, env = _create_repo_harness(root / "gl", "demo", cfg)
+
+            gl_state = MockGitLabState(origin)
+            gl_server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(gl_state))
+            gl_port = gl_server.server_address[1]
+            gl_base = f"http://127.0.0.1:{gl_port}"
+            gl_state.base_url = gl_base
+            gl_state.issues[1] = {
+                "iid": 1,
+                "title": "浏览器直接填令牌同步 GitLab Issue",
+                "description": "Zero CLI login",
+                "labels": ["feat"],
+                "state": "opened",
+                "web_url": f"{gl_base}/dept/sub/demo/-/issues/1",
+            }
+            threading.Thread(target=gl_server.serve_forever, daemon=True).start()
+
+            subprocess.run(
+                ["git", "-C", str(repo), "remote", "set-url", "origin", f"{gl_base}/dept/sub/demo.git"],
+                check=True,
+            )
+
+            sub_env = dict(env)
+            sub_env["PYTHONUNBUFFERED"] = "1"
+            sub_env.pop("GITLAB_TOKEN", None)
+            sub_env.pop("GITLAB_PRIVATE_TOKEN", None)
+            sub_env.pop("IDD_FORGE", None)
+            with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
+                monitor.register_repo(repo)
+
+            proc = subprocess.Popen(
+                [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--no-open"],
+                cwd=str(empty_dir),
+                env=sub_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                assert proc.stdout is not None
+                banner = proc.stdout.readline().strip()
+                m = re.search(r"(http://127\.0\.0\.1:\d+)", banner)
+                self.assertIsNotNone(m, f"Unexpected board startup output: {banner!r}")
+                base_url = m.group(1)
+
+                # 1. Wait briefly for initial async probe to record missing GitLab token alert
+                deadline = time.monotonic() + 4.0
+                snap_before = {}
+                while time.monotonic() < deadline:
+                    with urllib.request.urlopen(f"{base_url}/api/snapshot", timeout=5) as resp:
+                        snap_before = json.loads(resp.read().decode("utf-8"))
+                    if not snap_before.get("forge_syncing") and snap_before.get("auth_alerts"):
+                        break
+                    time.sleep(0.05)
+                self.assertEqual(len(snap_before.get("auth_alerts", [])), 1)
+                self.assertEqual(snap_before["repos"][0]["forge"], "gitlab")
+                self.assertEqual(snap_before["repos"][0]["repo_url"], f"{gl_base}/dept/sub/demo")
+
+                with urllib.request.urlopen(f"{base_url}/api/auth/status", timeout=5) as resp:
+                    st_before = json.loads(resp.read().decode("utf-8"))
+                    self.assertGreaterEqual(st_before["unconfigured_count"], 1)
+                    gl_host = next(h for h in st_before["hosts"] if h["api_base"] == gl_base)
+                    self.assertFalse(gl_host["configured"])
+                    self.assertEqual(gl_host["repos"][0]["url"], f"{gl_base}/dept/sub/demo")
+
+                # 2. Reject missing CSRF header or foreign Origin
+                req_no_csrf = urllib.request.Request(
+                    f"{base_url}/api/auth/save",
+                    data=json.dumps({"host": gl_base, "token": "glpat-secret"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as csrf_err:
+                    urllib.request.urlopen(req_no_csrf, timeout=5)
+                self.assertEqual(csrf_err.exception.code, 403)
+                csrf_err.exception.close()
+
+                req_bad_origin = urllib.request.Request(
+                    f"{base_url}/api/auth/save",
+                    data=json.dumps({"host": gl_base, "token": "glpat-secret"}).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-IDD-Request": "1",
+                        "Origin": "https://evil.example.com",
+                    },
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as origin_err:
+                    urllib.request.urlopen(req_bad_origin, timeout=5)
+                self.assertEqual(origin_err.exception.code, 403)
+                origin_err.exception.close()
+
+                # 3. Reject invalid token via live `/api/v4/user` verification
+                req_bad_tok = urllib.request.Request(
+                    f"{base_url}/api/auth/save",
+                    data=json.dumps({"host": gl_base, "token": "wrong-token"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as bad_tok_err:
+                    urllib.request.urlopen(req_bad_tok, timeout=5)
+                self.assertEqual(bad_tok_err.exception.code, 400)
+                bad_payload = json.loads(bad_tok_err.exception.read().decode("utf-8"))
+                self.assertFalse(bad_payload["ok"])
+                bad_tok_err.exception.close()
+
+                # 4. Save valid token directly via browser API -> verifies, writes 0600 hosts.json, and loads Issues!
+                req_save = urllib.request.Request(
+                    f"{base_url}/api/auth/save",
+                    data=json.dumps({"host": gl_base, "token": "glpat-secret", "forge": "gitlab"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_save, timeout=5) as resp:
+                    self.assertEqual(resp.status, 200)
+                    saved = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(saved["ok"])
+                    self.assertEqual(saved["username"], "j.tide")
+
+                hosts_path = cfg / "hosts.json"
+                self.assertTrue(hosts_path.is_file())
+                self.assertEqual(stat.S_IMODE(hosts_path.stat().st_mode), 0o600)
+
+                with urllib.request.urlopen(f"{base_url}/api/auth/status", timeout=5) as resp:
+                    raw_status_txt = resp.read().decode("utf-8")
+                    self.assertNotIn("glpat-secret", raw_status_txt)
+                    st_after = json.loads(raw_status_txt)
+                    gl_after = next(h for h in st_after["hosts"] if h["api_base"] == gl_base)
+                    self.assertTrue(gl_after["configured"])
+                    self.assertEqual(gl_after["username"], "j.tide")
+
+                with urllib.request.urlopen(f"{base_url}/api/snapshot", timeout=5) as resp:
+                    snap_after = json.loads(resp.read().decode("utf-8"))
+                    self.assertEqual(snap_after["auth_alerts"], [])
+                    self.assertEqual(len(snap_after["issues"]), 1)
+                    issue1 = snap_after["issues"][0]
+                    self.assertEqual(issue1["issue_number"], 1)
+                    self.assertEqual(issue1["forge_type"], "gitlab")
+                    self.assertEqual(issue1["repo_url"], f"{gl_base}/dept/sub/demo")
+                    self.assertEqual(issue1["url"], f"{gl_base}/dept/sub/demo/-/issues/1")
+
+                # 5. Logout removes saved host token cleanly
+                req_logout = urllib.request.Request(
+                    f"{base_url}/api/auth/logout",
+                    data=json.dumps({"host": gl_base}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_logout, timeout=5) as resp:
+                    out_logout = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(out_logout["ok"])
+                    self.assertTrue(out_logout["removed"])
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                if proc.stdout is not None:
+                    proc.stdout.close()
+                if proc.stderr is not None:
+                    proc.stderr.close()
+                gl_server.shutdown()
+                gl_server.server_close()
 
 
 if __name__ == "__main__":

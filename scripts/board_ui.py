@@ -19,6 +19,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from forge import (  # noqa: E402
+    ForgeError,
+    load_hosts_config,
+    normalize_host_input,
+    save_hosts_config,
+    verify_host_token,
+)
 import monitor  # noqa: E402
 from version import get_version  # noqa: E402
 
@@ -62,6 +69,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
       --bar-empty: rgba(255, 255, 255, 0.08);
       --bar-fill: #f3f4f6;
       --bar-muted: rgba(255, 255, 255, 0.28);
+      --skel-base: rgba(255, 255, 255, 0.06);
+      --skel-shine: rgba(255, 255, 255, 0.12);
       --shadow-panel: 0 20px 50px rgba(0, 0, 0, 0.55);
       --radius-shell: 16px;
       --radius-card: 16px;
@@ -103,6 +112,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
       --bar-empty: rgba(15, 23, 42, 0.08);
       --bar-fill: #111827;
       --bar-muted: rgba(15, 23, 42, 0.26);
+      --skel-base: rgba(15, 23, 42, 0.065);
+      --skel-shine: rgba(15, 23, 42, 0.13);
       --shadow-panel: 0 20px 50px rgba(15, 23, 42, 0.14);
     }
 
@@ -486,6 +497,26 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--text);
       flex-shrink: 0;
     }
+    .ws-logo.is-github {
+      background: rgba(243, 244, 246, 0.10);
+      border-color: rgba(243, 244, 246, 0.18);
+      color: var(--text);
+    }
+    html[data-theme="light"] .ws-logo.is-github {
+      background: rgba(15, 23, 42, 0.08);
+      border-color: rgba(15, 23, 42, 0.16);
+      color: #111827;
+    }
+    .ws-logo.is-gitlab {
+      background: rgba(251, 146, 60, 0.15);
+      border-color: rgba(251, 146, 60, 0.32);
+      color: #fb923c;
+    }
+    html[data-theme="light"] .ws-logo.is-gitlab {
+      background: rgba(234, 88, 12, 0.10);
+      border-color: rgba(234, 88, 12, 0.28);
+      color: #c2410c;
+    }
     .ws-title {
       margin: 0;
       font-size: 17px;
@@ -503,6 +534,130 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: var(--bg-tile);
       border: 1px solid var(--border-subtle);
       flex-shrink: 0;
+    }
+
+    .sb-right-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex-shrink: 0;
+    }
+    .sb-plat-tag {
+      font-size: 9.5px;
+      font-weight: 650;
+      padding: 1px 4.5px;
+      border-radius: 4px;
+      line-height: 1.35;
+      letter-spacing: 0.02em;
+    }
+    .sb-plat-tag.is-github { background: rgba(243, 244, 246, 0.09); color: var(--text-dim); }
+    html[data-theme="light"] .sb-plat-tag.is-github { background: rgba(15, 23, 42, 0.07); color: #374151; }
+    .sb-plat-tag.is-gitlab { background: rgba(251, 146, 60, 0.15); color: #fb923c; }
+    html[data-theme="light"] .sb-plat-tag.is-gitlab { background: rgba(234, 88, 12, 0.10); color: #c2410c; }
+    .sb-ext-link {
+      width: 21px;
+      height: 21px;
+      border-radius: 6px;
+      display: inline-grid;
+      place-items: center;
+      color: var(--text-faint);
+      transition: background 0.12s, color 0.12s;
+    }
+    .sb-ext-link:hover {
+      background: var(--bg-card);
+      color: var(--accent);
+    }
+
+    .forge-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border-radius: 7px;
+      font-size: 11px;
+      font-weight: 560;
+      line-height: 1.38;
+      border: 1px solid var(--border);
+      background: var(--bg-inset);
+      color: var(--text-dim);
+      white-space: nowrap;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .forge-chip.is-compact {
+      padding: 1.5px 6.5px;
+      font-size: 10.5px;
+      gap: 4px;
+    }
+    a.forge-chip:hover {
+      border-color: var(--border-strong);
+      background: var(--bg-tile-active);
+      color: var(--text);
+    }
+    .forge-chip.is-github {
+      background: rgba(243, 244, 246, 0.08);
+      border-color: rgba(243, 244, 246, 0.16);
+      color: #f3f4f6;
+    }
+    html[data-theme="light"] .forge-chip.is-github {
+      background: rgba(15, 23, 42, 0.06);
+      border-color: rgba(15, 23, 42, 0.15);
+      color: #111827;
+    }
+    a.forge-chip.is-github:hover {
+      background: rgba(243, 244, 246, 0.15);
+      border-color: rgba(243, 244, 246, 0.32);
+    }
+    html[data-theme="light"] a.forge-chip.is-github:hover {
+      background: rgba(15, 23, 42, 0.11);
+      border-color: rgba(15, 23, 42, 0.28);
+    }
+    .forge-chip.is-gitlab {
+      background: rgba(251, 146, 60, 0.13);
+      border-color: rgba(251, 146, 60, 0.30);
+      color: #fb923c;
+    }
+    html[data-theme="light"] .forge-chip.is-gitlab {
+      background: rgba(234, 88, 12, 0.09);
+      border-color: rgba(234, 88, 12, 0.26);
+      color: #c2410c;
+    }
+    a.forge-chip.is-gitlab:hover {
+      background: rgba(251, 146, 60, 0.22);
+      border-color: rgba(251, 146, 60, 0.48);
+    }
+    html[data-theme="light"] a.forge-chip.is-gitlab:hover {
+      background: rgba(234, 88, 12, 0.15);
+      border-color: rgba(234, 88, 12, 0.42);
+    }
+    .forge-chip-plat { font-weight: 640; }
+    .forge-chip-sep { opacity: 0.45; }
+    .forge-chip-name { max-width: 165px; overflow: hidden; text-overflow: ellipsis; }
+    .forge-chip-ext { opacity: 0.68; display: inline-flex; align-items: center; }
+    a.forge-chip:hover .forge-chip-ext { opacity: 1; }
+
+    .btn-warn {
+      background: var(--amber-soft);
+      border-color: rgba(251, 191, 36, 0.38);
+      color: var(--amber);
+      font-weight: 580;
+    }
+    .btn-warn:hover {
+      background: rgba(251, 191, 36, 0.20);
+      border-color: rgba(251, 191, 36, 0.55);
+      color: var(--amber);
+    }
+    .setup-badge-cnt {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      border-radius: 999px;
+      font-size: 10.5px;
+      font-weight: 700;
+      background: var(--amber);
+      color: #111827;
     }
 
     .ws-controls {
@@ -562,11 +717,140 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--text-dim);
     }
     .live-pill.is-live .dot-pulse { background: var(--green); animation: pulse 2s infinite; }
+    .live-pill.is-loading .dot-pulse,
+    .live-pill.is-syncing .dot-pulse { background: var(--accent); animation: pulse 1.2s infinite; }
+    .live-pill.is-loading,
+    .live-pill.is-syncing { border-color: var(--accent-ring); color: var(--text); }
     .live-pill.is-err { color: var(--red); border-color: rgba(248, 113, 113, 0.32); }
     .dot-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.45; }
+    }
+
+    /* Global Top Indeterminate Progress Bar */
+    .top-progress {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2.5px;
+      z-index: 120;
+      pointer-events: none;
+      overflow: hidden;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    .top-progress.is-active { opacity: 1; }
+    .top-progress-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 38%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      animation: topProgressSlide 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    }
+    @keyframes topProgressSlide {
+      0% { transform: translateX(-110%); }
+      100% { transform: translateX(360%); }
+    }
+
+    /* Sync Banner & Skeleton Loading Primitives */
+    .sync-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 13px;
+      border-radius: 11px;
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-ring);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .sync-banner-left {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .sync-banner-left svg,
+    .init-status-left svg {
+      animation: spin 1s linear infinite;
+      flex-shrink: 0;
+    }
+    .init-status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 10px 14px;
+      border-radius: 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      font-size: 12.5px;
+      margin-bottom: 12px;
+    }
+    .init-status-left {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+      font-weight: 550;
+      min-width: 0;
+    }
+    .init-status-left svg { color: var(--accent); }
+    .init-status-sub {
+      font-size: 11.5px;
+      color: var(--text-faint);
+    }
+    .skel-block {
+      display: inline-block;
+      border-radius: 6px;
+      background: linear-gradient(90deg, var(--skel-base) 25%, var(--skel-shine) 50%, var(--skel-base) 75%);
+      background-size: 220% 100%;
+      animation: skelShimmer 1.45s ease-in-out infinite;
+    }
+    @keyframes skelShimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .seg-pill.skel {
+      background: linear-gradient(90deg, var(--skel-base) 25%, var(--skel-shine) 50%, var(--skel-base) 75%);
+      background-size: 220% 100%;
+      animation: skelShimmer 1.45s ease-in-out infinite;
+    }
+    .sb-skel-row {
+      height: 32px;
+      padding: 0 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .bento-metric.is-skel { cursor: default; pointer-events: none; }
+    .skel-wt-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 11px 12px;
+      border-radius: var(--radius-row);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .top-progress-bar,
+      .skel-block,
+      .seg-pill.skel,
+      .sync-banner-left svg,
+      .init-status-left svg,
+      .btn.spin svg {
+        animation: none !important;
+      }
     }
 
     /* Bento Telemetry Row (Matches Uptime / CPU Reference Cards) */
@@ -1126,6 +1410,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
       border-radius: var(--radius-card);
       color: var(--text-dim);
     }
+    .empty-state.is-error {
+      border-style: solid;
+      border-color: rgba(248, 113, 113, 0.36);
+    }
     .empty-cmds { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 14px; }
     .empty-cmd { font-family: var(--mono); font-size: 12px; padding: 5px 10px; border-radius: 7px; background: var(--bg-well); border: 1px solid var(--border); color: var(--text); }
 
@@ -1142,17 +1430,22 @@ BOARD_HTML = r"""<!DOCTYPE html>
     }
     .auth-alert-box {
       display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 12px 16px;
+      border-radius: 12px;
+      border: 1px solid var(--border-strong);
+      border-left: 3px solid var(--amber);
+      background: var(--bg-card);
+      color: var(--text);
+      font-size: 12.5px;
+    }
+    .auth-alert-top {
+      display: flex;
       align-items: center;
       justify-content: space-between;
       flex-wrap: wrap;
       gap: 10px;
-      padding: 10px 14px;
-      margin-bottom: 8px;
-      border-radius: 12px;
-      border: 1px solid var(--accent-ring);
-      background: var(--accent-soft);
-      color: var(--text);
-      font-size: 12px;
     }
     .auth-alert-main {
       display: flex;
@@ -1161,11 +1454,367 @@ BOARD_HTML = r"""<!DOCTYPE html>
       flex-wrap: wrap;
       min-width: 0;
     }
-    .auth-alert-actions {
+    .auth-alert-form {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .token-input {
+      flex: 1;
+      min-width: 220px;
+      height: 34px;
+      padding: 0 11px;
+      border-radius: 8px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-card);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.14s;
+    }
+    .token-input:focus { border-color: var(--accent); }
+    .token-input::placeholder { font-family: var(--sans); color: var(--text-faint); }
+    .auth-err-msg {
+      font-size: 11.5px;
+      color: var(--red);
+      margin-top: 2px;
+    }
+
+    /* Setup & Quickstart Onboarding Wizard Modal (Clean Minimalist Hierarchy) */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 85;
+      background: rgba(0, 0, 0, 0.56);
+      backdrop-filter: blur(4px);
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.16s ease;
+    }
+    .modal-overlay.open { opacity: 1; pointer-events: auto; }
+    .setup-modal {
+      width: 640px;
+      max-width: 100%;
+      max-height: calc(100vh - 32px);
+      background: var(--bg-card);
+      border: 1px solid var(--border-strong);
+      border-radius: 18px;
+      box-shadow: var(--shadow-panel);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transform: translateY(8px) scale(0.985);
+      transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .modal-overlay.open .setup-modal { transform: translateY(0) scale(1); }
+    .setup-hdr {
+      padding: 18px 22px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .setup-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .wizard-nav {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px;
+      border-radius: 10px;
+      background: var(--bg-well);
+      border: 1px solid var(--border-subtle);
+    }
+    .wizard-nav-btn {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--text-dim);
+      border-radius: 7px;
+      height: 28px;
+      padding: 0 12px;
+      font-size: 12px;
+      font-weight: 560;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
       gap: 6px;
+      transition: background 0.14s, color 0.14s, box-shadow 0.14s;
+    }
+    .wizard-nav-btn:hover { color: var(--text); }
+    .wizard-nav-btn.active {
+      background: var(--bg-card);
+      color: var(--text);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
+    }
+    .wizard-num {
+      width: 17px;
+      height: 17px;
+      border-radius: 50%;
+      display: inline-grid;
+      place-items: center;
+      font-size: 10.5px;
+      font-weight: 700;
+      background: var(--bg-tile-active);
+      color: var(--text-dim);
+    }
+    .wizard-nav-btn.active .wizard-num {
+      background: var(--accent);
+      color: #ffffff;
+    }
+    .setup-title { margin: 0; font-size: 16.5px; font-weight: 650; letter-spacing: -0.02em; }
+    .setup-sub { margin: 3px 0 0; font-size: 12.5px; color: var(--text-dim); }
+    .setup-body {
+      padding: 18px 22px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .host-card {
+      padding: 16px 18px;
+      border-radius: 14px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-well);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .host-card-hdr {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .host-ident {
+      display: flex;
+      align-items: flex-start;
+      gap: 11px;
+      min-width: 0;
+    }
+    .host-ic {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      display: grid;
+      place-items: center;
       flex-shrink: 0;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .host-ic.sm { width: 26px; height: 26px; border-radius: 7px; }
+    .host-ic.is-gitlab {
+      background: rgba(251, 146, 60, 0.14);
+      border-color: rgba(251, 146, 60, 0.28);
+      color: #fb923c;
+    }
+    html[data-theme="light"] .host-ic.is-gitlab {
+      background: rgba(234, 88, 12, 0.09);
+      border-color: rgba(234, 88, 12, 0.24);
+      color: #c2410c;
+    }
+    .host-ic.is-github {
+      background: rgba(243, 244, 246, 0.09);
+      border-color: rgba(243, 244, 246, 0.18);
+      color: var(--text);
+    }
+    html[data-theme="light"] .host-ic.is-github {
+      background: rgba(15, 23, 42, 0.06);
+      border-color: rgba(15, 23, 42, 0.14);
+      color: #111827;
+    }
+    .host-title-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 13.5px;
+      font-weight: 620;
+      color: var(--text);
+    }
+    .host-url-link {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 450;
+      color: var(--text-dim);
+      transition: color 0.12s;
+    }
+    .host-url-link:hover { color: var(--accent); }
+    .host-repo-list {
+      margin-top: 4px;
+      font-size: 11.5px;
+      color: var(--text-faint);
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+    }
+    .host-repo-link {
+      color: var(--text-dim);
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      transition: color 0.12s;
+    }
+    .host-repo-link:hover { color: var(--accent); }
+    .host-flow {
+      padding-top: 13px;
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 13px;
+    }
+    .flow-step {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .flow-step-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .flow-step-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .flow-num {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      display: inline-grid;
+      place-items: center;
+      font-size: 10.5px;
+      font-weight: 700;
+      background: var(--accent-soft);
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+    .perm-box {
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text-dim);
+    }
+    .perm-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      color: var(--text);
+    }
+    .perm-tag {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      font-weight: 650;
+      padding: 1px 7px;
+      border-radius: 6px;
+      background: var(--green-soft);
+      color: var(--green);
+      border: 1px solid rgba(74, 222, 128, 0.28);
+    }
+    .perm-sub { font-size: 11.5px; color: var(--text-faint); }
+    .host-row-compact {
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--bg-well);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .ghost-link-btn {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--text-dim);
+      font-size: 12px;
+      font-weight: 550;
+      padding: 4px 2px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .ghost-link-btn:hover { color: var(--accent); }
+    .guide-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    @media (max-width: 660px) {
+      .guide-grid { grid-template-columns: 1fr; }
+    }
+    .guide-card {
+      padding: 14px 16px;
+      border-radius: 13px;
+      border: 1px solid var(--border);
+      background: var(--bg-well);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .guide-card-top {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .guide-step-pill {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 6px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+    .guide-card-title { font-size: 13.5px; font-weight: 620; color: var(--text); }
+    .guide-card-desc { font-size: 12px; color: var(--text-dim); line-height: 1.55; }
+    .guide-card-cmd {
+      margin-top: auto;
+      padding: 6px 9px;
+      border-radius: 7px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      font-family: var(--mono);
+      font-size: 11.2px;
+      color: var(--accent);
+    }
+    .setup-ftr {
+      padding: 13px 22px;
+      border-top: 1px solid var(--border-subtle);
+      background: var(--bg-sidebar);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
     }
 
     .footer {
@@ -1201,6 +1850,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
   </style>
 </head>
 <body>
+  <div id="top-progress" class="top-progress is-active" aria-hidden="true"><div class="top-progress-bar"></div></div>
   <div class="app-shell">
     <!-- Left Inset Sidebar -->
     <aside class="sidebar" aria-label="工作区侧栏">
@@ -1231,10 +1881,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
       </div>
 
       <div class="sb-divider"></div>
-      <div class="sb-section-hdr hide-collapsed"><span id="sb-hdr-repos">仓库</span><span id="sb-repo-cnt" class="num">0</span></div>
+      <div class="sb-section-hdr hide-collapsed"><span id="sb-hdr-repos">仓库</span><span id="sb-repo-cnt" class="num">…</span></div>
       <div id="repo-pills" class="sb-list"></div>
 
-      <div class="sb-section-hdr hide-collapsed" style="margin-top:4px;"><span id="sb-hdr-wts">并行目录</span><span id="sb-wt-cnt" class="num">0</span></div>
+      <div class="sb-section-hdr hide-collapsed" style="margin-top:4px;"><span id="sb-hdr-wts">并行目录</span><span id="sb-wt-cnt" class="num">…</span></div>
       <div id="wt-rail-list" class="sb-list"></div>
 
       <div class="sb-footer">
@@ -1254,23 +1904,33 @@ BOARD_HTML = r"""<!DOCTYPE html>
               <line x1="9" y1="3" x2="9" y2="21"></line>
             </svg>
           </button>
-          <div id="ws-logo" class="ws-logo" aria-hidden="true"></div>
+          <div id="ws-logo" class="ws-logo" aria-hidden="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path>
+            </svg>
+          </div>
           <h1 id="ws-title" class="ws-title">全局工作区</h1>
           <span id="scope-tag" class="ws-scope">全局</span>
+          <span id="ws-repo-link-wrap"></span>
         </div>
         <div class="ws-controls">
-          <span id="conn-tag" class="live-pill is-live">
+          <span id="conn-tag" class="live-pill is-loading">
             <span class="dot-pulse"></span>
-            <span>实时</span>
+            <span>初始化中</span>
             <span class="sep">·</span>
-            <span id="updated-tag" class="num">同步中...</span>
+            <span id="updated-tag" class="num">扫描仓库...</span>
           </span>
+          <button id="setup-btn" class="btn" type="button"></button>
           <button id="pause-btn" class="btn" type="button"></button>
           <button id="sync-btn" class="btn btn-primary" type="button" title="快捷键 r"></button>
         </div>
       </header>
 
+      <div id="top-alerts-wrap"></div>
+
       <section id="kpis" class="telemetry-grid"></section>
+
+      <div id="sync-banner-wrap"></div>
 
       <main id="main-content"></main>
       <div id="warnings-wrap"></div>
@@ -1278,6 +1938,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <div id="setup-modal-overlay" class="modal-overlay" aria-hidden="true">
+    <div id="setup-modal" class="setup-modal" role="dialog" aria-modal="true" aria-label="初始化配置与上手指南"></div>
+  </div>
   <div id="inspector-overlay" class="inspector-overlay" aria-hidden="true"></div>
   <aside id="inspector-panel" class="inspector-panel" aria-label="任务详情抽屉" aria-hidden="true"></aside>
   <div id="toast-wrap" class="toast-wrap" aria-live="polite"></div>
@@ -1285,8 +1948,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
   <script>
     (function () {
       const ICONS = {
-        github: '<path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>',
-        gitlab: '<path d="m22 13.29-3.33-10a.42.42 0 0 0-.14-.18.38.38 0 0 0-.22-.11.39.39 0 0 0-.23.07.42.42 0 0 0-.14.18l-2.26 6.67H8.32L6.1 3.26a.42.42 0 0 0-.1-.18.38.38 0 0 0-.26-.08.39.39 0 0 0-.23.07.42.42 0 0 0-.14.18L2 13.29a.74.74 0 0 0 .27.83L12 21l9.69-6.88a.71.71 0 0 0 .31-.83Z"/>',
+        github: '<path fill="currentColor" stroke="none" d="M12 .5C5.65.5.5 5.65.5 12c0 5.09 3.29 9.4 7.86 10.92.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11.02 11.02 0 0 1 5.78 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.59.24 2.76.12 3.05.74.81 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.26 5.67.41.36.78 1.06.78 2.14 0 1.55-.01 2.79-.01 3.17 0 .31.21.68.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/>',
+        gitlab: '<path fill="currentColor" stroke="none" d="m22.4 13.76-1.48-4.55-2.95-9.05a.52.52 0 0 0-.98 0L14.28 8.45H9.72L7.01.16a.52.52 0 0 0-.98 0L3.08 9.21 1.6 13.76a1.06 1.06 0 0 0 .38 1.18L12 21.8l10.02-6.86a1.06 1.06 0 0 0 .38-1.18Z"/>',
+        compass: '<circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>',
+        key: '<path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
         terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
         branch: '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
         pr: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/>',
@@ -1343,14 +2008,59 @@ BOARD_HTML = r"""<!DOCTYPE html>
         selectedKey: null,
         inspectedKey: null,
         didAutoInspect: false,
+        didCheckOnboarding: false,
+        setupOpen: false,
+        setupTab: "auth",
+        authStatus: null,
+        authSavingHost: "",
+        authErrors: {},
+        tokenDrafts: {},
+        editingHosts: {},
+        showCustomHostForm: false,
+        customHostForge: "gitlab",
+        customHostUrl: "",
+        customHostToken: "",
+        lastTopAlertsSig: "",
         consoleTab: "handoff",
         inspectorTab: "tasks",
         timerId: null,
         quickSyncTimerId: null,
+        slowInitTimerId: null,
         fetching: false,
-        lastClockStr: initialLang === "en" ? "Syncing..." : "同步中...",
+        manualRefreshing: false,
+        hasLiveSnapshot: false,
+        fromCache: false,
+        initError: "",
+        slowInit: false,
+        lastClockStr: initialLang === "en" ? "Scanning..." : "扫描仓库...",
         lastSig: ""
       };
+
+      const SNAP_CACHE_KEY = "idd_board_last_snap:" + window.location.host;
+
+      function loadCachedSnapshot() {
+        if (urlParams.get("nocache") === "1") return null;
+        try {
+          const raw = sessionStorage.getItem(SNAP_CACHE_KEY);
+          if (!raw) return null;
+          const parsed = JSON.parse(raw);
+          if (parsed && Array.isArray(parsed.repos) && Array.isArray(parsed.issues)) {
+            return parsed;
+          }
+        } catch (_e) {
+          /* ignore storage read errors */
+        }
+        return null;
+      }
+
+      function saveCachedSnapshot(snap) {
+        if (!snap || !Array.isArray(snap.repos)) return;
+        try {
+          sessionStorage.setItem(SNAP_CACHE_KEY, JSON.stringify(snap));
+        } catch (_e) {
+          /* ignore quota or storage errors */
+        }
+      }
 
       function isEn() {
         return state.lang === "en";
@@ -1490,17 +2200,44 @@ BOARD_HTML = r"""<!DOCTYPE html>
         document.body.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
       }
 
+      function updateTopProgress() {
+        const bar = document.getElementById("top-progress");
+        if (!bar) return;
+        const active =
+          (!state.hasLiveSnapshot && !state.initError) ||
+          Boolean(state.snapshot && state.snapshot.forge_syncing) ||
+          state.manualRefreshing;
+        bar.classList.toggle("is-active", Boolean(active));
+      }
+
       function syncHeaderControls() {
+        const setupBtn = document.getElementById("setup-btn");
+        if (setupBtn) {
+          const authAlerts = (state.snapshot && state.snapshot.auth_alerts) || [];
+          const unconfCnt = state.authStatus && typeof state.authStatus.unconfigured_count === "number"
+            ? state.authStatus.unconfigured_count
+            : authAlerts.length;
+          setupBtn.classList.toggle("btn-warn", unconfCnt > 0);
+          setupBtn.title = tr("打开连接配置与 IDD 四步上手指南", "Open GitHub/GitLab setup & IDD 4-step guide");
+          setupBtn.innerHTML =
+            icon(unconfCnt > 0 ? "key" : "compass", 12) +
+            "<span>" + (unconfCnt > 0 ? tr("配置令牌", "Setup Token") : tr("引导与配置", "Setup & Guide")) + "</span>" +
+            (unconfCnt > 0 ? '<span class="setup-badge-cnt num">' + unconfCnt + "</span>" : "");
+        }
         const pauseBtn = document.getElementById("pause-btn");
         if (pauseBtn) {
           pauseBtn.innerHTML = state.paused
             ? icon("play", 12) + "<span>" + tr("继续", "Resume") + "</span>"
             : icon("pause", 12) + "<span>" + tr("暂停", "Pause") + "</span>";
         }
+        const isBusy =
+          (!state.hasLiveSnapshot && !state.initError) ||
+          Boolean(state.snapshot && state.snapshot.forge_syncing) ||
+          state.manualRefreshing;
         const syncBtn = document.getElementById("sync-btn");
         if (syncBtn) {
-          syncBtn.classList.toggle("spin", state.fetching);
-          syncBtn.innerHTML = icon("refresh", 12) + "<span>" + (state.fetching ? tr("同步中", "Syncing") : tr("同步远端", "Sync Forge")) + "</span>";
+          syncBtn.classList.toggle("spin", isBusy);
+          syncBtn.innerHTML = icon("refresh", 12) + "<span>" + (isBusy ? tr("同步中", "Syncing") : tr("同步远端", "Sync Forge")) + "</span>";
         }
 
         const s = (state.snapshot && state.snapshot.summary) || {};
@@ -1517,6 +2254,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           el.classList.toggle("active", state.viewMode === m.mode);
           el.innerHTML = icon(m.ic, 14) + '<span class="tile-dot ' + (m.dot ? "show" : "") + '"></span>';
         }
+        updateTopProgress();
       }
 
       function updateConnectionBadge(ok, errorMsg) {
@@ -1533,9 +2271,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
           tag.innerHTML = icon("pause", 11) + "<span>" + tr("已暂停", "Paused") + '</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
           return;
         }
+        if (!state.hasLiveSnapshot && !state.snapshot) {
+          tag.className = "live-pill is-loading";
+          tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("初始化中", "Initializing") + '</span><span>·</span><span id="updated-tag" class="num">' + tr("扫描中...", "Scanning...") + "</span>";
+          return;
+        }
+        if (!state.hasLiveSnapshot && state.fromCache) {
+          tag.className = "live-pill is-syncing";
+          tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("更新中...", "Refreshing...") + '</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
+          return;
+        }
         const syncingRemote = Boolean(state.snapshot && state.snapshot.forge_syncing);
-        tag.className = "live-pill is-live";
-        tag.innerHTML = '<span class="dot-pulse"></span><span>' + (syncingRemote ? tr("同步远端...", "Syncing...") : tr("实时", "Live")) + '</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
+        tag.className = syncingRemote ? "live-pill is-syncing" : "live-pill is-live";
+        tag.innerHTML = '<span class="dot-pulse"></span><span>' + (syncingRemote ? tr("同步远端...", "Syncing Forge...") : tr("实时", "Live")) + '</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
       }
 
       function parseStage(rawStage) {
@@ -1735,6 +2483,58 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return lines.join("\n");
       }
 
+      function forgeLabel(forgeType) {
+        if (forgeType === "github") return "GitHub";
+        if (forgeType === "gitlab") return "GitLab";
+        return tr("本地", "Local");
+      }
+
+      function resolveRepoMeta(item) {
+        const snap = state.snapshot;
+        const repos = (snap && snap.repos) || [];
+        const matched = repos.find((r) =>
+          (item && item.repo_path && r.repo_path === item.repo_path) ||
+          (item && item.repo_name && r.repo_name === item.repo_name)
+        );
+        const rawForge = (item && item.forge_type) || "";
+        const forgeType = (rawForge && rawForge !== "local")
+          ? rawForge
+          : ((matched && matched.forge) || rawForge || "local");
+        const repoUrl = safeUrl((item && item.repo_url) || (matched && matched.repo_url) || "");
+        const repoName = (item && item.repo_name) || (matched && matched.repo_name) || "";
+        return { forgeType, repoUrl, repoName };
+      }
+
+      function renderRepoChip(itemOrMeta, opts) {
+        const options = opts || {};
+        const meta = itemOrMeta && (itemOrMeta._kind || itemOrMeta.repo_path || itemOrMeta.repo_name)
+          ? resolveRepoMeta(itemOrMeta)
+          : {
+              forgeType: (itemOrMeta && itemOrMeta.forgeType) || "local",
+              repoUrl: safeUrl(itemOrMeta && itemOrMeta.repoUrl),
+              repoName: (itemOrMeta && itemOrMeta.repoName) || ""
+            };
+        const fg = meta.forgeType;
+        const plat = forgeLabel(fg);
+        const cls = [
+          "forge-chip",
+          fg === "github" ? "is-github" : (fg === "gitlab" ? "is-gitlab" : ""),
+          options.compact ? "is-compact" : ""
+        ].filter(Boolean).join(" ");
+        const showName = options.hideName ? "" : meta.repoName;
+        const labelText = options.customLabel || plat;
+        const inner =
+          forgeIcon(fg, options.compact ? 11 : 12) +
+          '<span class="forge-chip-plat">' + escapeHtml(labelText) + "</span>" +
+          (showName ? '<span class="forge-chip-sep">·</span><span class="forge-chip-name">' + escapeHtml(showName) + "</span>" : "") +
+          (meta.repoUrl ? '<span class="forge-chip-ext">' + icon("externalLink", 10) + "</span>" : "");
+        if (meta.repoUrl) {
+          const tip = tr("点击跳转到 " + plat + " 仓库主页：", "Open " + plat + " repository homepage: ") + meta.repoUrl;
+          return '<a class="' + cls + '" href="' + escapeHtml(meta.repoUrl) + '" target="_blank" rel="noopener noreferrer" data-stop-open="1" title="' + escapeHtml(tip) + '">' + inner + "</a>";
+        }
+        return '<span class="' + cls + '">' + inner + "</span>";
+      }
+
       function renderIdHtml(item) {
         const issueHref = safeUrl(item.url);
         if (item._kind === "issue") {
@@ -1893,14 +2693,24 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const wtCnt = items.filter((x) => x.worktree).length;
           const isAct = state.selectedRepo === r.repo_path;
           const forgeCls = r.forge === "github" ? "is-github" : (r.forge === "gitlab" ? "is-gitlab" : "");
+          const platShort = r.forge === "github" ? "GH" : (r.forge === "gitlab" ? "GL" : "");
+          const platFull = forgeLabel(r.forge);
+          const repoHref = safeUrl(r.repo_url);
+          const extBtn = repoHref
+            ? '<a class="sb-ext-link hide-collapsed" href="' + escapeHtml(repoHref) + '" target="_blank" rel="noopener noreferrer" data-stop-repo="1" title="' + escapeHtml(tr("打开 " + platFull + " 主页: ", "Open " + platFull + " home: ") + repoHref) + '">' + icon("externalLink", 11) + "</a>"
+            : "";
           repoHtml.push(
-            '<button class="sb-item ' + (isAct ? "active" : "") + '" data-repo="' + escapeHtml(r.repo_path) + '" type="button" title="' + escapeHtml(r.repo_name + " (" + wtCnt + "/" + items.length + ")") + '">' +
+            '<div class="sb-item ' + (isAct ? "active" : "") + '" role="button" tabindex="0" data-repo="' + escapeHtml(r.repo_path) + '" title="' + escapeHtml("[" + platFull + "] " + r.repo_name + " (" + wtCnt + "/" + items.length + ")") + '">' +
               '<span class="sb-item-left">' +
                 '<span class="sb-repo-badge ' + forgeCls + '">' + forgeIcon(r.forge, 12) + "</span>" +
                 '<span class="hide-collapsed">' + escapeHtml(r.repo_name) + "</span>" +
               "</span>" +
-              '<span class="sb-meta hide-collapsed">:' + wtCnt + "/" + items.length + "</span>" +
-            "</button>"
+              '<span class="sb-right-group hide-collapsed">' +
+                (platShort ? '<span class="sb-plat-tag ' + forgeCls + '">' + platShort + "</span>" : "") +
+                '<span class="sb-meta">' + wtCnt + "/" + items.length + "</span>" +
+                extBtn +
+              "</span>" +
+            "</div>"
           );
         }
         document.getElementById("repo-pills").innerHTML = repoHtml.join("");
@@ -1937,14 +2747,41 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const titleEl = document.getElementById("ws-title");
         const logoEl = document.getElementById("ws-logo");
         const scopeEl = document.getElementById("scope-tag");
+        const linkWrap = document.getElementById("ws-repo-link-wrap");
         if (activeRepo) {
           if (titleEl) titleEl.textContent = activeRepo.repo_name;
-          if (logoEl) logoEl.innerHTML = forgeIcon(activeRepo.forge, 16);
-          if (scopeEl) scopeEl.textContent = activeRepo.forge ? activeRepo.forge.toUpperCase() : "REPO";
+          if (logoEl) {
+            logoEl.className = "ws-logo " + (activeRepo.forge === "github" ? "is-github" : (activeRepo.forge === "gitlab" ? "is-gitlab" : ""));
+            logoEl.innerHTML = forgeIcon(activeRepo.forge, 16);
+          }
+          if (scopeEl) {
+            scopeEl.style.display = activeRepo.repo_url ? "none" : "inline-flex";
+            scopeEl.textContent = forgeLabel(activeRepo.forge);
+          }
+          if (linkWrap) {
+            const repoHref = safeUrl(activeRepo.repo_url);
+            linkWrap.innerHTML = repoHref
+              ? renderRepoChip({
+                  forgeType: activeRepo.forge,
+                  repoUrl: repoHref,
+                  repoName: ""
+                }, {
+                  hideName: true,
+                  customLabel: forgeLabel(activeRepo.forge) + tr(" 主页", " Home")
+                })
+              : "";
+          }
         } else {
           if (titleEl) titleEl.textContent = tr("全局工作区", "Global Workspace");
-          if (logoEl) logoEl.innerHTML = icon("branch", 15);
-          if (scopeEl) scopeEl.textContent = snap.global ? tr("全局", "Global") : tr("单仓库", "Single Repo");
+          if (logoEl) {
+            logoEl.className = "ws-logo";
+            logoEl.innerHTML = icon("branch", 15);
+          }
+          if (scopeEl) {
+            scopeEl.style.display = "inline-flex";
+            scopeEl.textContent = snap.global ? tr("全局", "Global") : tr("单仓库", "Single Repo");
+          }
+          if (linkWrap) linkWrap.innerHTML = "";
         }
       }
 
@@ -2029,9 +2866,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
           else prTones.push("");
         }
 
-        const issueSub = isEn()
-          ? (issueInProg + " active · " + issueQueued + " queued · " + issueReady + " ready")
-          : ("推进中 " + issueInProg + " · 待认领 " + issueQueued + " · 待合入 " + issueReady);
+        const waitingFirstForge = Boolean(snap.forge_syncing) && (snap.repos || []).some((r) => r.forge !== "local" && !r.forge_fetched_at);
+        const issueSub = (waitingFirstForge && issueTotal === 0)
+          ? tr("正在拉取远端开放中的 Issue…", "Fetching open remote Issues…")
+          : (isEn()
+              ? (issueInProg + " active · " + issueQueued + " queued · " + issueReady + " ready")
+              : ("推进中 " + issueInProg + " · 待认领 " + issueQueued + " · 待合入 " + issueReady));
         const taskSub = isEn()
           ? ("Done " + doneSteps + "/" + totalSteps + " · Active " + inProgSteps + " · Planned " + plannedSteps + (blockedSteps > 0 ? " · Blocked " + blockedSteps : ""))
           : ("已完成 " + doneSteps + "/" + totalSteps + " · 进行中 " + inProgSteps + " · 待开始 " + plannedSteps + (blockedSteps > 0 ? " · 受阻 " + blockedSteps : ""));
@@ -2044,7 +2884,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             action: "toggle-wt",
             ic: "circle",
             label: tr("Issue 状态", "Issue Status"),
-            val: String(issueTotal),
+            val: (waitingFirstForge && issueTotal === 0) ? "…" : String(issueTotal),
             unit: "Open",
             bar: renderSegBar(issueTotal, 8, issueTones),
             sub: issueSub,
@@ -2117,6 +2957,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const issueHref = safeUrl(item.url);
         const idLabel = item.issue_number != null ? ("#" + item.issue_number) : tr("本地", "Local");
 
+        const repoMeta = resolveRepoMeta(item);
         let wellHtml = "";
         if (state.consoleTab === "files") {
           if (changedFiles.length === 0) {
@@ -2130,7 +2971,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           }
         } else {
           const metaLines = [
-            '<div class="log-line"><span class="log-k">repo</span><span class="log-v">' + escapeHtml(item.repo_name || "—") + (item.branch ? '  ·  <span style="color:var(--accent)">' + escapeHtml(item.branch) + "</span>" : "") + "</span></div>",
+            '<div class="log-line"><span class="log-k">repo</span><span class="log-v" style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;">' + renderRepoChip(item, { compact: true }) + (item.branch ? '<span>·</span><span style="color:var(--accent)">' + escapeHtml(item.branch) + "</span>" : "") + "</span></div>",
             '<div class="log-line"><span class="log-k">worktree</span><span class="log-v">' + escapeHtml(item.worktree || tr("尚未创建（点击右侧复制开工命令）", "Not created yet (copy CLI Cmd on the right)")) + "</span></div>"
           ];
           if (pulse && pulse.last_commit_sha) {
@@ -2165,6 +3006,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 (item.worktree ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" type="button">' + icon("folder", 12) + "<span>" + tr("复制目录", "Copy Dir") + "</span></button>" : "") +
                 (item.branch ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" type="button">' + icon("branch", 12) + "<span>" + tr("复制分支", "Copy Branch") + "</span></button>" : "") +
                 (startCmd ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="' + tr("已复制终端命令", "Copied CLI command") + '" type="button">' + icon("terminal", 12) + "<span>" + tr("终端命令", "CLI Cmd") + "</span></button>" : "") +
+                (repoMeta.repoUrl ? '<a class="btn btn-sm" href="' + escapeHtml(repoMeta.repoUrl) + '" target="_blank" rel="noopener noreferrer">' + forgeIcon(repoMeta.forgeType, 12) + "<span>" + escapeHtml(forgeLabel(repoMeta.forgeType)) + tr(" 主页", " Home") + "</span></a>" : "") +
                 (issueHref ? '<a class="btn btn-sm" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 12) + "<span>" + tr("打开 Issue", "Open Issue") + "</span></a>" : "") +
               "</div>" +
             "</div>" +
@@ -2266,7 +3108,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                   '<div class="wt-row-top">' +
                     renderIdHtml(item) +
                     '<span class="wt-row-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</span>" +
-                    '<span class="badge tone-muted">' + escapeHtml(item.repo_name || "") + "</span>" +
+                    renderRepoChip(item, { compact: true }) +
                     stageBadge +
                     progBadge +
                     chBadge +
@@ -2362,10 +3204,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
 
         const pulseHtml = renderPulseSummary(item.pulse);
+        const cardChip = renderRepoChip(item, { compact: true, hideName: !options.showRepo });
         return (
           '<article class="card ' + (isSelected ? "is-selected" : "") + '" data-open-key="' + escapeHtml(item._key) + '">' +
             '<div class="card-top">' +
-              '<div class="card-meta">' + (options.showRepo ? ("<span>" + escapeHtml(item.repo_name || "") + "</span><span>·</span>") : "") + renderIdHtml(item) + "</div>" +
+              '<div class="card-meta">' + cardChip + renderIdHtml(item) + "</div>" +
               '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" +
             "</div>" +
             '<div class="card-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</div>" +
@@ -2394,7 +3237,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           return (
             '<tr class="' + (isSelected ? "is-selected" : "") + '" data-open-key="' + escapeHtml(item._key) + '">' +
               "<td><div style=\"display:flex;align-items:center;gap:8px;\">" + renderIdHtml(item) + "<span>" + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</span></div></td>" +
-              "<td>" + escapeHtml(item.repo_name || "") + "</td>" +
+              "<td>" + renderRepoChip(item, { compact: true }) + "</td>" +
               '<td><span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span></td>" +
               "<td>" + (locParts.length ? '<div style="display:flex;flex-direction:column;gap:4px;max-width:240px;">' + locParts.join("") + "</div>" : "—") + "</td>" +
               "<td>" + progHtml + "</td>" +
@@ -2415,6 +3258,214 @@ BOARD_HTML = r"""<!DOCTYPE html>
         );
       }
 
+      function skelBar(w, h) {
+        return '<span class="skel-block" style="width:' + w + ";height:" + (h || 12) + 'px;"></span>';
+      }
+
+      function renderMainSkeleton(bannerTitle, bannerSub) {
+        const statusBar =
+          '<div class="init-status-bar">' +
+            '<span class="init-status-left">' + icon("refresh", 13) + "<span>" + escapeHtml(bannerTitle) + "</span></span>" +
+            (bannerSub ? '<span class="init-status-sub">' + escapeHtml(bannerSub) + "</span>" : "") +
+          "</div>";
+
+        if (state.viewMode === "kanban") {
+          const cols = [0, 1, 2, 3].map(() =>
+            '<section class="column">' +
+              '<div class="col-hdr">' + skelBar("76px", 13) + skelBar("18px", 12) + "</div>" +
+              '<div class="card-stack">' +
+                [0, 1].map(() =>
+                  '<div class="card" style="cursor:default;">' +
+                    '<div class="card-top">' + skelBar("84px", 16) + skelBar("48px", 16) + "</div>" +
+                    '<div style="margin-top:9px;">' + skelBar("86%", 14) + "</div>" +
+                    '<div style="margin-top:8px;">' + skelBar("60%", 11) + "</div>" +
+                    '<div style="margin-top:10px;display:flex;justify-content:space-between;">' + skelBar("72px", 11) + skelBar("52px", 18) + "</div>" +
+                  "</div>"
+                ).join("") +
+              "</div>" +
+            "</section>"
+          ).join("");
+          return statusBar + '<div class="kanban">' + cols + "</div>";
+        }
+
+        if (state.viewMode === "repos") {
+          const sections = [0, 1].map(() =>
+            '<section class="repo-section">' +
+              '<div class="repo-hdr"><div>' + skelBar("140px", 15) + '<div style="margin-top:6px;">' + skelBar("210px", 11) + "</div></div>" + skelBar("64px", 18) + "</div>" +
+              '<div class="repo-grid">' +
+                [0, 1].map(() =>
+                  '<div class="card" style="cursor:default;">' +
+                    '<div class="card-top">' + skelBar("72px", 16) + skelBar("48px", 16) + "</div>" +
+                    '<div style="margin-top:9px;">' + skelBar("82%", 14) + "</div>" +
+                    '<div style="margin-top:8px;">' + skelBar("54%", 11) + "</div>" +
+                  "</div>"
+                ).join("") +
+              "</div>" +
+            "</section>"
+          ).join("");
+          return statusBar + sections;
+        }
+
+        if (state.viewMode === "list") {
+          const rows = [0, 1, 2, 3, 4].map(() =>
+            "<tr>" +
+              "<td>" + skelBar("190px", 13) + "</td>" +
+              "<td>" + skelBar("76px", 16) + "</td>" +
+              "<td>" + skelBar("58px", 16) + "</td>" +
+              "<td>" + skelBar("120px", 12) + "</td>" +
+              "<td>" + skelBar("88px", 10) + "</td>" +
+              "<td>" + skelBar("70px", 12) + "</td>" +
+              "<td>" + skelBar("64px", 16) + "</td>" +
+              "<td>" + skelBar("52px", 20) + "</td>" +
+            "</tr>"
+          ).join("");
+          return (
+            statusBar +
+            '<div class="list-wrap"><table class="list-table"><thead><tr>' +
+              "<th>" + tr("Issue / 标题", "Issue / Title") + "</th>" +
+              "<th>" + tr("仓库", "Repo") + "</th>" +
+              "<th>" + tr("状态", "Stage") + "</th>" +
+              "<th>" + tr("分支 / 工作目录", "Branch / Worktree") + "</th>" +
+              "<th>" + tr("步骤进度", "Progress") + "</th>" +
+              "<th>" + tr("实时动态", "Pulse") + "</th>" +
+              "<th>PR/MR &amp; CI</th>" +
+              "<th>" + tr("操作", "Action") + "</th>" +
+            "</tr></thead><tbody>" + rows + "</tbody></table></div>"
+          );
+        }
+
+        const wtSkelRows = [0, 1, 2, 3].map((idx) =>
+          '<div class="skel-wt-row">' +
+            '<div class="wt-row-left" style="align-items:center;">' +
+              '<span class="skel-block" style="width:8px;height:8px;border-radius:50%;flex-shrink:0;"></span>' +
+              '<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:7px;">' +
+                '<div style="display:flex;align-items:center;gap:8px;">' + skelBar("34px", 14) + skelBar((52 + idx * 8) + "%", 14) + skelBar("62px", 16) + "</div>" +
+                '<div style="display:flex;align-items:center;gap:8px;">' + skelBar("130px", 11) + skelBar("90px", 11) + "</div>" +
+              "</div>" +
+            "</div>" +
+            '<div style="display:flex;gap:6px;flex-shrink:0;">' + skelBar("56px", 22) + skelBar("48px", 22) + "</div>" +
+          "</div>"
+        ).join("");
+
+        return (
+          statusBar +
+          '<section class="bento-card" style="margin-bottom:12px;">' +
+            '<div class="bento-hdr"><div class="bento-title-row">' + skelBar("108px", 15) + skelBar("48px", 12) + "</div></div>" +
+            '<div class="wt-list">' + wtSkelRows + "</div>" +
+          "</section>" +
+          '<section class="bento-card">' +
+            '<div class="bento-hdr"><div class="bento-title-row">' + skelBar("132px", 15) + skelBar("90px", 12) + "</div></div>" +
+            '<div class="console-well" style="display:flex;flex-direction:column;gap:9px;">' +
+              skelBar("46%", 12) + skelBar("68%", 12) + skelBar("38%", 12) +
+            "</div>" +
+          "</section>"
+        );
+      }
+
+      function renderLoadingState() {
+        const logoEl = document.getElementById("ws-logo");
+        const titleEl = document.getElementById("ws-title");
+        const scopeEl = document.getElementById("scope-tag");
+        if (logoEl) {
+          logoEl.className = "ws-logo";
+          logoEl.innerHTML = icon("branch", 15);
+        }
+        if (titleEl) titleEl.textContent = tr("全局工作区", "Global Workspace");
+        if (scopeEl) {
+          scopeEl.style.display = "inline-flex";
+          scopeEl.textContent = tr("初始化", "Booting");
+        }
+
+        const repoCntEl = document.getElementById("sb-repo-cnt");
+        const wtCntEl = document.getElementById("sb-wt-cnt");
+        if (repoCntEl) repoCntEl.textContent = state.initError ? "0" : "…";
+        if (wtCntEl) wtCntEl.textContent = state.initError ? "0" : "…";
+
+        const sbSkel = (widths) => widths.map((w) =>
+          '<div class="sb-skel-row"><span style="display:inline-flex;align-items:center;gap:8px;">' +
+            '<span class="skel-block" style="width:16px;height:16px;border-radius:5px;"></span>' +
+            '<span class="hide-collapsed">' + skelBar(w + "px", 12) + "</span>" +
+          '</span><span class="hide-collapsed">' + skelBar("24px", 11) + "</span></div>"
+        ).join("");
+        const sbFilters = document.getElementById("sb-filters");
+        const repoPills = document.getElementById("repo-pills");
+        const wtList = document.getElementById("wt-rail-list");
+        if (sbFilters) sbFilters.innerHTML = sbSkel([74, 62, 80]);
+        if (repoPills) repoPills.innerHTML = sbSkel([82, 96, 68]);
+        if (wtList) wtList.innerHTML = sbSkel([92, 78]);
+
+        const kpisEl = document.getElementById("kpis");
+        if (kpisEl) {
+          const pills = new Array(8).fill('<span class="seg-pill skel"></span>').join("");
+          kpisEl.innerHTML = [0, 1, 2].map(() =>
+            '<div class="bento-metric is-skel">' +
+              '<div class="metric-hdr"><span class="metric-hdr-left">' + skelBar("88px", 12) + "</span></div>" +
+              '<div class="metric-val-row" style="margin-top:8px;">' + skelBar("48px", 26) + skelBar("34px", 13) + "</div>" +
+              '<div class="seg-bar">' + pills + "</div>" +
+              skelBar("66%", 11) +
+            "</div>"
+          ).join("");
+        }
+
+        const syncBannerWrap = document.getElementById("sync-banner-wrap");
+        if (syncBannerWrap) syncBannerWrap.innerHTML = "";
+        const warnsWrap = document.getElementById("warnings-wrap");
+        if (warnsWrap) warnsWrap.innerHTML = "";
+
+        const container = document.getElementById("main-content");
+        if (!container) return;
+        if (state.initError) {
+          container.innerHTML =
+            '<div class="empty-state is-error">' +
+              '<div style="color:var(--red);margin-bottom:8px;">' + icon("alertTriangle", 22) + "</div>" +
+              '<h3 style="margin:0 0 6px;font-size:14.5px;color:var(--text);">' + tr("无法加载工作台数据", "Failed to load board data") + "</h3>" +
+              '<p style="margin:0 0 14px;font-size:12.5px;">' + escapeHtml(state.initError) + "</p>" +
+              '<button class="btn btn-primary" type="button" data-retry-init="1">' + icon("refresh", 12) + "<span>" + tr("立即重试", "Retry Now") + "</span></button>" +
+            "</div>";
+        } else {
+          const sub = state.slowInit
+            ? tr("纳管仓库较多或响应较慢，仍在全力扫描中…", "Large workspace or slow response, still scanning…")
+            : tr("首屏就绪后将自动同步远端状态", "Remote status syncs automatically once local scan finishes");
+          container.innerHTML = renderMainSkeleton(
+            tr("正在初始化工作区，扫描本机 Git 仓库与 Worktree…", "Initializing workspace — scanning local Git repositories and worktrees…"),
+            sub
+          );
+        }
+
+        const footerEl = document.getElementById("footer");
+        if (footerEl) {
+          footerEl.innerHTML =
+            "<span>" + tr("正在连接本地 IDD 看板服务…", "Connecting to local IDD dashboard server…") + "</span>" +
+            "<span>" + tr("快捷键 <code>[</code> 收起侧栏 · <code>/</code> 搜索 · <code>r</code> 同步远端", "Shortcuts: <code>[</code> sidebar · <code>/</code> search · <code>r</code> sync") + "</span>";
+        }
+      }
+
+      function renderSyncBanner(snap) {
+        const wrap = document.getElementById("sync-banner-wrap");
+        if (!wrap) return;
+        if (!snap) {
+          wrap.innerHTML = "";
+          return;
+        }
+        const items = collectItems(true);
+        if (snap.forge_syncing && items.length > 0) {
+          wrap.innerHTML =
+            '<div class="sync-banner">' +
+              '<span class="sync-banner-left">' + icon("refresh", 13) + "<span>" + tr("本地工作树已就绪，正在后台同步 GitHub / GitLab 远端 Issue、PR/MR 与 CI…", "Local worktrees ready — syncing remote Issues, PR/MR & CI in background…") + "</span></span>" +
+              '<span class="num" style="font-size:11px;opacity:0.85;">' + tr("自动更新", "Auto-updating") + "</span>" +
+            "</div>";
+          return;
+        }
+        if (state.fromCache && !state.hasLiveSnapshot) {
+          wrap.innerHTML =
+            '<div class="sync-banner">' +
+              '<span class="sync-banner-left">' + icon("refresh", 13) + "<span>" + tr("已快速恢复上次视图，正在拉取最新状态…", "Restored previous view instantly — fetching latest status…") + "</span></span>" +
+            "</div>";
+          return;
+        }
+        wrap.innerHTML = "";
+      }
+
       function renderMain() {
         const snap = state.snapshot;
         const container = document.getElementById("main-content");
@@ -2432,6 +3483,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
 
         const items = collectItems(false);
+        const hasFilters = Boolean(state.search.trim() || state.worktreeOnly || state.alertsOnly || state.todoOnly);
+        if (items.length === 0 && snap.forge_syncing && !hasFilters) {
+          container.innerHTML = renderMainSkeleton(
+            tr("正在从远端同步 " + repos.length + " 个仓库的 Issue 与 PR/MR…", "Syncing open Issues & PR/MRs from " + repos.length + " repository(ies)…"),
+            tr("同步完成后将自动展示，无需刷新页面", "Results will appear automatically once sync completes")
+          );
+          return;
+        }
         if (items.length === 0) {
           container.innerHTML =
             '<div class="empty-state">' +
@@ -2467,17 +3526,24 @@ BOARD_HTML = r"""<!DOCTYPE html>
         } else if (state.viewMode === "repos") {
           const byRepo = new Map();
           for (const item of items) {
+            const meta = resolveRepoMeta(item);
             const key = item.repo_path || item.repo_name || "unknown";
             if (!byRepo.has(key)) {
-              byRepo.set(key, { name: item.repo_name || key, path: key, forge: item.forge_type || "local", items: [] });
+              byRepo.set(key, { name: meta.repoName || key, path: key, forge: meta.forgeType, repoUrl: meta.repoUrl, items: [] });
             }
             byRepo.get(key).items.push(item);
           }
           container.innerHTML = Array.from(byRepo.values()).map((grp) =>
             '<section class="repo-section">' +
               '<div class="repo-hdr">' +
-                '<div><div style="display:flex;align-items:center;gap:8px;">' + forgeIcon(grp.forge, 14) + "<strong>" + escapeHtml(grp.name) + '</strong><span class="badge">' + escapeHtml(grp.forge.toUpperCase()) + '</span></div><div class="mono" style="font-size:11px;color:var(--text-faint);margin-top:2px;">' + escapeHtml(grp.path) + "</div></div>" +
-                '<span class="col-count">' + grp.items.length + tr(" 项", " items") + "</span>" +
+                '<div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                  renderRepoChip({ forgeType: grp.forge, repoUrl: grp.repoUrl, repoName: "" }, { hideName: true, customLabel: forgeLabel(grp.forge) + (grp.repoUrl ? tr(" 主页", " Home") : "") }) +
+                  "<strong>" + escapeHtml(grp.name) + "</strong>" +
+                '</div><div class="mono" style="font-size:11px;color:var(--text-faint);margin-top:3px;">' + escapeHtml(grp.path) + "</div></div>" +
+                '<div style="display:inline-flex;align-items:center;gap:8px;">' +
+                  (grp.repoUrl ? '<a class="btn btn-xs" href="' + escapeHtml(grp.repoUrl) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>" + tr("进入仓库主页", "Open Repo Home") + "</span></a>" : "") +
+                  '<span class="col-count">' + grp.items.length + tr(" 项", " items") + "</span>" +
+                "</div>" +
               "</div>" +
               '<div class="repo-grid">' + grp.items.map((it) => renderCard(it, { showRepo: false })).join("") + "</div>" +
             "</section>"
@@ -2537,7 +3603,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         panel.innerHTML =
           '<div class="inspector-hdr">' +
             '<div style="min-width:0;flex:1;">' +
-              '<div class="card-meta">' + forgeIcon(item.forge_type, 12) + "<span>" + escapeHtml(item.repo_name || "") + "</span><span>·</span>" + renderIdHtml(item) + '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" + (issueHref ? '<a class="btn btn-xs" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>" + tr("打开 Issue", "Open Issue") + "</span></a>" : "") + "</div>" +
+              '<div class="card-meta" style="flex-wrap:wrap;">' + renderRepoChip(item, { compact: true }) + renderIdHtml(item) + '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" + (issueHref ? '<a class="btn btn-xs" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>" + tr("打开 Issue", "Open Issue") + "</span></a>" : "") + "</div>" +
               '<h2 class="inspector-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</h2>" +
             "</div>" +
             '<button class="icon-btn" id="inspector-close-btn" type="button" aria-label="' + tr("关闭详情", "Close details") + '">' + icon("x", 15) + "</button>" +
@@ -2565,6 +3631,488 @@ BOARD_HTML = r"""<!DOCTYPE html>
         panel.setAttribute("aria-hidden", "false");
       }
 
+      function buildFallbackAuthHosts() {
+        const snap = state.snapshot;
+        if (!snap) return [];
+        const map = new Map();
+        for (const a of snap.auth_alerts || []) {
+          const k = a.host || a.api_base || "";
+          if (!k) continue;
+          map.set(k, {
+            host: a.host || k,
+            api_base: a.api_base || k,
+            forge: a.forge || "gitlab",
+            repos: (a.repos || []).map((name) => {
+              const r = (snap.repos || []).find((x) => x.repo_name === name);
+              return { name, url: (r && r.repo_url) || "", path: (r && r.repo_path) || "" };
+            }),
+            configured: false,
+            auth_source: "missing",
+            masked_token: "",
+            username: "",
+            token_url: a.token_url || "",
+            can_remove: false
+          });
+        }
+        for (const r of snap.repos || []) {
+          if (r.forge !== "github" && r.forge !== "gitlab") continue;
+          const u = safeUrl(r.repo_url);
+          if (!u) continue;
+          let hostKey = "";
+          let apiBase = "";
+          try {
+            const parsed = new URL(u);
+            hostKey = parsed.host;
+            apiBase = parsed.origin;
+          } catch (_e) {
+            continue;
+          }
+          if (!map.has(hostKey) && !map.has(apiBase)) {
+            map.set(hostKey, {
+              host: hostKey,
+              api_base: apiBase,
+              forge: r.forge,
+              repos: [{ name: r.repo_name, url: u, path: r.repo_path || "" }],
+              configured: Boolean(r.forge_connected),
+              auth_source: r.forge_connected ? "ready" : "missing",
+              masked_token: "",
+              username: "",
+              token_url: r.forge === "gitlab"
+                ? (apiBase + "/-/user_settings/personal_access_tokens?name=IDD+Board&scopes=api")
+                : (hostKey === "github.com"
+                    ? "https://github.com/settings/tokens/new?description=IDD+Board&scopes=repo"
+                    : (apiBase + "/settings/tokens/new?description=IDD+Board&scopes=repo")),
+              can_remove: false
+            });
+          } else {
+            const existing = map.get(hostKey) || map.get(apiBase);
+            if (existing && !existing.repos.some((x) => x.name === r.repo_name)) {
+              existing.repos.push({ name: r.repo_name, url: u, path: r.repo_path || "" });
+            }
+          }
+        }
+        return Array.from(map.values());
+      }
+
+      async function fetchAuthStatus() {
+        try {
+          const res = await fetch("/api/auth/status", { cache: "no-store" });
+          if (!res.ok) return;
+          state.authStatus = await res.json();
+          syncHeaderControls();
+          if (state.setupOpen) renderSetupModal();
+        } catch (_err) {
+          /* ignore offline probe error */
+        }
+      }
+
+      async function submitHostToken(targetHost, forgeType, rawToken, skipVerify) {
+        const cleaned = String(rawToken || "").trim();
+        if (!cleaned) {
+          state.authErrors[targetHost] = tr("请先粘贴生成的个人访问令牌（Token）", "Please paste your Personal Access Token first");
+          state.lastTopAlertsSig = "";
+          renderTopAlerts(state.snapshot);
+          if (state.setupOpen) renderSetupModal();
+          return false;
+        }
+        state.authSavingHost = targetHost;
+        delete state.authErrors[targetHost];
+        state.lastTopAlertsSig = "";
+        renderTopAlerts(state.snapshot);
+        if (state.setupOpen) renderSetupModal();
+        try {
+          const res = await fetch("/api/auth/save", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-IDD-Request": "1"
+            },
+            body: JSON.stringify({
+              host: targetHost,
+              forge: forgeType,
+              token: cleaned,
+              no_verify: Boolean(skipVerify)
+            })
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) {
+            throw new Error(data.error || ("HTTP " + res.status));
+          }
+          delete state.tokenDrafts[targetHost];
+          delete state.editingHosts[targetHost];
+          if (data.auth) state.authStatus = data.auth;
+          state.showCustomHostForm = false;
+          state.customHostUrl = "";
+          state.customHostToken = "";
+          const who = data.username ? (" (@" + data.username + ")") : "";
+          showToast(tr("令牌已保存并验证成功" + who + "，正在同步远端数据...", "Token verified & saved" + who + "; syncing remote data..."));
+          await fetchSnapshot(false);
+          await fetchAuthStatus();
+          state.lastTopAlertsSig = "";
+          renderTopAlerts(state.snapshot);
+          if (state.setupOpen) renderSetupModal();
+          return true;
+        } catch (err) {
+          state.authErrors[targetHost] = err.message || tr("保存失败", "Failed to save token");
+          state.lastTopAlertsSig = "";
+          renderTopAlerts(state.snapshot);
+          if (state.setupOpen) renderSetupModal();
+          return false;
+        } finally {
+          state.authSavingHost = "";
+        }
+      }
+
+      async function removeHostToken(targetHost) {
+        state.authSavingHost = targetHost;
+        if (state.setupOpen) renderSetupModal();
+        try {
+          const res = await fetch("/api/auth/logout", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-IDD-Request": "1"
+            },
+            body: JSON.stringify({ host: targetHost })
+          });
+          const data = await res.json();
+          if (data.auth) state.authStatus = data.auth;
+          showToast(tr("已移除该主机的本地令牌", "Removed saved token for host"));
+          await fetchSnapshot(false);
+          state.lastTopAlertsSig = "";
+          renderTopAlerts(state.snapshot);
+          if (state.setupOpen) renderSetupModal();
+        } catch (err) {
+          showToast(tr("移除失败: ", "Remove failed: ") + err.message, "err");
+        } finally {
+          state.authSavingHost = "";
+        }
+      }
+
+      function openSetupModal(tab) {
+        state.setupOpen = true;
+        if (tab) state.setupTab = tab;
+        renderSetupModal();
+        fetchAuthStatus();
+      }
+
+      function closeSetupModal(markDismissed) {
+        state.setupOpen = false;
+        if (markDismissed) {
+          sessionStorage.setItem("idd_setup_dismissed", "1");
+        }
+        renderSetupModal();
+      }
+
+      function renderPermissionGuide(forgeType) {
+        if (forgeType === "gitlab") {
+          return (
+            '<div class="perm-box">' +
+              '<div class="perm-row"><span>' + tr("必选权限 (Scopes)：", "Required Scope:") + '</span><code class="perm-tag">✓ api</code><span style="font-size:11.5px;color:var(--text-dim);">' + tr("仅勾选这一项即可（跳转已自动预填）", "Select only this checkbox (pre-checked via link)") + "</span></div>" +
+              '<div class="perm-sub">' + tr("用途：创建/同步 Issue、提交并 Squash 合入 MR、拉取 CI 状态与失败日志。注意：不要只勾只读的 read_api；到期时间按需设置或留空。", "Grants read/write access to Issues, MRs & CI failure logs. Do not select read_api alone.") + "</div>" +
+            "</div>"
+          );
+        }
+        return (
+          '<div class="perm-box">' +
+            '<div class="perm-row"><span>' + tr("Classic 令牌（推荐）：", "Classic Token (Recommended):") + '</span><code class="perm-tag">✓ repo</code><span style="font-size:11.5px;color:var(--text-dim);">' + tr("跳转已自动预勾；若仓库使用私有 CI 或需改 .github/workflows 可加勾 workflow", "Pre-selected via link; add workflow only if editing GitHub Actions files") + "</span></div>" +
+            '<div class="perm-sub">' + tr("若用 Fine-grained 细粒度令牌：在 Repository permissions 开启 Issues (读写)、Pull requests (读写)、Contents (读写)、Actions (只读)。", "Fine-grained PAT: enable Issues (R/W), Pull requests (R/W), Contents (R/W), and Actions (Read-only).") + "</div>" +
+          "</div>"
+        );
+      }
+
+      function renderQuietRepoLinks(repos) {
+        if (!repos || !repos.length) return "";
+        const links = repos.map((r) => {
+          const href = safeUrl(r.url);
+          if (href) {
+            return '<a class="host-repo-link" href="' + escapeHtml(href) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(r.name) + icon("externalLink", 10) + "</a>";
+          }
+          return '<span class="host-repo-link">' + escapeHtml(r.name) + "</span>";
+        }).join("<span>·</span>");
+        return '<div class="host-repo-list"><span>' + tr("仓库：", "Repos:") + "</span>" + links + "</div>";
+      }
+
+      function renderSetupModal() {
+        const overlay = document.getElementById("setup-modal-overlay");
+        const modal = document.getElementById("setup-modal");
+        if (!overlay || !modal) return;
+        if (!state.setupOpen) {
+          overlay.classList.remove("open");
+          overlay.setAttribute("aria-hidden", "true");
+          return;
+        }
+        overlay.classList.add("open");
+        overlay.setAttribute("aria-hidden", "false");
+        modal.setAttribute("aria-label", tr("初始化配置与上手指南", "Setup & Quickstart Guide"));
+
+        const hosts = (state.authStatus && state.authStatus.hosts) || buildFallbackAuthHosts();
+        const isGuide = state.setupTab === "guide";
+
+        let bodyHtml = "";
+        if (isGuide) {
+          const steps = [
+            {
+              step: "01",
+              title: tr("聊想法，建 Issue 锚点", "Chat Ideas into an Issue"),
+              desc: tr(
+                "先在 AI 工具里聊清需求并按 idd 创建 Issue（自动识别 GitHub 或自建 GitLab），不在 main 分支直接裸改业务代码。",
+                "Align on scope in your AI tool and open a GitHub or self-hosted GitLab Issue first—keeping main clean."
+              ),
+              cmd: tr('对 Agent 说："按 idd 帮我建个导出 CSV 的 Issue"', 'Say: "Create an IDD Issue for CSV export"')
+            },
+            {
+              step: "02",
+              title: tr("独立 Worktree 拆解 TASK", "Parallel Worktrees & TASKs"),
+              desc: tr(
+                "开工时自动拉出独立目录和规范分支，将任务拆解为可验证的 TASK 步骤，多个 Agent 同时推进互不打扰。",
+                "Each Issue gets its own physical worktree, validated branch, and TASK ledger so multiple agents run in parallel safely."
+              ),
+              cmd: tr('对 Agent 说："按 idd 开工 #42"', 'Say: "Start Issue #42 with idd"')
+            },
+            {
+              step: "03",
+              title: tr("看板盯进度 & 一键换手接力", "Live Board & 1-Click Handoff"),
+              desc: tr(
+                "在看板一眼看清进度和 CI，点平台图标直达仓库或 Issue；换工具时点击「复制接力词」粘贴到新窗口即可续写。",
+                "Track live progress and CI here, open repos or Issues in one click, and copy Handoff prompts when switching agents."
+              ),
+              cmd: tr("点击「接力词」按钮 → 粘贴到另一个 Agent 对话框", "Click [Handoff] -> Paste into another Agent")
+            },
+            {
+              step: "04",
+              title: tr("CI 全绿后线性 Squash 合入", "CI Self-Healing & Squash Land"),
+              desc: tr(
+                "自动提 PR / MR 并监控流水线（失败会自动拉取日志修复），全绿后清理临时 TASK 并以直线历史合入 main。",
+                "Opens PR/MR, auto-fetches failing CI logs for fixes, cleans temporary TASK files, and squash-merges linearly into main."
+              ),
+              cmd: tr('对 Agent 说："合入 #42"', 'Say: "Land #42"')
+            }
+          ];
+          bodyHtml =
+            '<div class="guide-grid">' +
+            steps.map((s) =>
+              '<div class="guide-card">' +
+                '<div class="guide-card-top"><span class="guide-step-pill">' + escapeHtml(s.step) + '</span><span class="guide-card-title">' + escapeHtml(s.title) + "</span></div>" +
+                '<div class="guide-card-desc">' + escapeHtml(s.desc) + "</div>" +
+                '<div class="guide-card-cmd">' + escapeHtml(s.cmd) + "</div>" +
+              "</div>"
+            ).join("") +
+            "</div>";
+        } else {
+          const hostCards = hosts.length === 0
+            ? '<div class="perm-box"><div>' + tr("暂未检测到远端仓库；你可以点击下方链接提前添加自建 GitLab 或 GitHub 主机。", "No remote repositories detected yet. You can add a GitLab or GitHub host below.") + "</div></div>"
+            : hosts.map((h) => {
+                const target = h.api_base || h.host;
+                const isGitLab = h.forge === "gitlab";
+                const plat = isGitLab ? tr("自建 GitLab", "GitLab") : "GitHub";
+                const hostLabel = String(h.host || target).replace(/^https?:\/\//i, "");
+                const tokenHref = safeUrl(h.token_url);
+                const hostHref = safeUrl(h.api_base);
+                const isEditing = !h.configured || Boolean(state.editingHosts[target]);
+                const draftVal = state.tokenDrafts[target] || "";
+                const errMsg = state.authErrors[target] || "";
+                const saving = state.authSavingHost === target;
+                const icCls = isGitLab ? "is-gitlab" : "is-github";
+
+                if (!isEditing && h.configured) {
+                  const srcNote = h.username
+                    ? ("@" + h.username)
+                    : (h.auth_source === "gh_cli" ? "gh CLI" : (h.auth_source === "env" ? "ENV" : (h.masked_token || "")));
+                  const compactRepos = (h.repos || []).map((r) => {
+                    const href = safeUrl(r.url);
+                    return href
+                      ? '<a class="host-repo-link" href="' + escapeHtml(href) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(r.name) + icon("externalLink", 10) + "</a>"
+                      : '<span class="host-repo-link">' + escapeHtml(r.name) + "</span>";
+                  }).join("<span>·</span>");
+
+                  return (
+                    '<div class="host-row-compact">' +
+                      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0;">' +
+                        '<span class="host-ic sm ' + icCls + '">' + forgeIcon(h.forge, 13) + "</span>" +
+                        '<span style="font-weight:600;font-size:13px;">' + escapeHtml(plat) + "</span>" +
+                        (hostHref
+                          ? '<a class="host-url-link" href="' + escapeHtml(hostHref) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(hostLabel) + " ↗</a>"
+                          : '<span class="host-url-link">' + escapeHtml(hostLabel) + "</span>") +
+                        (compactRepos ? '<span style="color:var(--text-faint);">·</span>' + compactRepos : "") +
+                      "</div>" +
+                      '<div style="display:inline-flex;align-items:center;gap:6px;">' +
+                        '<span class="badge tone-success">' + icon("check", 11) + "<span>" + tr("已连接", "Connected") + (srcNote ? " · " + escapeHtml(srcNote) : "") + "</span></span>" +
+                        '<button class="btn btn-xs" type="button" data-toggle-edit-host="' + escapeHtml(target) + '">' + tr("更换令牌", "Update") + "</button>" +
+                        (h.can_remove ? '<button class="btn btn-xs" type="button" data-remove-host="' + escapeHtml(h.host) + '">' + tr("移除", "Remove") + "</button>" : "") +
+                      "</div>" +
+                    "</div>"
+                  );
+                }
+
+                const rightHdr = h.configured
+                  ? '<button class="btn btn-xs" type="button" data-toggle-edit-host="' + escapeHtml(target) + '">' + tr("收起", "Cancel") + "</button>"
+                  : '<span class="badge tone-warning">' + tr("待配置", "Setup Needed") + "</span>";
+
+                return (
+                  '<div class="host-card">' +
+                    '<div class="host-card-hdr">' +
+                      '<div class="host-ident">' +
+                        '<span class="host-ic ' + icCls + '">' + forgeIcon(h.forge, 16) + "</span>" +
+                        '<div style="min-width:0;">' +
+                          '<div class="host-title-line">' +
+                            "<span>" + escapeHtml(plat) + "</span>" +
+                            (hostHref
+                              ? '<a class="host-url-link" href="' + escapeHtml(hostHref) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(hostLabel) + " ↗</a>"
+                              : '<span class="host-url-link">' + escapeHtml(hostLabel) + "</span>") +
+                          "</div>" +
+                          renderQuietRepoLinks(h.repos) +
+                        "</div>" +
+                      "</div>" +
+                      '<div style="display:inline-flex;align-items:center;gap:6px;flex-shrink:0;">' +
+                        rightHdr +
+                        (h.can_remove ? '<button class="btn btn-xs" type="button" data-remove-host="' + escapeHtml(h.host) + '">' + tr("移除", "Remove") + "</button>" : "") +
+                      "</div>" +
+                    "</div>" +
+                    '<div class="host-flow">' +
+                      '<div class="flow-step">' +
+                        '<div class="flow-step-hdr">' +
+                          '<span class="flow-step-title"><span class="flow-num">1</span><span>' + tr("生成个人访问令牌并勾选权限", "Create Token with Required Permissions") + "</span></span>" +
+                          (tokenHref ? '<a class="btn btn-sm" href="' + escapeHtml(tokenHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 12) + "<span>" + tr("打开生成页面", "Open Token Page") + "</span></a>" : "") +
+                        "</div>" +
+                        renderPermissionGuide(h.forge) +
+                      "</div>" +
+                      '<div class="flow-step">' +
+                        '<div class="flow-step-hdr"><span class="flow-step-title"><span class="flow-num">2</span><span>' + tr("粘贴令牌并点击保存（自动验证，无需敲命令）", "Paste Token & Save (Verified Automatically)") + "</span></span></div>" +
+                        '<div class="auth-alert-form">' +
+                          '<input class="token-input" type="password" autocomplete="off" data-token-draft="' + escapeHtml(target) + '" value="' + escapeHtml(draftVal) + '" placeholder="' + escapeHtml(isGitLab ? tr("粘贴 GitLab 令牌（如 glpat-...）", "Paste GitLab Token (glpat-...)") : tr("粘贴 GitHub 令牌（如 ghp_... 或 github_pat_...）", "Paste GitHub Token (ghp_...)")) + '" />' +
+                          '<button class="btn btn-primary" style="height:34px;padding:0 14px;" type="button" data-save-host="' + escapeHtml(target) + '" data-save-forge="' + escapeHtml(h.forge) + '" ' + (saving ? "disabled" : "") + ">" +
+                            icon(saving ? "refresh" : "check", 12) +
+                            "<span>" + (saving ? tr("验证中...", "Verifying...") : tr("保存并连接", "Save & Connect")) + "</span>" +
+                          "</button>" +
+                        "</div>" +
+                        (errMsg ? '<div class="auth-err-msg">' + escapeHtml(errMsg) + "</div>" : "") +
+                      "</div>" +
+                    "</div>" +
+                  "</div>"
+                );
+              }).join("");
+
+          const customErr = state.authErrors.__custom__ || "";
+          const customForm = state.showCustomHostForm
+            ? '<div class="host-card">' +
+                '<div class="host-card-hdr"><strong style="font-size:13px;">' + tr("添加其他 GitLab / GitHub 主机", "Add Custom GitLab / GitHub Host") + '</strong><button class="btn btn-xs" type="button" data-toggle-custom-host="0">' + tr("收起", "Close") + "</button></div>" +
+                '<div class="auth-alert-form">' +
+                  '<button class="btn btn-sm ' + (state.customHostForge === "gitlab" ? "btn-primary" : "") + '" type="button" data-custom-forge="gitlab">' + forgeIcon("gitlab", 12) + "<span>GitLab</span></button>" +
+                  '<button class="btn btn-sm ' + (state.customHostForge === "github" ? "btn-primary" : "") + '" type="button" data-custom-forge="github">' + forgeIcon("github", 12) + "<span>GitHub</span></button>" +
+                  '<input class="token-input" type="text" id="custom-host-url" value="' + escapeHtml(state.customHostUrl) + '" placeholder="' + escapeHtml(state.customHostForge === "gitlab" ? "http://192.168.31.14:10081" : "https://github.com") + '" />' +
+                "</div>" +
+                renderPermissionGuide(state.customHostForge) +
+                '<div class="auth-alert-form">' +
+                  '<input class="token-input" type="password" id="custom-host-token" value="' + escapeHtml(state.customHostToken) + '" placeholder="' + escapeHtml(tr("粘贴生成的访问令牌 (Token)", "Paste Personal Access Token")) + '" />' +
+                  '<button class="btn btn-primary" style="height:34px;padding:0 14px;" type="button" id="custom-host-save-btn">' + icon("check", 12) + "<span>" + tr("保存并连接", "Save & Connect") + "</span></button>" +
+                "</div>" +
+                (customErr ? '<div class="auth-err-msg">' + escapeHtml(customErr) + "</div>" : "") +
+              "</div>"
+            : '<div><button class="ghost-link-btn" type="button" data-toggle-custom-host="1">+ ' + tr("添加其他 GitLab / GitHub 主机", "Add Another GitLab / GitHub Host") + "</button></div>";
+
+          bodyHtml = hostCards + customForm;
+        }
+
+        const hdrTitle = isGuide
+          ? tr("四步上手 IDD 工作流", "How IDD Works in 4 Steps")
+          : tr("连接代码托管平台", "Connect GitHub / GitLab");
+        const hdrSub = isGuide
+          ? tr("多 Agent 各自独立目录并行开发，在看板盯进度并一键换手接力。", "Parallel isolated worktrees for every agent, with live progress and 1-click handoff.")
+          : tr("生成个人访问令牌并粘贴保存，即可自动同步 Issue、PR/MR 与 CI 状态（免命令行）。", "Create a personal access token with the required scopes below and save directly in the browser.");
+
+        const ftrHtml = !isGuide
+          ? '<span style="font-size:11.5px;color:var(--text-faint);">' + tr("本机加密权限保存 (<code>~/.config/idd/hosts.json</code>, 0600)", "Stored locally (<code>~/.config/idd/hosts.json</code>, 0600)") + "</span>" +
+            '<div style="display:inline-flex;gap:8px;">' +
+              '<button class="btn" type="button" data-setup-close="1">' + tr("稍后再说", "Later") + "</button>" +
+              '<button class="btn btn-primary" type="button" data-setup-tab="guide"><span>' + tr("下一步：了解工作流", "Next: 4-Step Guide") + "</span>" + icon("chevronRight", 13) + "</button>" +
+            "</div>"
+          : '<button class="btn" type="button" data-setup-tab="auth"><span>' + tr("← 返回平台配置", "<- Back to Setup") + "</span></button>" +
+            '<button class="btn btn-primary" type="button" id="finish-onboarding-btn">' + icon("check", 13) + "<span>" + tr("开始使用看板", "Finish & Enter Board") + "</span></button>";
+
+        modal.innerHTML =
+          '<div class="setup-hdr">' +
+            '<div class="setup-topbar">' +
+              '<div class="wizard-nav">' +
+                '<button class="wizard-nav-btn ' + (!isGuide ? "active" : "") + '" type="button" data-setup-tab="auth"><span class="wizard-num">1</span><span>' + tr("连接代码平台", "Connect Platforms") + "</span></button>" +
+                '<button class="wizard-nav-btn ' + (isGuide ? "active" : "") + '" type="button" data-setup-tab="guide"><span class="wizard-num">2</span><span>' + tr("四步上手流程", "4-Step Workflow") + "</span></button>" +
+              "</div>" +
+              '<button class="icon-btn" type="button" data-setup-close="1" aria-label="' + tr("关闭", "Close") + '">' + icon("x", 16) + "</button>" +
+            "</div>" +
+            "<div>" +
+              '<h2 class="setup-title">' + hdrTitle + "</h2>" +
+              '<p class="setup-sub">' + hdrSub + "</p>" +
+            "</div>" +
+          "</div>" +
+          '<div class="setup-body">' + bodyHtml + "</div>" +
+          '<div class="setup-ftr">' + ftrHtml + "</div>";
+      }
+
+      function renderTopAlerts(snap) {
+        const topWrap = document.getElementById("top-alerts-wrap");
+        if (!topWrap || !snap) return;
+        const authAlerts = snap.auth_alerts || [];
+        const sig = JSON.stringify({
+          aa: authAlerts,
+          lg: state.lang,
+          sv: state.authSavingHost,
+          er: state.authErrors
+        });
+        if (sig === state.lastTopAlertsSig) return;
+        state.lastTopAlertsSig = sig;
+
+        if (!authAlerts.length) {
+          topWrap.innerHTML = "";
+          return;
+        }
+
+        topWrap.innerHTML = authAlerts.map((a) => {
+          const target = a.api_base || a.host || "";
+          const fg = a.forge || "gitlab";
+          const isGitLab = fg === "gitlab";
+          const plat = isGitLab ? tr("GitLab", "GitLab") : "GitHub";
+          const scopeName = isGitLab ? "api" : "repo";
+          const hostLabel = String(a.host || target).replace(/^https?:\/\//i, "");
+          const tokenHref = safeUrl(a.token_url);
+          const hostHref = safeUrl(a.api_base);
+          const draftVal = state.tokenDrafts[target] || "";
+          const errMsg = state.authErrors[target] || "";
+          const saving = state.authSavingHost === target;
+
+          const quietRepos = (a.repos || []).map((name) => {
+            const matched = (snap.repos || []).find((r) => r.repo_name === name);
+            const href = matched ? safeUrl(matched.repo_url) : "";
+            return href
+              ? '<a class="host-repo-link" href="' + escapeHtml(href) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(name) + icon("externalLink", 10) + "</a>"
+              : '<span class="host-repo-link">' + escapeHtml(name) + "</span>";
+          }).join('<span style="color:var(--text-faint);">·</span>');
+
+          return (
+            '<div class="auth-alert-box">' +
+              '<div class="auth-alert-top">' +
+                '<div class="auth-alert-main">' +
+                  '<span class="host-ic sm ' + (isGitLab ? "is-gitlab" : "is-github") + '">' + forgeIcon(fg, 13) + "</span>" +
+                  "<strong>" + tr("待配置 " + plat + " 访问令牌", plat + " Token Required") + "</strong>" +
+                  (hostHref ? '<a class="host-url-link" href="' + escapeHtml(hostHref) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(hostLabel) + " ↗</a>" : '<span class="host-url-link">' + escapeHtml(hostLabel) + "</span>") +
+                  (quietRepos ? '<span style="color:var(--text-faint);">·</span>' + quietRepos : "") +
+                  '<code class="perm-tag">' + tr("需勾选: " + scopeName, "Scope: " + scopeName) + "</code>" +
+                "</div>" +
+                '<button class="btn btn-xs" type="button" data-open-setup="auth">' + icon("compass", 11) + "<span>" + tr("权限说明与向导", "Permissions & Guide") + "</span></button>" +
+              "</div>" +
+              '<div class="auth-alert-form">' +
+                (tokenHref ? '<a class="btn btn-sm" href="' + escapeHtml(tokenHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 12) + "<span>" + tr("1. 去生成令牌 (勾选 " + scopeName + ")", "1. Create Token (" + scopeName + ")") + "</span></a>" : "") +
+                '<input class="token-input" type="password" autocomplete="off" data-token-draft="' + escapeHtml(target) + '" value="' + escapeHtml(draftVal) + '" placeholder="' + escapeHtml(tr("2. 粘贴生成的令牌，点右侧直接保存（无需执行命令）", "2. Paste token here and click Save")) + '" />' +
+                '<button class="btn btn-sm btn-primary" style="height:34px;padding:0 14px;" type="button" data-save-host="' + escapeHtml(target) + '" data-save-forge="' + escapeHtml(fg) + '" ' + (saving ? "disabled" : "") + ">" +
+                  icon(saving ? "refresh" : "check", 12) +
+                  "<span>" + (saving ? tr("验证中...", "Verifying...") : tr("保存并连接", "Save & Connect")) + "</span>" +
+                "</button>" +
+              "</div>" +
+              (errMsg ? '<div class="auth-err-msg">' + escapeHtml(errMsg) + "</div>" : "") +
+            "</div>"
+          );
+        }).join("");
+      }
+
       function computeRenderSignature(snap) {
         if (!snap) return "";
         return JSON.stringify({
@@ -2577,6 +4125,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
           o: snap.orphan_changes,
           aa: snap.auth_alerts,
           fs: snap.forge_syncing,
+          fc: state.fromCache,
+          hl: state.hasLiveSnapshot,
           w: snap.warnings,
           sr: state.selectedRepo,
           vm: state.viewMode,
@@ -2595,7 +4145,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
       function renderAll(force) {
         const snap = state.snapshot;
-        if (!snap) return;
+        if (!snap) {
+          syncHeaderControls();
+          updateConnectionBadge(!state.initError, state.initError);
+          renderLoadingState();
+          return;
+        }
 
         state.lastClockStr = formatClock(snap.generated_at);
         const updatedTag = document.getElementById("updated-tag");
@@ -2609,37 +4164,20 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
         syncHeaderControls();
         renderWorkspaceHeader(snap);
+        renderTopAlerts(snap);
         renderSidebarFilters(snap);
         renderKpis(snap);
+        renderSyncBanner(snap);
         renderMain();
         renderSidebarReposAndWorktrees(snap);
         renderInspector();
 
         const authAlerts = snap.auth_alerts || [];
-        const authHtml = authAlerts.map((a) => {
-          const target = a.api_base || a.host || "";
-          const repoNames = (a.repos || []).join(", ");
-          const tokenHref = safeUrl(a.token_url);
-          const cmd = a.login_cmd || ("idd auth login " + target + " --token <PAT>");
-          return (
-            '<div class="auth-alert-box">' +
-              '<div class="auth-alert-main">' +
-                '<span style="color:var(--accent)">' + icon("alertTriangle", 14) + "</span>" +
-                "<span><strong>" + tr("需配置 GitLab 登录凭据", "GitLab Token Required") + "</strong> (" + escapeHtml(target) + (repoNames ? " · " + escapeHtml(repoNames) : "") + ")</span>" +
-              "</div>" +
-              '<div class="auth-alert-actions">' +
-                '<button class="btn btn-xs btn-primary" data-copy-val="' + escapeHtml(cmd) + '" data-copy-msg="' + tr("已复制登录命令，请替换 <PAT> 后在终端执行", "Copied login command") + '" type="button">' + icon("copy", 11) + "<span>" + tr("复制登录命令", "Copy Login Cmd") + "</span></button>" +
-                (tokenHref ? '<a class="btn btn-xs" href="' + escapeHtml(tokenHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>" + tr("生成 Token", "Create Token") + "</span></a>" : "") +
-              "</div>" +
-            "</div>"
-          );
-        }).join("");
-
         const warns = (snap.warnings || []).filter((w) => !authAlerts.length || !String(w).includes("需要鉴权"));
         const warnsHtml = warns.length
           ? '<div class="warnings-box">' + icon("alertTriangle", 14) + "<div><strong>" + tr("提示：", "Notice: ") + "</strong>" + warns.map((w) => escapeHtml(w)).join(" ｜ ") + "</div></div>"
           : "";
-        document.getElementById("warnings-wrap").innerHTML = authHtml + warnsHtml;
+        document.getElementById("warnings-wrap").innerHTML = warnsHtml;
 
         const retainedCount = (snap.repos || []).reduce((acc, r) => acc + (r.retained_idle_worktrees || []).length, 0);
         const retainedText = retainedCount > 0
@@ -2653,12 +4191,30 @@ BOARD_HTML = r"""<!DOCTYPE html>
       async function fetchSnapshot(forceRefresh) {
         if (state.fetching && !forceRefresh) return;
         state.fetching = true;
+        if (forceRefresh) state.manualRefreshing = true;
+        if (!state.snapshot && !state.slowInitTimerId) {
+          state.slowInitTimerId = setTimeout(() => {
+            state.slowInitTimerId = null;
+            if (!state.snapshot && !state.initError) {
+              state.slowInit = true;
+              renderAll(true);
+            }
+          }, 3500);
+        }
         syncHeaderControls();
         try {
           const url = forceRefresh ? "/api/snapshot?refresh=1" : "/api/snapshot";
           const res = await fetch(url, { cache: "no-store" });
           if (!res.ok) throw new Error("HTTP " + res.status);
-          state.snapshot = await res.json();
+          const nextSnap = await res.json();
+          clearTimeout(state.slowInitTimerId);
+          state.slowInitTimerId = null;
+          state.snapshot = nextSnap;
+          state.hasLiveSnapshot = true;
+          state.fromCache = false;
+          state.initError = "";
+          state.slowInit = false;
+          saveCachedSnapshot(nextSnap);
           if (!state.didAutoInspect) {
             state.didAutoInspect = true;
             const qInspect = urlParams.get("inspect");
@@ -2675,6 +4231,23 @@ BOARD_HTML = r"""<!DOCTYPE html>
           state.lastClockStr = formatClock(state.snapshot.generated_at);
           updateConnectionBadge(true);
           renderAll(false);
+          if (!state.didCheckOnboarding) {
+            const qOnb = urlParams.get("onboarding");
+            const forceOnb = qOnb === "1" || qOnb === "guide";
+            if (forceOnb || !state.snapshot.forge_syncing) {
+              state.didCheckOnboarding = true;
+              const hasAlerts = ((state.snapshot && state.snapshot.auth_alerts) || []).length > 0;
+              if (forceOnb) {
+                openSetupModal(qOnb === "guide" ? "guide" : "auth");
+              } else if (!urlParams.has("inspect") && qOnb !== "0") {
+                if (hasAlerts && !sessionStorage.getItem("idd_setup_dismissed")) {
+                  openSetupModal("auth");
+                } else if (!localStorage.getItem("idd_onboarding_done")) {
+                  openSetupModal(hasAlerts ? "auth" : "guide");
+                }
+              }
+            }
+          }
           clearTimeout(state.quickSyncTimerId);
           if (state.snapshot && state.snapshot.forge_syncing && !state.paused) {
             state.quickSyncTimerId = setTimeout(() => fetchSnapshot(false), 800);
@@ -2683,9 +4256,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
             showToast(tr("已触发远端同步，正在更新...", "Triggered remote sync..."));
           }
         } catch (err) {
-          updateConnectionBadge(false, tr("连接异常: ", "Sync error: ") + err.message);
+          if (!state.snapshot) {
+            clearTimeout(state.slowInitTimerId);
+            state.slowInitTimerId = null;
+            state.initError = err && err.message ? err.message : tr("连接异常", "Network error");
+            updateConnectionBadge(false, tr("初始化失败", "Init failed"));
+            renderAll(true);
+          } else {
+            updateConnectionBadge(false, tr("连接异常: ", "Sync error: ") + err.message);
+          }
         } finally {
           state.fetching = false;
+          if (forceRefresh) state.manualRefreshing = false;
           syncHeaderControls();
         }
       }
@@ -2734,7 +4316,142 @@ BOARD_HTML = r"""<!DOCTYPE html>
       document.getElementById("kpis").addEventListener("click", handleActionClick);
       document.getElementById("warnings-wrap").addEventListener("click", handleActionClick);
 
+      document.getElementById("setup-btn").addEventListener("click", () => {
+        const hasAlerts = ((state.snapshot && state.snapshot.auth_alerts) || []).length > 0;
+        openSetupModal(hasAlerts ? "auth" : (state.setupTab || "auth"));
+      });
+
+      document.getElementById("top-alerts-wrap").addEventListener("input", (e) => {
+        const inp = e.target.closest("[data-token-draft]");
+        if (inp) {
+          state.tokenDrafts[inp.getAttribute("data-token-draft")] = inp.value || "";
+        }
+      });
+
+      document.getElementById("top-alerts-wrap").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          const inp = e.target.closest("[data-token-draft]");
+          if (inp) {
+            const target = inp.getAttribute("data-token-draft");
+            const btn = document.querySelector('#top-alerts-wrap [data-save-host="' + CSS.escape(target) + '"]');
+            if (btn) btn.click();
+          }
+        }
+      });
+
+      document.getElementById("top-alerts-wrap").addEventListener("click", (e) => {
+        const openBtn = e.target.closest("[data-open-setup]");
+        if (openBtn) {
+          openSetupModal(openBtn.getAttribute("data-open-setup") || "auth");
+          return;
+        }
+        const saveBtn = e.target.closest("[data-save-host]");
+        if (saveBtn) {
+          const host = saveBtn.getAttribute("data-save-host") || "";
+          const fg = saveBtn.getAttribute("data-save-forge") || "gitlab";
+          submitHostToken(host, fg, state.tokenDrafts[host] || "", false);
+          return;
+        }
+        handleActionClick(e);
+      });
+
+      document.getElementById("setup-modal").addEventListener("input", (e) => {
+        const inp = e.target.closest("[data-token-draft]");
+        if (inp) {
+          state.tokenDrafts[inp.getAttribute("data-token-draft")] = inp.value || "";
+          return;
+        }
+        if (e.target.id === "custom-host-url") state.customHostUrl = e.target.value || "";
+        if (e.target.id === "custom-host-token") state.customHostToken = e.target.value || "";
+      });
+
+      document.getElementById("setup-modal").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          const inp = e.target.closest("[data-token-draft]");
+          if (inp) {
+            const target = inp.getAttribute("data-token-draft");
+            const btn = document.querySelector('#setup-modal [data-save-host="' + CSS.escape(target) + '"]');
+            if (btn) btn.click();
+          } else if (e.target.id === "custom-host-token" || e.target.id === "custom-host-url") {
+            const cbtn = document.getElementById("custom-host-save-btn");
+            if (cbtn) cbtn.click();
+          }
+        }
+      });
+
+      document.getElementById("setup-modal").addEventListener("click", async (e) => {
+        if (e.target.closest("[data-setup-close]")) {
+          closeSetupModal(true);
+          return;
+        }
+        const tabBtn = e.target.closest("[data-setup-tab]");
+        if (tabBtn) {
+          state.setupTab = tabBtn.getAttribute("data-setup-tab") || "auth";
+          renderSetupModal();
+          return;
+        }
+        if (e.target.closest("#finish-onboarding-btn")) {
+          localStorage.setItem("idd_onboarding_done", "1");
+          closeSetupModal(true);
+          return;
+        }
+        const saveBtn = e.target.closest("[data-save-host]");
+        if (saveBtn) {
+          const host = saveBtn.getAttribute("data-save-host") || "";
+          const fg = saveBtn.getAttribute("data-save-forge") || "gitlab";
+          await submitHostToken(host, fg, state.tokenDrafts[host] || "", false);
+          return;
+        }
+        const editBtn = e.target.closest("[data-toggle-edit-host]");
+        if (editBtn) {
+          const h = editBtn.getAttribute("data-toggle-edit-host") || "";
+          state.editingHosts[h] = !state.editingHosts[h];
+          renderSetupModal();
+          return;
+        }
+        const rmBtn = e.target.closest("[data-remove-host]");
+        if (rmBtn) {
+          await removeHostToken(rmBtn.getAttribute("data-remove-host") || "");
+          return;
+        }
+        const customToggle = e.target.closest("[data-toggle-custom-host]");
+        if (customToggle) {
+          state.showCustomHostForm = customToggle.getAttribute("data-toggle-custom-host") === "1";
+          renderSetupModal();
+          return;
+        }
+        const cfBtn = e.target.closest("[data-custom-forge]");
+        if (cfBtn) {
+          state.customHostForge = cfBtn.getAttribute("data-custom-forge") || "gitlab";
+          renderSetupModal();
+          return;
+        }
+        if (e.target.closest("#custom-host-save-btn")) {
+          const rawUrl = (state.customHostUrl || "").trim();
+          const rawTok = (state.customHostToken || "").trim();
+          if (!rawUrl || !rawTok) {
+            state.authErrors.__custom__ = tr("请填写主机地址并粘贴访问令牌", "Please enter both host URL and token");
+            renderSetupModal();
+            return;
+          }
+          delete state.authErrors.__custom__;
+          state.tokenDrafts[rawUrl] = rawTok;
+          const ok = await submitHostToken(rawUrl, state.customHostForge, rawTok, false);
+          if (!ok && state.authErrors[rawUrl]) {
+            state.authErrors.__custom__ = state.authErrors[rawUrl];
+            renderSetupModal();
+          }
+        }
+      });
+
+      document.getElementById("setup-modal-overlay").addEventListener("click", (e) => {
+        if (e.target.id === "setup-modal-overlay") {
+          closeSetupModal(true);
+        }
+      });
+
       document.getElementById("repo-pills").addEventListener("click", (e) => {
+        if (e.target.closest("[data-stop-repo]")) return;
         const btn = e.target.closest("[data-repo]");
         if (!btn) return;
         state.selectedRepo = btn.getAttribute("data-repo") || "ALL";
@@ -2755,6 +4472,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
       document.getElementById("main-content").addEventListener("click", (e) => {
         if (handleActionClick(e)) return;
+        if (e.target.closest("[data-retry-init]")) {
+          state.initError = "";
+          state.slowInit = false;
+          renderAll(true);
+          fetchSnapshot(true);
+          return;
+        }
         const ctab = e.target.closest("[data-console-tab]");
         if (ctab) {
           state.consoleTab = ctab.getAttribute("data-console-tab") || "handoff";
@@ -2821,11 +4545,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
       document.getElementById("lang-btn").addEventListener("click", () => {
         state.lang = isEn() ? "zh" : "en";
         localStorage.setItem("idd_board_lang", state.lang);
+        state.lastTopAlertsSig = "";
         applyLang();
         applyTheme(document.documentElement.getAttribute("data-theme") || "dark");
         syncHeaderControls();
         updateConnectionBadge(true);
         renderAll(true);
+        if (state.setupOpen) renderSetupModal();
       });
 
       const searchInput = document.getElementById("search-input");
@@ -2870,7 +4596,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const tag = (e.target && e.target.tagName) || "";
         const inInput = tag === "INPUT" || tag === "TEXTAREA" || (e.target && e.target.isContentEditable);
         if (e.key === "Escape") {
-          if (state.inspectedKey) {
+          if (state.setupOpen) {
+            closeSetupModal(true);
+          } else if (state.inspectedKey) {
             state.inspectedKey = null;
             renderAll(true);
           } else if (document.activeElement === searchInput) {
@@ -2905,8 +4633,17 @@ BOARD_HTML = r"""<!DOCTYPE html>
       applyLang();
       applyTheme(savedTheme);
       applySidebarState();
+      const cachedSnap = loadCachedSnapshot();
+      if (cachedSnap) {
+        state.snapshot = cachedSnap;
+        state.fromCache = true;
+        state.lastClockStr = formatClock(cachedSnap.generated_at);
+      }
       syncHeaderControls();
+      updateConnectionBadge(true);
+      renderAll(true);
       fetchSnapshot(false);
+      fetchAuthStatus();
       state.timerId = setInterval(() => {
         if (!state.paused) fetchSnapshot(false);
       }, 2000);
@@ -2959,6 +4696,44 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self._send_bytes(status, "application/json; charset=utf-8", body)
 
+    def _require_local_csrf(self) -> bool:
+        if self.headers.get("X-IDD-Request") != "1":
+            self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "Missing X-IDD-Request header"})
+            return False
+        origin = (self.headers.get("Origin") or "").strip()
+        if origin:
+            parsed_origin = urllib.parse.urlparse(origin)
+            if parsed_origin.hostname not in ("127.0.0.1", "localhost", "::1"):
+                self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "Cross-origin request rejected"})
+                return False
+        return True
+
+    def _read_json_body(self) -> dict[str, object] | None:
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            length = 0
+        if length <= 0 or length > 65536:
+            return {}
+        try:
+            raw = self.rfile.read(length).decode("utf-8")
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else None
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+
+    def _target_repos(self) -> list[Path]:
+        if not self.global_mode and self.root is not None:
+            return [self.root]
+        return [Path(r["path"]) for r in monitor.load_registered_repos(prune_missing=True)]
+
+    def _refresh_cached_repos(self, *, timeout: float = 2.0) -> None:
+        monitor._GH_CLI_CACHE["checked_at"] = 0.0  # noqa: SLF001
+        if self.local_only:
+            self.cache.invalidate_all()
+            return
+        self.cache.refresh_now(self._target_repos(), timeout=timeout)
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path in ("/", "/index.html"):
@@ -2970,15 +4745,19 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"ok": True, "version": self.version})
             return
 
+        if parsed.path == "/api/auth/status":
+            try:
+                auth_status = monitor.collect_auth_hosts_status(root=self.root, global_mode=self.global_mode)
+                self._send_json(HTTPStatus.OK, auth_status)
+            except Exception as exc:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+            return
+
         if parsed.path == "/api/snapshot":
             params = urllib.parse.parse_qs(parsed.query)
             force_refresh = params.get("refresh", ["0"])[0] in ("1", "true", "yes")
             if force_refresh and not self.local_only:
-                if not self.global_mode and self.root is not None:
-                    self.cache.warm_async([self.root], force_refresh=True)
-                else:
-                    repos = [Path(r["path"]) for r in monitor.load_registered_repos(prune_missing=True)]
-                    self.cache.warm_async(repos, force_refresh=True)
+                self.cache.warm_async(self._target_repos(), force_refresh=True)
             try:
                 snapshot = monitor.collect_scope_snapshot(
                     root=self.root,
@@ -2995,6 +4774,100 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def do_POST(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        if not self._require_local_csrf():
+            return
+
+        if parsed.path == "/api/auth/save":
+            payload = self._read_json_body()
+            if payload is None:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "请求格式无效"})
+                return
+            raw_host = str(payload.get("host") or "").strip()
+            token = str(payload.get("token") or "").strip()
+            explicit_forge = str(payload.get("forge") or "").strip().lower()
+            no_verify = bool(payload.get("no_verify"))
+
+            if not raw_host or not token:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "请同时提供主机地址与个人访问令牌"})
+                return
+
+            try:
+                explicit_scheme = raw_host.lower().startswith(("http://", "https://"))
+                use_http = raw_host.lower().startswith("http://")
+                host_key, api_base = normalize_host_input(raw_host, use_http=use_http)
+                forge_type = (
+                    explicit_forge
+                    if explicit_forge in ("github", "gitlab")
+                    else ("github" if (host_key == "github.com" or host_key.endswith(".github.com")) else "gitlab")
+                )
+                username = "unverified"
+                if not no_verify:
+                    try:
+                        username = verify_host_token(forge_type, api_base, token)
+                    except ForgeError:
+                        if not explicit_scheme and forge_type == "gitlab" and api_base.startswith("https://"):
+                            http_base = f"http://{host_key}"
+                            username = verify_host_token(forge_type, http_base, token)
+                            api_base = http_base
+                        else:
+                            raise
+            except ForgeError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+
+            hosts = load_hosts_config()
+            hosts[host_key] = {
+                "forge": forge_type,
+                "api_url": api_base,
+                "token": token,
+                "username": username,
+            }
+            save_hosts_config(hosts)
+            self._refresh_cached_repos(timeout=2.0)
+            auth_status = monitor.collect_auth_hosts_status(root=self.root, global_mode=self.global_mode)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "host": host_key,
+                    "api_base": api_base,
+                    "forge": forge_type,
+                    "username": username,
+                    "auth": auth_status,
+                },
+            )
+            return
+
+        if parsed.path == "/api/auth/logout":
+            payload = self._read_json_body()
+            if payload is None:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "请求格式无效"})
+                return
+            raw_host = str(payload.get("host") or "").strip()
+            hosts = load_hosts_config()
+            removed = False
+            if raw_host:
+                candidates = {raw_host}
+                try:
+                    hk, _ = normalize_host_input(raw_host)
+                    candidates.add(hk)
+                except ForgeError:
+                    pass
+                for k in list(hosts.keys()):
+                    if k in candidates:
+                        hosts.pop(k, None)
+                        removed = True
+                if removed:
+                    save_hosts_config(hosts)
+                    self._refresh_cached_repos(timeout=1.5)
+            auth_status = monitor.collect_auth_hosts_status(root=self.root, global_mode=self.global_mode)
+            self._send_json(HTTPStatus.OK, {"ok": True, "removed": removed, "auth": auth_status})
+            return
+
+        self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
 
 
 def _bind_server(host: str, port: int | None, handler_cls: type[BaseHTTPRequestHandler]) -> BoardHTTPServer:

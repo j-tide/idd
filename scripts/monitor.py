@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,17 @@ import threading
 import time
 from typing import Any
 
-from forge import ForgeAuthError, ForgeError, build_issue_web_url, get_config_dir, get_forge, inspect_remote_origin
+from forge import (
+    ForgeAuthError,
+    ForgeError,
+    build_issue_web_url,
+    build_repo_web_url,
+    get_config_dir,
+    get_forge,
+    get_hosts_path,
+    inspect_remote_origin,
+    load_hosts_config,
+)
 import task_status
 
 
@@ -233,6 +244,164 @@ def unregister_repo(target: Path) -> bool:
         return removed
 
 
+_GH_CLI_CACHE: dict[str, Any] = {"checked_at": 0.0, "logged_in": False}
+
+
+def _check_gh_cli_logged_in(ttl: float = 30.0) -> bool:
+    now = time.time()
+    if (now - float(_GH_CLI_CACHE.get("checked_at") or 0.0)) < ttl:
+        return bool(_GH_CLI_CACHE.get("logged_in"))
+    if not shutil.which("gh"):
+        _GH_CLI_CACHE["checked_at"] = now
+        _GH_CLI_CACHE["logged_in"] = False
+        return False
+    try:
+        proc = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, timeout=4.0)
+        ok = proc.returncode == 0
+    except _IGNORED_GIT_ERROR:
+        ok = False
+    _GH_CLI_CACHE["checked_at"] = now
+    _GH_CLI_CACHE["logged_in"] = ok
+    return ok
+
+
+def _mask_token(tok: str) -> str:
+    cleaned = tok.strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) > 10:
+        return f"{cleaned[:6]}...{cleaned[-2:]}"
+    return "****"
+
+
+def collect_auth_hosts_status(*, root: Path | None = None, global_mode: bool = True) -> dict[str, Any]:
+    """Return all detected GitHub/GitLab hosts, their bound repos, and live credential status."""
+    saved_hosts = load_hosts_config()
+    repo_paths: list[Path] = []
+    if not global_mode and root is not None:
+        m = resolve_main_worktree_ro(root)
+        if m is not None:
+            repo_paths.append(m)
+    else:
+        if root is not None:
+            m = resolve_main_worktree_ro(root)
+            if m is not None:
+                register_repo(m)
+        repo_paths = [Path(rec["path"]) for rec in load_registered_repos(prune_missing=True)]
+
+    hosts_map: dict[str, dict[str, Any]] = {}
+
+    for repo_path in repo_paths:
+        spec, forge_type = inspect_remote_origin(repo_path)
+        if spec is None or forge_type not in ("github", "gitlab"):
+            continue
+        host_key = spec.host
+        saved = saved_hosts.get(spec.host) or saved_hosts.get(spec.hostname)
+        matched_saved_key = spec.host if spec.host in saved_hosts else (spec.hostname if spec.hostname in saved_hosts else "")
+        api_base = (saved.get("api_url") if saved and saved.get("api_url") else spec.api_base).rstrip("/")
+        repo_url = build_repo_web_url(spec, forge_type)
+
+        bucket = hosts_map.get(host_key)
+        if bucket is None:
+            bucket = {
+                "host": host_key,
+                "saved_key": matched_saved_key,
+                "api_base": api_base,
+                "forge": forge_type,
+                "repos": [],
+                "saved_entry": saved,
+            }
+            hosts_map[host_key] = bucket
+        if not any(r["name"] == repo_path.name and r["url"] == repo_url for r in bucket["repos"]):
+            bucket["repos"].append({"name": repo_path.name, "url": repo_url, "path": str(repo_path)})
+
+    for saved_key, entry in sorted(saved_hosts.items()):
+        if saved_key in hosts_map or any(b.get("saved_key") == saved_key for b in hosts_map.values()):
+            continue
+        fg = str(entry.get("forge") or ("github" if "github.com" in saved_key else "gitlab"))
+        api_base = str(entry.get("api_url") or f"https://{saved_key}").rstrip("/")
+        hosts_map[saved_key] = {
+            "host": saved_key,
+            "saved_key": saved_key,
+            "api_base": api_base,
+            "forge": fg,
+            "repos": [],
+            "saved_entry": entry,
+        }
+
+    has_gitlab_env = bool(os.environ.get("GITLAB_TOKEN", "").strip() or os.environ.get("GITLAB_PRIVATE_TOKEN", "").strip())
+    has_github_env = bool(os.environ.get("GH_TOKEN", "").strip() or os.environ.get("GITHUB_TOKEN", "").strip())
+    has_glab_cli = bool(shutil.which("glab"))
+    gh_logged_in: bool | None = None
+
+    items: list[dict[str, Any]] = []
+    for bucket in hosts_map.values():
+        fg = bucket["forge"]
+        api_base = bucket["api_base"]
+        host_key = bucket["host"]
+        saved = bucket["saved_entry"] or {}
+        saved_tok = str(saved.get("token") or "").strip()
+        username = str(saved.get("username") or "").strip()
+        configured = False
+        auth_source = "missing"
+
+        if saved_tok:
+            configured = True
+            auth_source = "hosts.json"
+        elif fg == "gitlab":
+            if has_gitlab_env:
+                configured = True
+                auth_source = "env"
+            elif has_glab_cli:
+                configured = False
+                auth_source = "missing"
+        elif fg == "github":
+            if has_github_env:
+                configured = True
+                auth_source = "env"
+            else:
+                if gh_logged_in is None:
+                    gh_logged_in = _check_gh_cli_logged_in()
+                if gh_logged_in and (host_key == "github.com" or host_key.endswith(".github.com")):
+                    configured = True
+                    auth_source = "gh_cli"
+
+        if fg == "gitlab":
+            token_url = (
+                f"{api_base}/-/user_settings/personal_access_tokens?name=IDD+Board&scopes=api"
+                if api_base
+                else ""
+            )
+        else:
+            token_url = (
+                "https://github.com/settings/tokens/new?description=IDD+Board&scopes=repo"
+                if host_key == "github.com"
+                else (f"{api_base}/settings/tokens/new?description=IDD+Board&scopes=repo" if api_base else "")
+            )
+
+        items.append(
+            {
+                "host": host_key,
+                "api_base": api_base,
+                "forge": fg,
+                "repos": bucket["repos"],
+                "configured": configured,
+                "auth_source": auth_source,
+                "masked_token": _mask_token(saved_tok),
+                "username": username,
+                "token_url": token_url,
+                "can_remove": bool(bucket.get("saved_key")),
+            }
+        )
+
+    items.sort(key=lambda h: (1 if h["configured"] else 0, 0 if h["forge"] == "gitlab" else 1, h["host"]))
+    return {
+        "hosts": items,
+        "hosts_config_path": str(get_hosts_path()),
+        "unconfigured_count": sum(1 for h in items if not h["configured"]),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Worktree Live Pulse Probe
 # ---------------------------------------------------------------------------
@@ -435,6 +604,24 @@ class ForgeSnapshotCache:
         self._lock = threading.Lock()
         self._entries: dict[str, dict[str, Any]] = {}
         self._inflight: set[str] = set()
+        self._epoch: int = 0
+
+    def invalidate_all(self) -> None:
+        """Drop all cached forge entries and advance epoch so stale in-flight fetches cannot overwrite."""
+        with self._lock:
+            self._epoch += 1
+            self._entries.clear()
+            self._inflight.clear()
+
+    def refresh_now(self, repo_paths: list[Path], *, timeout: float = 2.0) -> None:
+        """Invalidate cache, kick off parallel refreshes, and wait up to `timeout` seconds."""
+        self.invalidate_all()
+        self.warm_async(repo_paths, force_refresh=True)
+        deadline = time.monotonic() + max(0.0, timeout)
+        while time.monotonic() < deadline:
+            if not self.is_syncing():
+                break
+            time.sleep(0.03)
 
     @staticmethod
     def _build_local_placeholder(main_worktree: Path, *, has_origin: bool, syncing: bool) -> dict[str, Any]:
@@ -467,7 +654,9 @@ class ForgeSnapshotCache:
             "syncing": syncing,
         }
 
-    def _query_and_store(self, main_worktree: Path, key: str) -> dict[str, Any]:
+    def _query_and_store(self, main_worktree: Path, key: str, *, epoch: int | None = None) -> dict[str, Any]:
+        with self._lock:
+            start_epoch = self._epoch if epoch is None else epoch
         forge = get_forge(main_worktree)
         forge_type = forge.forge_type
         mr_label = forge.mr_label
@@ -513,26 +702,29 @@ class ForgeSnapshotCache:
         }
         if self.ttl_seconds > 0:
             with self._lock:
-                self._entries[key] = entry
+                if self._epoch == start_epoch:
+                    self._entries[key] = entry
         return dict(entry)
 
-    def _refresh_in_background(self, main_worktree: Path, key: str) -> None:
+    def _refresh_in_background(self, main_worktree: Path, key: str, epoch: int) -> None:
         try:
-            self._query_and_store(main_worktree, key)
+            self._query_and_store(main_worktree, key, epoch=epoch)
         except Exception:
             pass
         finally:
             with self._lock:
-                self._inflight.discard(key)
+                if self._epoch == epoch:
+                    self._inflight.discard(key)
 
     def _schedule_refresh(self, main_worktree: Path, key: str) -> None:
         with self._lock:
             if key in self._inflight:
                 return
             self._inflight.add(key)
+            epoch = self._epoch
         threading.Thread(
             target=self._refresh_in_background,
-            args=(main_worktree, key),
+            args=(main_worktree, key, epoch),
             daemon=True,
         ).start()
 
@@ -653,6 +845,7 @@ def _build_status_row(
     mr_prefix: str,
     repo_name: str,
     repo_path: str,
+    repo_url: str,
     forge_type: str,
     forge_connected: bool,
 ) -> dict[str, Any]:
@@ -694,6 +887,7 @@ def _build_status_row(
         "change_summary": change_summary,
         "repo_name": repo_name,
         "repo_path": repo_path,
+        "repo_url": repo_url,
         "forge_type": forge_type,
         "forge_connected": forge_connected,
         "issue_dir": item.get("issue", "") if item else "",
@@ -856,8 +1050,9 @@ def _dedupe_auth_alerts(repo_snaps: list[dict[str, Any]]) -> tuple[list[dict[str
     for alert in auth_alerts:
         repo_list = ", ".join(alert["repos"])
         target = alert.get("api_base") or alert.get("host")
+        fg_label = "GitHub" if alert.get("forge") == "github" else "自建 GitLab"
         cmd = alert.get("login_cmd") or f"idd auth login {target} --token <PAT>"
-        warnings.append(f"[{repo_list}] 访问自建 GitLab ({target}) 需要鉴权，请执行：`{cmd}`")
+        warnings.append(f"[{repo_list}] 访问 {fg_label} ({target}) 需要鉴权，请执行：`{cmd}`")
 
     return auth_alerts, warnings
 
@@ -1034,9 +1229,14 @@ def collect_repo_snapshot(
                 }
             )
 
+    effective_forge = forge_type if forge_type != "local" else inferred_forge
+    repo_web_url = build_repo_web_url(remote_spec, effective_forge)
+
     items_by_issue: dict[int, dict[str, Any]] = {}
     local_only_items: list[dict[str, Any]] = []
     for item in local_entries:
+        item["forge_type"] = effective_forge
+        item["repo_url"] = repo_web_url
         inum = item.get("issue_number")
         if inum is not None:
             items_by_issue[int(inum)] = item
@@ -1050,7 +1250,6 @@ def collect_repo_snapshot(
         if m:
             changes_by_issue[int(m.group(1))] = ch
 
-    effective_forge = forge_type if forge_type != "local" else inferred_forge
     rows: list[dict[str, Any]] = []
     seen_issues: set[int] = set()
 
@@ -1072,7 +1271,8 @@ def collect_repo_snapshot(
                 mr_prefix=mr_prefix,
                 repo_name=repo_name,
                 repo_path=repo_path_str,
-                forge_type=forge_type,
+                repo_url=repo_web_url,
+                forge_type=effective_forge,
                 forge_connected=forge_connected,
             )
         )
@@ -1092,7 +1292,8 @@ def collect_repo_snapshot(
                     mr_prefix=mr_prefix,
                     repo_name=repo_name,
                     repo_path=repo_path_str,
-                    forge_type=forge_type,
+                    repo_url=repo_web_url,
+                    forge_type=effective_forge,
                     forge_connected=forge_connected,
                 )
             )
@@ -1104,6 +1305,8 @@ def collect_repo_snapshot(
             ch_copy = dict(ch)
             ch_copy["repo_name"] = repo_name
             ch_copy["repo_path"] = repo_path_str
+            ch_copy["repo_url"] = repo_web_url
+            ch_copy["forge_type"] = effective_forge
             ch_copy["mr_label"] = mr_label
             ch_copy["mr_prefix"] = mr_prefix
             ch_copy["change_summary"] = format_change_badge(ch, mr_label, mr_prefix)
@@ -1112,8 +1315,9 @@ def collect_repo_snapshot(
     return {
         "repo_name": repo_name,
         "repo_path": repo_path_str,
+        "repo_url": repo_web_url,
         "default_branch": default_branch,
-        "forge": forge_type,
+        "forge": effective_forge,
         "forge_connected": forge_connected,
         "forge_syncing": bool(forge_info.get("syncing")),
         "auth_alert": forge_info.get("auth_alert"),

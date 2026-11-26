@@ -56,7 +56,7 @@
 
 ## 快速开始
 
-前置条件：本机已安装 `git` 与 `python3`（GitHub 仓库需登录 `gh`；自建 GitLab 安装后执行 `idd auth login <host> --token <PAT>`）。
+前置条件：本机已安装 `git` 与 `python3`（打开 `idd board` 会自动弹出初始化向导，点击跳转生成令牌后直接在网页粘贴保存即可连接 GitHub / 自建 GitLab，无需手动敲登录命令）。
 
 ```bash
 # 1. 一键安装 Skill（挂载到 Claude Code / Codex / Antigravity）与全局 `idd` CLI

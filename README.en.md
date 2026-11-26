@@ -56,7 +56,7 @@ When you run multiple AI coding tools at the same time, two problems show up fas
 
 ## Quick Start
 
-Prerequisites: `git` and `python3` (`gh` authenticated for GitHub; `idd auth login <host> --token <PAT>` for self-hosted GitLab).
+Prerequisites: `git` and `python3` (`idd board` includes a first-run setup wizard where you can open your GitHub / self-hosted GitLab token page, paste the token, and save directly in the browser—no CLI login command required).
 
 ```bash
 # 1. Install the shared skill for Claude Code, Codex, and Antigravity + global `idd` CLI

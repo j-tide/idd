@@ -71,11 +71,13 @@ def _run(
     *,
     cwd: Path | None = None,
     check: bool = True,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         proc = subprocess.run(
             args,
             cwd=str(cwd) if cwd else None,
+            env=env,
             capture_output=True,
             text=True,
         )
@@ -279,12 +281,29 @@ class GitHubForge:
     mr_label = "PR"
     mr_prefix = "#"
 
-    def __init__(self, cwd: Path, spec: RemoteSpec | None = None) -> None:
+    def __init__(
+        self,
+        cwd: Path,
+        spec: RemoteSpec | None = None,
+        host_cfg: dict[str, str] | None = None,
+    ) -> None:
         self.cwd = cwd
         self.spec = spec
+        self.host_cfg = host_cfg or {}
+        self.token = self.host_cfg.get("token", "").strip()
+
+    def _gh_env(self) -> dict[str, str] | None:
+        if not self.token:
+            return None
+        env = dict(os.environ)
+        if self.spec and self.spec.hostname and self.spec.hostname != "github.com":
+            env["GH_ENTERPRISE_TOKEN"] = self.token
+        else:
+            env["GH_TOKEN"] = self.token
+        return env
 
     def _gh_json(self, args: list[str], *, check: bool = True) -> Any:
-        proc = _run(["gh", *args], cwd=self.cwd, check=check)
+        proc = _run(["gh", *args], cwd=self.cwd, check=check, env=self._gh_env())
         if proc.returncode != 0:
             return None
         raw = proc.stdout.strip()
@@ -350,7 +369,7 @@ class GitHubForge:
                 args.extend(["--label", label])
             for assignee in assignees or []:
                 args.extend(["--assignee", assignee])
-            proc = _run(args, cwd=self.cwd)
+            proc = _run(args, cwd=self.cwd, env=self._gh_env())
             url = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
             return {"number": parse_number_from_url(url), "url": url, "title": title}
         finally:
@@ -365,10 +384,36 @@ class GitHubForge:
         return self._normalize_issue(raw) if isinstance(raw, dict) else None
 
     def list_open_issues(self, limit: int = 100) -> list[dict[str, Any]] | None:
-        raw = self._gh_json(
-            ["issue", "list", "--state", "open", "--limit", str(limit), "--json", "number,title,labels,url"],
+        proc = _run(
+            ["gh", "issue", "list", "--state", "open", "--limit", str(limit), "--json", "number,title,labels,url"],
+            cwd=self.cwd,
             check=False,
+            env=self._gh_env(),
         )
+        if proc.returncode != 0:
+            stderr_low = (proc.stderr or "").lower()
+            if any(k in stderr_low for k in ("gh auth login", "not logged into", "bad credentials", "http 401")):
+                host_key = self.spec.host if self.spec else "github.com"
+                api_base = (self.spec.api_base if self.spec else "https://github.com").rstrip("/")
+                token_url = f"{api_base}/settings/tokens/new?description=IDD+Board&scopes=repo" if host_key != "github.com" else "https://github.com/settings/tokens/new?description=IDD+Board&scopes=repo"
+                login_cmd = f"idd auth login {api_base} --forge github --token <你的 GitHub PAT>"
+                raise ForgeAuthError(
+                    f"访问 GitHub ({api_base}) 需要鉴权 Token。\n"
+                    f"可在看板直接粘贴 Token 保存，或执行 `{login_cmd}`。",
+                    host=host_key,
+                    api_base=api_base,
+                    forge_type="github",
+                    login_cmd=login_cmd,
+                    token_url=token_url,
+                )
+            return None
+        raw_txt = proc.stdout.strip()
+        if not raw_txt:
+            return []
+        try:
+            raw = json.loads(raw_txt)
+        except json.JSONDecodeError as exc:
+            raise ForgeError(f"无法解析 gh 输出的 JSON：{exc}") from exc
         if not isinstance(raw, list):
             return None
         return [self._normalize_issue(item) for item in raw]
@@ -379,7 +424,7 @@ class GitHubForge:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(body)
-            _run(["gh", "issue", "edit", str(number), "--body-file", str(tmp_path)], cwd=self.cwd)
+            _run(["gh", "issue", "edit", str(number), "--body-file", str(tmp_path)], cwd=self.cwd, env=self._gh_env())
         finally:
             tmp_path.unlink(missing_ok=True)
 
@@ -423,7 +468,7 @@ class GitHubForge:
             ]
             if draft:
                 args.append("--draft")
-            proc = _run(args, cwd=self.cwd)
+            proc = _run(args, cwd=self.cwd, env=self._gh_env())
             url = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
             return {"number": parse_number_from_url(url), "url": url, "title": title}
         finally:
@@ -438,6 +483,7 @@ class GitHubForge:
             proc = _run(
                 ["gh", "pr", "edit", str(number), "--title", title, "--body-file", str(tmp_path)],
                 cwd=self.cwd,
+                env=self._gh_env(),
             )
             url = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
             return {"number": number, "url": url, "title": title}
@@ -461,7 +507,7 @@ class GitHubForge:
     def get_failed_logs(self, log_ids: list[str]) -> dict[str, str]:
         logs: dict[str, str] = {}
         for run_id in log_ids:
-            proc = _run(["gh", "run", "view", run_id, "--log-failed"], cwd=self.cwd, check=False)
+            proc = _run(["gh", "run", "view", run_id, "--log-failed"], cwd=self.cwd, check=False, env=self._gh_env())
             if proc.returncode == 0 and proc.stdout:
                 logs[run_id] = "\n".join(proc.stdout.splitlines()[-150:])
         return logs
@@ -471,7 +517,7 @@ class GitHubForge:
         if number is not None:
             cmd.append(str(number))
         cmd.append("--watch")
-        return subprocess.run(cmd, cwd=str(self.cwd)).returncode
+        return subprocess.run(cmd, cwd=str(self.cwd), env=self._gh_env()).returncode
 
     def merge_squash(self, number: int, title: str, body: str, *, auto: bool = False) -> None:
         fd, raw_path = tempfile.mkstemp(prefix="idd-merge-", suffix=".md")
@@ -492,7 +538,7 @@ class GitHubForge:
             ]
             if auto:
                 args.insert(4, "--auto")
-            _run(args, cwd=self.cwd)
+            _run(args, cwd=self.cwd, env=self._gh_env())
         finally:
             tmp_path.unlink(missing_ok=True)
 
@@ -585,7 +631,11 @@ class GitLabForge:
             host_label = self.spec.host if self.spec else self.api_base
             login_target = self.api_base or host_label
             login_cmd = f"idd auth login {login_target} --token <你的 GitLab PAT>"
-            token_url = f"{self.api_base}/-/user_settings/personal_access_tokens" if self.api_base else ""
+            token_url = (
+                f"{self.api_base}/-/user_settings/personal_access_tokens?name=IDD+Board&scopes=api"
+                if self.api_base
+                else ""
+            )
             raise ForgeAuthError(
                 f"访问自建 GitLab ({self.api_base}) 需要鉴权 Token。\n"
                 f"请执行 `{login_cmd}` 或设置环境变量 `GITLAB_TOKEN`。",
@@ -634,7 +684,11 @@ class GitLabForge:
                 host_label = self.spec.host if self.spec else self.api_base
                 login_target = self.api_base or host_label
                 login_cmd = f"idd auth login {login_target} --token <PAT>"
-                token_url = f"{self.api_base}/-/user_settings/personal_access_tokens" if self.api_base else ""
+                token_url = (
+                    f"{self.api_base}/-/user_settings/personal_access_tokens?name=IDD+Board&scopes=api"
+                    if self.api_base
+                    else ""
+                )
                 raise ForgeAuthError(
                     f"GitLab 鉴权失败（HTTP {exc.code}）：{detail}\n"
                     f"请检查或重新登录：`{login_cmd}`",
@@ -935,6 +989,15 @@ class GitLabForge:
         }
 
 
+def build_repo_web_url(spec: RemoteSpec | None, forge_type: str) -> str:
+    """Build clickable GitHub or GitLab repository homepage URL when remote coordinates exist."""
+    if spec is None or not spec.project_path:
+        return ""
+    if forge_type in ("github", "gitlab"):
+        return f"{spec.api_base.rstrip('/')}/{spec.project_path}"
+    return ""
+
+
 def build_issue_web_url(spec: RemoteSpec | None, forge_type: str, issue_number: int) -> str:
     """Build clickable GitHub or GitLab web URL for an Issue number when remote coordinates exist."""
     if spec is None or not spec.project_path:
@@ -963,6 +1026,17 @@ def _resolve_origin_context(main_worktree: Path) -> tuple[RemoteSpec | None, str
     env_forge = os.environ.get("IDD_FORGE", "").strip().lower()
     hosts = load_hosts_config()
     host_cfg = (hosts.get(spec.host) or hosts.get(spec.hostname)) if spec else None
+    if spec is not None and host_cfg and host_cfg.get("api_url"):
+        api_override = host_cfg["api_url"].rstrip("/")
+        if api_override:
+            spec = RemoteSpec(
+                scheme=spec.scheme,
+                host=spec.host,
+                hostname=spec.hostname,
+                port=spec.port,
+                project_path=spec.project_path,
+                api_base=api_override,
+            )
 
     if env_forge in ("github", "gitlab"):
         return spec, env_forge, host_cfg
@@ -986,4 +1060,4 @@ def get_forge(main_worktree: Path) -> GitHubForge | GitLabForge:
     spec, forge_type, host_cfg = _resolve_origin_context(main_worktree)
     if forge_type == "gitlab":
         return GitLabForge(main_worktree, spec, host_cfg)
-    return GitHubForge(main_worktree, spec)
+    return GitHubForge(main_worktree, spec, host_cfg)
