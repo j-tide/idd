@@ -32,6 +32,28 @@ class ForgeError(Exception):
         self.exit_code = exit_code
 
 
+class ForgeAuthError(ForgeError):
+    """Error raised when a remote forge host is missing or rejecting authentication."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        host: str = "",
+        api_base: str = "",
+        forge_type: str = "gitlab",
+        login_cmd: str = "",
+        token_url: str = "",
+        exit_code: int = 1,
+    ) -> None:
+        super().__init__(message, exit_code=exit_code)
+        self.host = host
+        self.api_base = api_base
+        self.forge_type = forge_type
+        self.login_cmd = login_cmd
+        self.token_url = token_url
+
+
 @dataclass(frozen=True)
 class RemoteSpec:
     """Parsed Git remote coordinates for GitHub or self-hosted GitLab."""
@@ -560,10 +582,18 @@ class GitLabForge:
             return self._request_via_glab(method, path, query=query, json_body=json_body, check=check)
 
         if not self.token:
-            host_hint = self.spec.host if self.spec else self.api_base
-            raise ForgeError(
+            host_label = self.spec.host if self.spec else self.api_base
+            login_target = self.api_base or host_label
+            login_cmd = f"idd auth login {login_target} --token <你的 GitLab PAT>"
+            token_url = f"{self.api_base}/-/user_settings/personal_access_tokens" if self.api_base else ""
+            raise ForgeAuthError(
                 f"访问自建 GitLab ({self.api_base}) 需要鉴权 Token。\n"
-                f"请执行 `idd auth login {host_hint} --token <你的 GitLab PAT>` 或设置环境变量 `GITLAB_TOKEN`。"
+                f"请执行 `{login_cmd}` 或设置环境变量 `GITLAB_TOKEN`。",
+                host=host_label,
+                api_base=self.api_base,
+                forge_type="gitlab",
+                login_cmd=login_cmd,
+                token_url=token_url,
             )
 
         url = f"{self.api_base}/api/v4{path}"
@@ -601,10 +631,18 @@ class GitLabForge:
             except json.JSONDecodeError:
                 pass
             if exc.code in (401, 403):
-                host_hint = self.spec.host if self.spec else self.api_base
-                raise ForgeError(
+                host_label = self.spec.host if self.spec else self.api_base
+                login_target = self.api_base or host_label
+                login_cmd = f"idd auth login {login_target} --token <PAT>"
+                token_url = f"{self.api_base}/-/user_settings/personal_access_tokens" if self.api_base else ""
+                raise ForgeAuthError(
                     f"GitLab 鉴权失败（HTTP {exc.code}）：{detail}\n"
-                    f"请检查或重新登录：`idd auth login {host_hint} --token <PAT>`"
+                    f"请检查或重新登录：`{login_cmd}`",
+                    host=host_label,
+                    api_base=self.api_base,
+                    forge_type="gitlab",
+                    login_cmd=login_cmd,
+                    token_url=token_url,
                 ) from exc
             raise ForgeError(f"GitLab API 请求失败（HTTP {exc.code} {method} {path}）：{detail}") from exc
         except urllib.error.URLError as exc:
@@ -897,11 +935,28 @@ class GitLabForge:
         }
 
 
-def get_forge(main_worktree: Path) -> GitHubForge | GitLabForge:
-    """Auto-detect GitHub vs self-hosted GitLab from `origin` URL, config, and overrides."""
-    origin_proc = _run(["git", "-C", str(main_worktree), "config", "--get", "remote.origin.url"], check=False)
+def build_issue_web_url(spec: RemoteSpec | None, forge_type: str, issue_number: int) -> str:
+    """Build clickable GitHub or GitLab web URL for an Issue number when remote coordinates exist."""
+    if spec is None or not spec.project_path:
+        return ""
+    base = spec.api_base.rstrip("/")
+    if forge_type == "github":
+        return f"{base}/{spec.project_path}/issues/{issue_number}"
+    if forge_type == "gitlab":
+        return f"{base}/{spec.project_path}/-/issues/{issue_number}"
+    return ""
+
+
+def _resolve_origin_context(main_worktree: Path) -> tuple[RemoteSpec | None, str, dict[str, str] | None]:
+    origin_proc = _run(
+        ["git", "--no-optional-locks", "-C", str(main_worktree), "config", "--get", "remote.origin.url"],
+        check=False,
+    )
     if origin_proc.returncode != 0 or not origin_proc.stdout.strip():
-        origin_proc = _run(["git", "-C", str(main_worktree), "remote", "get-url", "origin"], check=False)
+        origin_proc = _run(
+            ["git", "--no-optional-locks", "-C", str(main_worktree), "remote", "get-url", "origin"],
+            check=False,
+        )
     origin_url = origin_proc.stdout.strip() if origin_proc.returncode == 0 else ""
     spec = parse_remote_url(origin_url)
 
@@ -909,21 +964,26 @@ def get_forge(main_worktree: Path) -> GitHubForge | GitLabForge:
     hosts = load_hosts_config()
     host_cfg = (hosts.get(spec.host) or hosts.get(spec.hostname)) if spec else None
 
-    if env_forge == "github":
-        return GitHubForge(main_worktree, spec)
-    if env_forge == "gitlab":
-        return GitLabForge(main_worktree, spec, host_cfg)
-
+    if env_forge in ("github", "gitlab"):
+        return spec, env_forge, host_cfg
     if spec is None:
-        return GitHubForge(main_worktree, None)
-
-    if host_cfg:
-        if host_cfg.get("forge") == "github":
-            return GitHubForge(main_worktree, spec)
-        if host_cfg.get("forge") == "gitlab":
-            return GitLabForge(main_worktree, spec, host_cfg)
-
+        return None, "local", host_cfg
+    if host_cfg and host_cfg.get("forge") in ("github", "gitlab"):
+        return spec, str(host_cfg["forge"]), host_cfg
     if spec.hostname == "github.com" or spec.hostname.endswith(".github.com"):
-        return GitHubForge(main_worktree, spec)
+        return spec, "github", host_cfg
+    return spec, "gitlab", host_cfg
 
-    return GitLabForge(main_worktree, spec, host_cfg)
+
+def inspect_remote_origin(main_worktree: Path) -> tuple[RemoteSpec | None, str]:
+    """Return `(RemoteSpec | None, forge_type)` where `forge_type` is `github`, `gitlab`, or `local`."""
+    spec, forge_type, _ = _resolve_origin_context(main_worktree)
+    return spec, forge_type
+
+
+def get_forge(main_worktree: Path) -> GitHubForge | GitLabForge:
+    """Auto-detect GitHub vs self-hosted GitLab from `origin` URL, config, and overrides."""
+    spec, forge_type, host_cfg = _resolve_origin_context(main_worktree)
+    if forge_type == "gitlab":
+        return GitLabForge(main_worktree, spec, host_cfg)
+    return GitHubForge(main_worktree, spec)

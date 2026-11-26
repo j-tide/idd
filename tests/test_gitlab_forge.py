@@ -376,6 +376,11 @@ class TestGitLabForge(unittest.TestCase):
                         check=check,
                     )
 
+                # 0. Missing token error includes full http:// scheme for idd auth login
+                unauth_res = run_idd("issue", "create", "--title", "No token yet", check=False)
+                self.assertNotEqual(unauth_res.returncode, 0)
+                self.assertIn(f"idd auth login http://127.0.0.1:{port} --token", unauth_res.stderr)
+
                 # 1. Auth login + status + permissions check
                 login_res = run_idd("auth", "login", f"http://127.0.0.1:{port}", "--token", "glpat-secret")
                 self.assertIn("已校验用户：j.tide", login_res.stdout)

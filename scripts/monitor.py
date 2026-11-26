@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ import threading
 import time
 from typing import Any
 
-from forge import ForgeError, get_config_dir, get_forge
+from forge import ForgeAuthError, ForgeError, build_issue_web_url, get_config_dir, get_forge, inspect_remote_origin
 import task_status
 
 
@@ -379,7 +380,7 @@ def inspect_worktree_pulse(wt_path: Path, *, in_progress_count: int = 0) -> dict
     task_dir = wt_path / "TASK"
     if task_dir.is_dir():
         try:
-            for md in task_dir.rglob("*.md"):
+            for md in task_dir.glob("*/TASK-*.md"):
                 try:
                     mtimes.append(md.stat().st_mtime)
                 except OSError:
@@ -427,21 +428,16 @@ def inspect_worktree_pulse(wt_path: Path, *, in_progress_count: int = 0) -> dict
 
 
 class ForgeSnapshotCache:
-    """Thread-safe TTL cache for GitHub/GitLab open issues and open PRs/MRs per repo."""
+    """Thread-safe Stale-While-Revalidate TTL cache for GitHub/GitLab open issues & PRs/MRs."""
 
     def __init__(self, ttl_seconds: float = 30.0) -> None:
         self.ttl_seconds = max(0.0, float(ttl_seconds))
         self._lock = threading.Lock()
         self._entries: dict[str, dict[str, Any]] = {}
+        self._inflight: set[str] = set()
 
-    def get(
-        self,
-        main_worktree: Path,
-        *,
-        has_origin: bool,
-        force_refresh: bool = False,
-    ) -> dict[str, Any]:
-        """Return cached or freshly queried forge snapshot for `main_worktree`."""
+    @staticmethod
+    def _build_local_placeholder(main_worktree: Path, *, has_origin: bool, syncing: bool) -> dict[str, Any]:
         if not has_origin:
             return {
                 "forge_type": "local",
@@ -451,21 +447,27 @@ class ForgeSnapshotCache:
                 "open_issues": [],
                 "open_changes": [],
                 "warnings": [],
+                "auth_alert": None,
                 "fetched_at": 0.0,
+                "syncing": False,
             }
+        _, inferred = inspect_remote_origin(main_worktree)
+        mr_label = "MR" if inferred == "gitlab" else ("PR" if inferred == "github" else "PR/MR")
+        mr_prefix = "!" if inferred == "gitlab" else "#"
+        return {
+            "forge_type": inferred,
+            "mr_label": mr_label,
+            "mr_prefix": mr_prefix,
+            "forge_connected": False,
+            "open_issues": [],
+            "open_changes": [],
+            "warnings": [],
+            "auth_alert": None,
+            "fetched_at": 0.0,
+            "syncing": syncing,
+        }
 
-        key = str(main_worktree.resolve())
-        now = time.time()
-        with self._lock:
-            cached = self._entries.get(key)
-            if (
-                cached is not None
-                and not force_refresh
-                and self.ttl_seconds > 0
-                and (now - cached["fetched_at"]) < self.ttl_seconds
-            ):
-                return dict(cached)
-
+    def _query_and_store(self, main_worktree: Path, key: str) -> dict[str, Any]:
         forge = get_forge(main_worktree)
         forge_type = forge.forge_type
         mr_label = forge.mr_label
@@ -474,6 +476,7 @@ class ForgeSnapshotCache:
         open_changes: list[dict[str, Any]] = []
         forge_connected = False
         warnings: list[str] = []
+        auth_alert: dict[str, Any] | None = None
 
         try:
             issues_res = forge.list_open_issues(limit=100)
@@ -484,6 +487,15 @@ class ForgeSnapshotCache:
                 forge_connected = True
             else:
                 warnings.append("远端仓库查询不可用，已降级为本地工作树视图。")
+        except ForgeAuthError as exc:
+            auth_alert = {
+                "host": exc.host,
+                "api_base": exc.api_base,
+                "forge": exc.forge_type,
+                "login_cmd": exc.login_cmd,
+                "token_url": exc.token_url,
+            }
+            warnings.append(f"{exc}（已降级为本地工作树视图）")
         except ForgeError as exc:
             warnings.append(f"{exc}（已降级为本地工作树视图）")
 
@@ -495,12 +507,97 @@ class ForgeSnapshotCache:
             "open_issues": open_issues,
             "open_changes": open_changes,
             "warnings": warnings,
+            "auth_alert": auth_alert,
             "fetched_at": time.time(),
+            "syncing": False,
         }
         if self.ttl_seconds > 0:
             with self._lock:
                 self._entries[key] = entry
         return dict(entry)
+
+    def _refresh_in_background(self, main_worktree: Path, key: str) -> None:
+        try:
+            self._query_and_store(main_worktree, key)
+        except Exception:
+            pass
+        finally:
+            with self._lock:
+                self._inflight.discard(key)
+
+    def _schedule_refresh(self, main_worktree: Path, key: str) -> None:
+        with self._lock:
+            if key in self._inflight:
+                return
+            self._inflight.add(key)
+        threading.Thread(
+            target=self._refresh_in_background,
+            args=(main_worktree, key),
+            daemon=True,
+        ).start()
+
+    def is_syncing(self) -> bool:
+        with self._lock:
+            return bool(self._inflight)
+
+    def warm_async(self, repo_paths: list[Path], *, force_refresh: bool = False) -> None:
+        """Start parallel non-blocking background forge refreshes for valid origin repos."""
+        now = time.time()
+        for raw_path in repo_paths:
+            main_wt = resolve_main_worktree_ro(raw_path)
+            if main_wt is None:
+                continue
+            has_origin, _ = _detect_repo_meta_ro(main_wt)
+            if not has_origin:
+                continue
+            key = str(main_wt.resolve())
+            with self._lock:
+                cached = self._entries.get(key)
+                fresh = (
+                    cached is not None
+                    and not force_refresh
+                    and self.ttl_seconds > 0
+                    and (now - cached["fetched_at"]) < self.ttl_seconds
+                )
+            if not fresh:
+                self._schedule_refresh(main_wt, key)
+
+    def get(
+        self,
+        main_worktree: Path,
+        *,
+        has_origin: bool,
+        force_refresh: bool = False,
+        allow_stale_async: bool = False,
+    ) -> dict[str, Any]:
+        """Return cached or freshly queried forge snapshot for `main_worktree`."""
+        if not has_origin:
+            return self._build_local_placeholder(main_worktree, has_origin=False, syncing=False)
+
+        key = str(main_worktree.resolve())
+        now = time.time()
+        with self._lock:
+            cached = self._entries.get(key)
+            inflight = key in self._inflight
+            if (
+                cached is not None
+                and not force_refresh
+                and self.ttl_seconds > 0
+                and (now - cached["fetched_at"]) < self.ttl_seconds
+            ):
+                res = dict(cached)
+                res["syncing"] = inflight
+                return res
+
+        if allow_stale_async:
+            self._schedule_refresh(main_worktree, key)
+            if cached is not None:
+                res = dict(cached)
+                res["syncing"] = True
+                return res
+            return self._build_local_placeholder(main_worktree, has_origin=True, syncing=True)
+
+        return self._query_and_store(main_worktree, key)
 
 
 # ---------------------------------------------------------------------------
@@ -608,29 +705,110 @@ def _build_status_row(
     }
 
 
-def _collect_all_worktrees_ro(main_worktree: Path, issue_filter: str | None, open_only: bool) -> dict[str, Any]:
-    worktrees = list_git_worktrees_ro(main_worktree)
-    all_entries: list[dict[str, Any]] = []
-    all_warnings: list[str] = []
-    seen_keys: set[tuple[str, str]] = set()
-    matched_any = issue_filter is None
+def _extract_task_dirs_from_paths(lines: list[str], *, strip_porcelain: bool) -> set[str]:
+    dirs: set[str] = set()
+    for raw in lines:
+        if not raw.strip():
+            continue
+        path_str = raw[3:].strip() if strip_porcelain and len(raw) >= 4 else raw.strip()
+        if strip_porcelain and " -> " in path_str:
+            path_str = path_str.split(" -> ", 1)[1].strip()
+        path_str = path_str.strip('"')
+        parts = Path(path_str).parts
+        if len(parts) >= 2 and parts[0] == "TASK":
+            dirs.add(parts[1])
+    return dirs
 
-    for wt in worktrees:
+
+def _get_worktree_touched_task_dirs(wt_path: Path, default_branch: str, *, is_main: bool) -> set[str]:
+    touched: set[str] = set()
+    st_proc = _run_git_ro(wt_path, ["status", "--porcelain=v1", "--", "TASK"])
+    if st_proc and st_proc.returncode == 0 and st_proc.stdout.strip():
+        touched |= _extract_task_dirs_from_paths(st_proc.stdout.splitlines(), strip_porcelain=True)
+    if not is_main:
+        for base_ref in (default_branch, f"origin/{default_branch}"):
+            diff_proc = _run_git_ro(wt_path, ["diff", "--name-only", f"{base_ref}...HEAD", "--", "TASK"])
+            if diff_proc and diff_proc.returncode == 0:
+                touched |= _extract_task_dirs_from_paths(diff_proc.stdout.splitlines(), strip_porcelain=False)
+                break
+    return touched
+
+
+def _collect_all_worktrees_ro(
+    main_worktree: Path,
+    issue_filter: str | None,
+    open_only: bool,
+    *,
+    default_branch: str = "main",
+    all_worktrees: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    worktrees = all_worktrees if all_worktrees is not None else list_git_worktrees_ro(main_worktree)
+    main_resolved = main_worktree.resolve()
+    main_task_root = main_resolved / "TASK"
+    main_task_dirs: set[str] = set()
+    if main_task_root.is_dir():
+        try:
+            main_task_dirs = {p.name for p in main_task_root.iterdir() if p.is_dir()}
+        except OSError:
+            main_task_dirs = set()
+
+    def scan_one(wt: dict[str, str]) -> tuple[list[dict[str, Any]], list[str], bool]:
         wt_path = Path(wt["path"]).resolve()
         task_root = wt_path / "TASK"
         if not task_root.is_dir():
-            continue
+            return [], [], False
+        branch = wt.get("branch", "")
+        is_main = wt_path == main_resolved
         entries, warnings, matched = task_status._collect_from_task_root(  # noqa: SLF001
             task_root,
             issue_filter,
             open_only,
             worktree=wt_path,
-            branch=wt.get("branch", ""),
+            branch=branch,
         )
+        if issue_filter is not None or not entries:
+            return entries, warnings, matched
+
+        touched_dirs = _get_worktree_touched_task_dirs(wt_path, default_branch, is_main=is_main)
+        if is_main:
+            kept = [
+                e for e in entries
+                if e.get("issue_number") is not None or e["issue"] in touched_dirs
+            ]
+        elif not main_task_dirs:
+            kept = entries
+        else:
+            wt_inum = _infer_worktree_issue_num(branch, wt_path)
+            branch_slug = branch.split("/")[-1] if branch and branch != "(detached)" else ""
+            dir_slug = wt_path.name
+            kept = [
+                e for e in entries
+                if (e["issue"] not in main_task_dirs)
+                or (e["issue"] in touched_dirs)
+                or (wt_inum is not None and e.get("issue_number") == wt_inum)
+                or (e["issue"] in {branch_slug, dir_slug})
+            ]
+        kept_issues = {e["issue"] for e in kept}
+        kept_warnings = [w for w in warnings if any(f"TASK/{issue_name}/" in w for issue_name in kept_issues)] if warnings else []
+        return kept, kept_warnings, matched
+
+    if len(worktrees) > 1:
+        with ThreadPoolExecutor(max_workers=min(6, len(worktrees))) as pool:
+            scan_results = list(pool.map(scan_one, worktrees))
+    else:
+        scan_results = [scan_one(wt) for wt in worktrees]
+
+    all_entries: list[dict[str, Any]] = []
+    all_warnings: list[str] = []
+    seen_keys: set[tuple[str, str]] = set()
+    matched_any = issue_filter is None
+
+    for entries, warnings, matched in scan_results:
         if matched:
             matched_any = True
         for entry in entries:
-            dedup_key = (entry["issue"], str(wt_path))
+            wt_str = entry.get("worktree", "")
+            dedup_key = (entry["issue"], str(Path(wt_str).resolve()) if wt_str else "")
             if dedup_key in seen_keys:
                 continue
             seen_keys.add(dedup_key)
@@ -644,6 +822,46 @@ def _collect_all_worktrees_ro(main_worktree: Path, issue_filter: str | None, ope
     return {"issues": all_entries, "warnings": all_warnings}
 
 
+def _dedupe_auth_alerts(repo_snaps: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Merge per-repo auth errors by host and build concise non-redundant warnings."""
+    grouped: dict[str, dict[str, Any]] = {}
+    warnings: list[str] = []
+
+    for snap in repo_snaps:
+        repo_name = snap.get("repo_name", "")
+        alert = snap.get("auth_alert")
+        if isinstance(alert, dict) and (alert.get("api_base") or alert.get("host")):
+            key = str(alert.get("api_base") or alert.get("host"))
+            bucket = grouped.get(key)
+            if bucket is None:
+                bucket = {
+                    "host": alert.get("host", ""),
+                    "api_base": alert.get("api_base", ""),
+                    "forge": alert.get("forge", "gitlab"),
+                    "repos": [],
+                    "login_cmd": alert.get("login_cmd", ""),
+                    "token_url": alert.get("token_url", ""),
+                }
+                grouped[key] = bucket
+            if repo_name and repo_name not in bucket["repos"]:
+                bucket["repos"].append(repo_name)
+            for w in snap.get("warnings") or []:
+                if "需要鉴权 Token" not in w and "鉴权失败" not in w:
+                    warnings.append(f"[{repo_name}] {w}")
+        else:
+            for w in snap.get("warnings") or []:
+                warnings.append(f"[{repo_name}] {w}")
+
+    auth_alerts = list(grouped.values())
+    for alert in auth_alerts:
+        repo_list = ", ".join(alert["repos"])
+        target = alert.get("api_base") or alert.get("host")
+        cmd = alert.get("login_cmd") or f"idd auth login {target} --token <PAT>"
+        warnings.append(f"[{repo_list}] 访问自建 GitLab ({target}) 需要鉴权，请执行：`{cmd}`")
+
+    return auth_alerts, warnings
+
+
 def collect_repo_snapshot(
     root: Path,
     *,
@@ -652,19 +870,30 @@ def collect_repo_snapshot(
     local_only: bool = False,
     forge_cache: ForgeSnapshotCache | None = None,
     force_refresh: bool = False,
+    allow_stale_async: bool = False,
     register: bool = True,
 ) -> dict[str, Any]:
     """Collect unified task + worktree pulse + remote PR/MR/Issue snapshot for a repo or TASK/ dir."""
     resolved = root.expanduser().resolve()
     main_wt = resolve_main_worktree_ro(resolved)
 
+    remote_spec = None
+    inferred_forge = "local"
     if main_wt is not None:
         if register:
             register_repo(main_wt)
         has_origin, default_branch = _detect_repo_meta_ro(main_wt)
-        wt_data = _collect_all_worktrees_ro(main_wt, issue_filter, open_only)
-        scan_root = main_wt
         all_worktrees = list_git_worktrees_ro(main_wt)
+        if has_origin:
+            remote_spec, inferred_forge = inspect_remote_origin(main_wt)
+        wt_data = _collect_all_worktrees_ro(
+            main_wt,
+            issue_filter,
+            open_only,
+            default_branch=default_branch,
+            all_worktrees=all_worktrees,
+        )
+        scan_root = main_wt
         repo_name = main_wt.name
         repo_path_str = str(main_wt)
     else:
@@ -674,27 +903,34 @@ def collect_repo_snapshot(
         wt_data = task_status.collect(task_root, issue_filter, open_only)
         has_origin = False
         default_branch = "main"
-        scan_root = resolved
         all_worktrees = []
+        scan_root = resolved
         repo_name = resolved.name
         repo_path_str = str(resolved)
 
     warnings = list(wt_data.get("warnings", []))
     local_entries: list[dict[str, Any]] = wt_data.get("issues", [])
 
-    forge_info = {
-        "forge_type": "local",
-        "mr_label": "PR/MR",
-        "mr_prefix": "#",
+    forge_info: dict[str, Any] = {
+        "forge_type": inferred_forge,
+        "mr_label": "MR" if inferred_forge == "gitlab" else ("PR" if inferred_forge == "github" else "PR/MR"),
+        "mr_prefix": "!" if inferred_forge == "gitlab" else "#",
         "forge_connected": False,
         "open_issues": [],
         "open_changes": [],
         "warnings": [],
+        "auth_alert": None,
         "fetched_at": 0.0,
+        "syncing": False,
     }
     if main_wt is not None and not local_only and not issue_filter and has_origin:
         cache = forge_cache if forge_cache is not None else ForgeSnapshotCache(ttl_seconds=0.0)
-        forge_info = cache.get(scan_root, has_origin=has_origin, force_refresh=force_refresh)
+        forge_info = cache.get(
+            scan_root,
+            has_origin=has_origin,
+            force_refresh=force_refresh,
+            allow_stale_async=allow_stale_async,
+        )
         warnings.extend(forge_info["warnings"])
 
     forge_type = forge_info["forge_type"]
@@ -705,16 +941,52 @@ def collect_repo_snapshot(
     open_changes: list[dict[str, Any]] = forge_info["open_changes"]
     open_issue_numbers = {int(i["number"]) for i in open_issues if i.get("number") is not None}
 
+    in_progress_by_wt: dict[str, int] = {}
     worktrees_with_tasks: set[str] = set()
     for entry in local_entries:
         wt_str = entry.get("worktree", "")
         if wt_str:
-            worktrees_with_tasks.add(str(Path(wt_str).resolve()))
-            pulse = inspect_worktree_pulse(
-                Path(wt_str),
-                in_progress_count=int(entry["counts"].get("in_progress", 0)),
+            resolved_wt = str(Path(wt_str).resolve())
+            worktrees_with_tasks.add(resolved_wt)
+            in_progress_by_wt[resolved_wt] = in_progress_by_wt.get(resolved_wt, 0) + int(
+                entry["counts"].get("in_progress", 0)
             )
-            entry["pulse"] = pulse
+
+    unique_wts_to_inspect: list[str] = list(worktrees_with_tasks)
+    seen_wt_inspect = set(unique_wts_to_inspect)
+    extra_worktrees: list[tuple[dict[str, str], Path, str]] = []
+    if main_wt is not None and not issue_filter:
+        main_resolved_str = str(main_wt.resolve())
+        for wt in all_worktrees:
+            wt_p = Path(wt["path"]).resolve()
+            wt_str = str(wt_p)
+            if wt_str == main_resolved_str or wt_str in worktrees_with_tasks or not wt_p.is_dir():
+                continue
+            extra_worktrees.append((wt, wt_p, wt_str))
+            if wt_str not in seen_wt_inspect:
+                seen_wt_inspect.add(wt_str)
+                unique_wts_to_inspect.append(wt_str)
+
+    def probe_wt(wt_str: str) -> tuple[str, dict[str, Any]]:
+        return wt_str, inspect_worktree_pulse(
+            Path(wt_str),
+            in_progress_count=in_progress_by_wt.get(wt_str, 0),
+        )
+
+    pulse_by_wt: dict[str, dict[str, Any]] = {}
+    if len(unique_wts_to_inspect) > 1:
+        with ThreadPoolExecutor(max_workers=min(6, len(unique_wts_to_inspect))) as pool:
+            for wt_str, pulse in pool.map(probe_wt, unique_wts_to_inspect):
+                pulse_by_wt[wt_str] = pulse
+    elif len(unique_wts_to_inspect) == 1:
+        wt_str, pulse = probe_wt(unique_wts_to_inspect[0])
+        pulse_by_wt[wt_str] = pulse
+
+    for entry in local_entries:
+        wt_str = entry.get("worktree", "")
+        if wt_str:
+            resolved_wt = str(Path(wt_str).resolve())
+            entry["pulse"] = dict(pulse_by_wt[resolved_wt])
         else:
             entry["pulse"] = None
         cur_label, cur_status = _pick_current_task(entry.get("tasks", []))
@@ -724,51 +996,43 @@ def collect_repo_snapshot(
         entry["repo_path"] = repo_path_str
 
     retained_idle_worktrees: list[dict[str, Any]] = []
-    if main_wt is not None and not issue_filter:
-        main_resolved_str = str(main_wt.resolve())
-        for wt in all_worktrees:
-            wt_p = Path(wt["path"]).resolve()
-            wt_str = str(wt_p)
-            if wt_str == main_resolved_str or wt_str in worktrees_with_tasks:
-                continue
-            if not wt_p.is_dir():
-                continue
-            branch = wt.get("branch", "")
-            inum = _infer_worktree_issue_num(branch, wt_p)
-            pulse = inspect_worktree_pulse(wt_p, in_progress_count=0)
-            is_open_issue = inum is not None and inum in open_issue_numbers
-            is_dirty = pulse["dirty_count"] > 0
-            looks_post_land = pulse.get("last_commit_subject", "").startswith("chore: 清理已汇总的任务记录")
-            is_local_active = (not forge_connected) and (not looks_post_land)
+    for wt, wt_p, wt_str in extra_worktrees:
+        branch = wt.get("branch", "")
+        inum = _infer_worktree_issue_num(branch, wt_p)
+        pulse = dict(pulse_by_wt[wt_str])
+        is_open_issue = inum is not None and inum in open_issue_numbers
+        is_dirty = pulse["dirty_count"] > 0
+        looks_post_land = pulse.get("last_commit_subject", "").startswith("chore: 清理已汇总的任务记录")
+        is_local_active = (not forge_connected) and (not looks_post_land)
 
-            if is_open_issue or is_dirty or is_local_active:
-                synthetic_entry = {
-                    "issue": wt_p.name,
-                    "issue_number": inum,
-                    "total": 0,
-                    "done": 0,
-                    "counts": {s: 0 for s in task_status.STATUSES},
-                    "tasks": [],
+        if is_open_issue or is_dirty or is_local_active:
+            synthetic_entry = {
+                "issue": wt_p.name,
+                "issue_number": inum,
+                "total": 0,
+                "done": 0,
+                "counts": {s: 0 for s in task_status.STATUSES},
+                "tasks": [],
+                "worktree": wt_str,
+                "branch": branch,
+                "pulse": pulse,
+                "current_task": "",
+                "current_task_status": "",
+                "repo_name": repo_name,
+                "repo_path": repo_path_str,
+            }
+            local_entries.append(synthetic_entry)
+        else:
+            retained_idle_worktrees.append(
+                {
                     "worktree": wt_str,
+                    "name": wt_p.name,
                     "branch": branch,
-                    "pulse": pulse,
-                    "current_task": "",
-                    "current_task_status": "",
-                    "repo_name": repo_name,
-                    "repo_path": repo_path_str,
+                    "issue_number": inum,
+                    "last_active_ago": pulse["last_active_ago"],
+                    "last_commit_sha": pulse["last_commit_sha"],
                 }
-                local_entries.append(synthetic_entry)
-            else:
-                retained_idle_worktrees.append(
-                    {
-                        "worktree": wt_str,
-                        "name": wt_p.name,
-                        "branch": branch,
-                        "issue_number": inum,
-                        "last_active_ago": pulse["last_active_ago"],
-                        "last_commit_sha": pulse["last_commit_sha"],
-                    }
-                )
+            )
 
     items_by_issue: dict[int, dict[str, Any]] = {}
     local_only_items: list[dict[str, Any]] = []
@@ -786,6 +1050,7 @@ def collect_repo_snapshot(
         if m:
             changes_by_issue[int(m.group(1))] = ch
 
+    effective_forge = forge_type if forge_type != "local" else inferred_forge
     rows: list[dict[str, Any]] = []
     seen_issues: set[int] = set()
 
@@ -795,11 +1060,12 @@ def collect_repo_snapshot(
         item = items_by_issue.get(inum)
         branch = item.get("branch", "") if item else ""
         change = (changes_by_branch.get(branch) if branch else None) or changes_by_issue.get(inum)
+        issue_url = issue.get("url") or build_issue_web_url(remote_spec, effective_forge, inum)
         rows.append(
             _build_status_row(
                 issue_number=inum,
                 title=issue.get("title", ""),
-                url=issue.get("url", ""),
+                url=issue_url,
                 item=item,
                 change=change,
                 mr_label=mr_label,
@@ -814,11 +1080,12 @@ def collect_repo_snapshot(
     for inum, item in sorted(items_by_issue.items()):
         if inum not in seen_issues:
             change = changes_by_branch.get(item.get("branch", "")) or changes_by_issue.get(inum)
+            issue_url = build_issue_web_url(remote_spec, effective_forge, inum)
             rows.append(
                 _build_status_row(
                     issue_number=inum,
                     title=item["issue"],
-                    url="",
+                    url=issue_url,
                     item=item,
                     change=change,
                     mr_label=mr_label,
@@ -848,6 +1115,8 @@ def collect_repo_snapshot(
         "default_branch": default_branch,
         "forge": forge_type,
         "forge_connected": forge_connected,
+        "forge_syncing": bool(forge_info.get("syncing")),
+        "auth_alert": forge_info.get("auth_alert"),
         "mr_label": mr_label,
         "mr_prefix": mr_prefix,
         "issues": rows,
@@ -896,18 +1165,55 @@ def _compute_global_summary(
     ci_failed = 0
     ready_to_land = 0
     open_changes = len(all_orphans)
+    issue_unclaimed = 0
+    issue_in_progress = 0
+    issue_review = 0
+    issue_ready = 0
+
     for row in all_issues:
         stage = row.get("stage", "")
         if row.get("change"):
             open_changes += 1
         if stage == "🛠️ 修 CI":
             ci_failed += 1
+            issue_review += 1
+        elif stage == "⏳ CI 运行中" or "草稿" in stage:
+            issue_review += 1
         elif stage == "🔵 待合入":
             ready_to_land += 1
+            issue_ready += 1
+        elif row.get("worktree") or stage.startswith("🟢 待提") or stage == "⛔ 受阻":
+            issue_in_progress += 1
+        else:
+            issue_unclaimed += 1
 
     for ch in all_orphans:
         if (ch.get("checks_overall") or "") == "FAIL":
             ci_failed += 1
+
+    task_done = 0
+    task_in_progress = 0
+    task_blocked = 0
+    task_planned = 0
+    task_deferred = 0
+    task_cancelled = 0
+    task_total = 0
+    for entry in [*all_issues, *all_local]:
+        c = entry.get("counts") or {}
+        done_n = int(c.get("done") or 0)
+        prog_n = int(c.get("in_progress") or 0)
+        blk_n = int(c.get("blocked") or 0)
+        plan_n = int(c.get("planned") or 0)
+        def_n = int(c.get("deferred") or 0)
+        can_n = int(c.get("cancelled") or 0)
+        unk_n = int(c.get("unknown") or 0)
+        task_done += done_n
+        task_in_progress += prog_n
+        task_blocked += blk_n
+        task_planned += plan_n
+        task_deferred += def_n
+        task_cancelled += can_n
+        task_total += done_n + prog_n + blk_n + plan_n + def_n + can_n + unk_n
 
     return {
         "repo_count": len(repos),
@@ -917,6 +1223,19 @@ def _compute_global_summary(
         "dirty_worktrees": dirty_wt,
         "stalled_worktrees": stalled_wt,
         "open_issues": len(all_issues),
+        "issue_total": len(all_issues),
+        "issue_unclaimed": issue_unclaimed,
+        "issue_in_progress": issue_in_progress,
+        "issue_review": issue_review,
+        "issue_ready": issue_ready,
+        "task_total": task_total,
+        "task_done": task_done,
+        "task_in_progress": task_in_progress,
+        "task_blocked": task_blocked,
+        "task_planned": task_planned,
+        "task_deferred": task_deferred,
+        "task_cancelled": task_cancelled,
+        "local_only_count": len(all_local),
         "open_changes": open_changes,
         "ci_failed_count": ci_failed,
         "ready_to_land_count": ready_to_land,
@@ -930,6 +1249,7 @@ def collect_global_snapshot(
     local_only: bool = False,
     forge_cache: ForgeSnapshotCache | None = None,
     force_refresh: bool = False,
+    allow_stale_async: bool = False,
 ) -> dict[str, Any]:
     """Aggregate live status snapshots across all registered repositories on this machine."""
     if current_cwd is not None:
@@ -940,13 +1260,7 @@ def collect_global_snapshot(
     registered = load_registered_repos(prune_missing=True)
     cache = forge_cache if forge_cache is not None else ForgeSnapshotCache(ttl_seconds=0.0)
 
-    repos_out: list[dict[str, Any]] = []
-    all_issues: list[dict[str, Any]] = []
-    all_local: list[dict[str, Any]] = []
-    all_orphans: list[dict[str, Any]] = []
-    warnings: list[str] = []
-
-    for rec in registered:
+    def scan_rec(rec: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None, str | None]:
         repo_path = Path(rec["path"])
         try:
             snap = collect_repo_snapshot(
@@ -955,24 +1269,45 @@ def collect_global_snapshot(
                 local_only=local_only,
                 forge_cache=cache,
                 force_refresh=force_refresh,
+                allow_stale_async=allow_stale_async,
                 register=False,
             )
+            snap["last_seen_at"] = rec.get("last_seen_at", 0.0)
+            return rec, snap, None
         except Exception as exc:
-            warnings.append(f"[{rec['name']}] 扫描失败：{exc}")
-            continue
+            return rec, None, f"[{rec['name']}] 扫描失败：{exc}"
 
-        snap["last_seen_at"] = rec.get("last_seen_at", 0.0)
+    if len(registered) > 1:
+        with ThreadPoolExecutor(max_workers=min(6, len(registered))) as pool:
+            scanned = list(pool.map(scan_rec, registered))
+    else:
+        scanned = [scan_rec(rec) for rec in registered]
+
+    repos_out: list[dict[str, Any]] = []
+    all_issues: list[dict[str, Any]] = []
+    all_local: list[dict[str, Any]] = []
+    all_orphans: list[dict[str, Any]] = []
+    extra_warnings: list[str] = []
+
+    for _, snap, err in scanned:
+        if err:
+            extra_warnings.append(err)
+            continue
+        assert snap is not None
         repos_out.append(snap)
         all_issues.extend(snap["issues"])
         all_local.extend(snap["local_only_items"])
         all_orphans.extend(snap["orphan_changes"])
-        warnings.extend(f"[{snap['repo_name']}] {w}" for w in snap["warnings"])
 
+    auth_alerts, merged_warnings = _dedupe_auth_alerts(repos_out)
+    warnings = [*extra_warnings, *merged_warnings]
     summary = _compute_global_summary(repos_out, all_issues, all_local, all_orphans)
     return {
         "global": True,
         "generated_at": time.time(),
         "repos_config_path": str(get_repos_path()),
+        "forge_syncing": any(bool(r.get("forge_syncing")) for r in repos_out),
+        "auth_alerts": auth_alerts,
         "summary": summary,
         "repos": repos_out,
         "issues": all_issues,
@@ -990,6 +1325,7 @@ def collect_scope_snapshot(
     local_only: bool = False,
     forge_cache: ForgeSnapshotCache | None = None,
     force_refresh: bool = False,
+    allow_stale_async: bool = False,
 ) -> dict[str, Any]:
     """Unified snapshot entrypoint for `watch` and `board`: wraps global or single-repo view."""
     if not global_mode and root is not None:
@@ -999,6 +1335,7 @@ def collect_scope_snapshot(
             local_only=local_only,
             forge_cache=forge_cache,
             force_refresh=force_refresh,
+            allow_stale_async=allow_stale_async,
             register=True,
         )
         summary = _compute_global_summary(
@@ -1007,16 +1344,19 @@ def collect_scope_snapshot(
             snap["local_only_items"],
             snap["orphan_changes"],
         )
+        auth_alerts, warnings = _dedupe_auth_alerts([snap])
         return {
             "global": False,
             "generated_at": snap["generated_at"],
             "repos_config_path": str(get_repos_path()),
+            "forge_syncing": bool(snap.get("forge_syncing")),
+            "auth_alerts": auth_alerts,
             "summary": summary,
             "repos": [snap],
             "issues": snap["issues"],
             "local_only_items": snap["local_only_items"],
             "orphan_changes": snap["orphan_changes"],
-            "warnings": [f"[{snap['repo_name']}] {w}" for w in snap["warnings"]],
+            "warnings": warnings,
         }
     return collect_global_snapshot(
         current_cwd=root or Path.cwd(),
@@ -1024,6 +1364,7 @@ def collect_scope_snapshot(
         local_only=local_only,
         forge_cache=forge_cache,
         force_refresh=force_refresh,
+        allow_stale_async=allow_stale_async,
     )
 
 

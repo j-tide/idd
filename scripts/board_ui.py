@@ -760,6 +760,33 @@ BOARD_HTML = r"""<!DOCTYPE html>
       gap: 6px;
       flex-shrink: 0;
     }
+    .wt-tasks-strip {
+      margin-top: 7px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .task-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      max-width: 260px;
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 11px;
+      line-height: 1.35;
+      background: var(--bg-well);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-dim);
+    }
+    .task-chip span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .task-chip.is-done { color: var(--green); border-color: rgba(74, 222, 128, 0.24); background: var(--green-soft); }
+    .task-chip.is-prog { color: var(--accent); border-color: var(--accent-ring); background: var(--accent-soft); }
+    .task-chip.is-blk { color: var(--red); border-color: rgba(248, 113, 113, 0.30); background: var(--red-soft); }
 
     .todo-strip {
       margin-top: 10px;
@@ -1113,6 +1140,33 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--amber);
       font-size: 12px;
     }
+    .auth-alert-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 10px 14px;
+      margin-bottom: 8px;
+      border-radius: 12px;
+      border: 1px solid var(--accent-ring);
+      background: var(--accent-soft);
+      color: var(--text);
+      font-size: 12px;
+    }
+    .auth-alert-main {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+    .auth-alert-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
 
     .footer {
       padding: 2px 6px;
@@ -1292,6 +1346,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         consoleTab: "handoff",
         inspectorTab: "tasks",
         timerId: null,
+        quickSyncTimerId: null,
         fetching: false,
         lastClockStr: initialLang === "en" ? "Syncing..." : "同步中...",
         lastSig: ""
@@ -1478,8 +1533,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
           tag.innerHTML = icon("pause", 11) + "<span>" + tr("已暂停", "Paused") + '</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
           return;
         }
+        const syncingRemote = Boolean(state.snapshot && state.snapshot.forge_syncing);
         tag.className = "live-pill is-live";
-        tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("实时", "Live") + '</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
+        tag.innerHTML = '<span class="dot-pulse"></span><span>' + (syncingRemote ? tr("同步远端...", "Syncing...") : tr("实时", "Live")) + '</span><span>·</span><span id="updated-tag" class="num">' + clock + "</span>";
       }
 
       function parseStage(rawStage) {
@@ -1898,75 +1954,124 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const scopedItems = state.selectedRepo === "ALL"
           ? allItems
           : allItems.filter((it) => it.repo_path === state.selectedRepo);
+        const scopedIssues = scopedItems.filter((it) => it._kind === "issue");
+
+        let issueInProg = 0;
+        let issueReady = 0;
+        let issueQueued = 0;
+        let ciFailed = 0;
+        let openChanges = 0;
+        let dirtyWt = 0;
+        let stalled = 0;
+        let activeWt = 0;
 
         let totalSteps = 0;
         let doneSteps = 0;
+        let inProgSteps = 0;
+        let blockedSteps = 0;
+        let plannedSteps = 0;
+
         for (const it of scopedItems) {
-          const p = getProgressNumbers(it);
-          totalSteps += p.total;
-          doneSteps += p.done;
+          if (it.worktree) activeWt += 1;
+          if (it.change) openChanges += 1;
+          const p = it.pulse || null;
+          if (p && Number(p.dirty_count || 0) > 0) dirtyWt += 1;
+          if (p && p.activity_state === "stalled") stalled += 1;
+          const stKey = parseStage(it.stage).key;
+          if (stKey === "修 CI" || (it.change && it.change.checks_overall === "FAIL")) ciFailed += 1;
+
+          const counts = it.counts || {};
+          const nums = getProgressNumbers(it);
+          totalSteps += nums.total;
+          doneSteps += nums.done;
+          inProgSteps += Number(counts.in_progress || 0);
+          blockedSteps += Number(counts.blocked || 0);
+          plannedSteps += Number(counts.planned || 0);
         }
+
+        for (const row of scopedIssues) {
+          const b = cardBucket(row);
+          if (b === "ready") issueReady += 1;
+          else if (b === "todo") issueQueued += 1;
+          else issueInProg += 1;
+        }
+
+        const issueTotal = scopedIssues.length;
         const pct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
 
-        const activeWt = Number(s.active_worktrees || 0);
-        const codingNow = Number(s.coding_now_count || 0);
-        const dirtyWt = Number(s.dirty_worktrees || 0);
-        const stalled = Number(s.stalled_worktrees || 0);
-        const ciFailed = Number(s.ci_failed_count || 0);
-        const readyCount = Number(s.ready_to_land_count || 0);
-        const openChanges = Number(s.open_changes || 0);
-        const inProg = Number(s.in_progress_tasks || 0);
-
-        const wtTones = [];
+        const issueTones = [];
+        const issueDenominator = Math.max(issueTotal, 1);
+        const readySlots = issueTotal > 0 ? Math.round((issueReady / issueDenominator) * 8) : 0;
+        const progSlots = issueTotal > 0 ? Math.round((issueInProg / issueDenominator) * 8) : 0;
         for (let i = 0; i < 8; i++) {
-          if (i < codingNow) wtTones.push("green");
-          else if (i < activeWt) wtTones.push(i === activeWt - 1 ? "on" : "dim");
-          else wtTones.push("");
+          if (i < readySlots) issueTones.push("green");
+          else if (i < readySlots + progSlots) issueTones.push("on");
+          else if (i < issueTotal && i < Math.round((issueTotal / issueDenominator) * 8)) issueTones.push("dim");
+          else issueTones.push("");
         }
 
-        const taskFilled = totalSteps > 0 ? Math.max(doneSteps > 0 ? 1 : 0, Math.round((doneSteps / totalSteps) * 8)) : 0;
+        const taskTones = [];
+        const doneSlots = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 8) : 0;
+        const inProgSlots = totalSteps > 0 ? Math.max(inProgSteps > 0 ? 1 : 0, Math.round((inProgSteps / totalSteps) * 8)) : 0;
+        const blkSlots = totalSteps > 0 ? Math.max(blockedSteps > 0 ? 1 : 0, Math.round((blockedSteps / totalSteps) * 8)) : 0;
+        for (let i = 0; i < 8; i++) {
+          if (i < doneSlots) taskTones.push("green");
+          else if (i < doneSlots + inProgSlots) taskTones.push("on");
+          else if (i < doneSlots + inProgSlots + blkSlots) taskTones.push("red");
+          else taskTones.push("");
+        }
 
         const prTones = [];
         for (let i = 0; i < 8; i++) {
-          if (i < readyCount) prTones.push("green");
-          else if (i < readyCount + ciFailed) prTones.push("red");
+          if (i < issueReady) prTones.push("green");
+          else if (i < issueReady + ciFailed) prTones.push("red");
           else if (i < openChanges) prTones.push("amber");
           else prTones.push("");
         }
 
+        const issueSub = isEn()
+          ? (issueInProg + " active · " + issueQueued + " queued · " + issueReady + " ready")
+          : ("推进中 " + issueInProg + " · 待认领 " + issueQueued + " · 待合入 " + issueReady);
+        const taskSub = isEn()
+          ? ("Done " + doneSteps + "/" + totalSteps + " · Active " + inProgSteps + " · Planned " + plannedSteps + (blockedSteps > 0 ? " · Blocked " + blockedSteps : ""))
+          : ("已完成 " + doneSteps + "/" + totalSteps + " · 进行中 " + inProgSteps + " · 待开始 " + plannedSteps + (blockedSteps > 0 ? " · 受阻 " + blockedSteps : ""));
+        const prSub = isEn()
+          ? ("Open " + openChanges + " · CI failed " + ciFailed + " · " + activeWt + " worktrees")
+          : ("Open " + openChanges + " · CI 失败 " + ciFailed + " · 活跃目录 " + activeWt + (dirtyWt > 0 ? " (" + dirtyWt + " 改)" : ""));
+
         const cards = [
           {
             action: "toggle-wt",
-            ic: "refresh",
-            label: tr("活跃工作树", "Active Worktrees"),
-            val: String(activeWt),
-            unit: "live",
-            bar: renderSegBar(activeWt, 8, wtTones),
-            sub: (codingNow > 0 ? tr("刚刚活跃 " + codingNow, codingNow + " active now") : tr("本地隔离目录", "Isolated worktrees")) + " · " + (isEn() ? (dirtyWt + " uncommitted") : (dirtyWt + " 处未提交改动")),
-            subCls: codingNow > 0 ? "live" : "",
+            ic: "circle",
+            label: tr("Issue 状态", "Issue Status"),
+            val: String(issueTotal),
+            unit: "Open",
+            bar: renderSegBar(issueTotal, 8, issueTones),
+            sub: issueSub,
+            subCls: issueInProg > 0 ? "live" : "",
             filtered: state.worktreeOnly,
             warn: false
           },
           {
             action: "",
             ic: "layers",
-            label: tr("任务步骤进度", "Task Progress"),
+            label: tr("TASK 拆分进度", "TASK Breakdown"),
             val: String(pct),
             unit: "%",
-            bar: renderSegBar(taskFilled, 8, null),
-            sub: isEn() ? (inProg + " in progress · " + doneSteps + "/" + totalSteps + " TASK done") : ("进行中步骤 " + inProg + " · 已完成 " + doneSteps + "/" + totalSteps + " TASK"),
-            subCls: "",
+            bar: renderSegBar(doneSteps > 0 ? Math.max(1, doneSlots) : 0, 8, taskTones),
+            sub: taskSub,
+            subCls: blockedSteps > 0 ? "warn" : "",
             filtered: false,
-            warn: false
+            warn: blockedSteps > 0
           },
           {
             action: "toggle-alerts",
             ic: "pr",
             label: tr("PR / MR 与合入", "PR / MR & Land"),
-            val: String(readyCount),
+            val: String(issueReady),
             unit: tr("待合入", "ready"),
             bar: renderSegBar(openChanges, 8, prTones),
-            sub: isEn() ? ("Open " + openChanges + " · CI failed " + ciFailed + " · Stalled " + stalled) : ("Open " + openChanges + " · CI 失败 " + ciFailed + " · 卡住 " + stalled),
+            sub: prSub,
             subCls: (ciFailed + stalled) > 0 ? "warn" : "",
             filtered: state.alertsOnly,
             warn: (ciFailed + stalled) > 0
@@ -2060,7 +2165,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 (item.worktree ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" type="button">' + icon("folder", 12) + "<span>" + tr("复制目录", "Copy Dir") + "</span></button>" : "") +
                 (item.branch ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" type="button">' + icon("branch", 12) + "<span>" + tr("复制分支", "Copy Branch") + "</span></button>" : "") +
                 (startCmd ? '<button class="btn btn-sm" data-copy-val="' + escapeHtml(startCmd) + '" data-copy-msg="' + tr("已复制终端命令", "Copied CLI command") + '" type="button">' + icon("terminal", 12) + "<span>" + tr("终端命令", "CLI Cmd") + "</span></button>" : "") +
-                (issueHref ? '<a class="btn btn-sm" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 12) + "<span>" + tr("原单", "Issue") + "</span></a>" : "") +
+                (issueHref ? '<a class="btn btn-sm" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 12) + "<span>" + tr("打开 Issue", "Open Issue") + "</span></a>" : "") +
               "</div>" +
             "</div>" +
             '<div class="console-well">' + wellHtml + "</div>" +
@@ -2068,25 +2173,85 @@ BOARD_HTML = r"""<!DOCTYPE html>
         );
       }
 
-      function renderCockpitView(items) {
-        const activeItems = items.filter((it) => it.worktree || it.change || (it.tasks && it.tasks.length > 0));
-        const todoItems = items.filter((it) => !(it.worktree || it.change || (it.tasks && it.tasks.length > 0)));
+      function taskStatusMeta(rawStatus) {
+        const st = String(rawStatus || "planned");
+        if (st === "done") return { cls: "is-done", sym: "✓", label: tr("已完成", "done") };
+        if (st === "in_progress") return { cls: "is-prog", sym: "◐", label: tr("进行中", "active") };
+        if (st === "blocked") return { cls: "is-blk", sym: "✗", label: tr("受阻", "blocked") };
+        if (st === "deferred") return { cls: "", sym: "⏸", label: tr("暂缓", "deferred") };
+        if (st === "cancelled") return { cls: "", sym: "⊘", label: tr("已取消", "cancelled") };
+        return { cls: "", sym: "○", label: tr("待开始", "planned") };
+      }
 
-        const displayRows = state.todoOnly ? todoItems : activeItems;
+      function renderTaskChips(tasks) {
+        const list = tasks || [];
+        if (!list.length) return "";
+        return (
+          '<div class="wt-tasks-strip">' +
+          list.map((t) => {
+            const meta = taskStatusMeta(t.status);
+            const rawTitle = String(t.title || t.id || "TASK");
+            const prefixRe = new RegExp("^" + String(t.id || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[：:\\s]+");
+            const cleanTitle = t.id && prefixRe.test(rawTitle) ? rawTitle.replace(prefixRe, "") : rawTitle;
+            const chipText = (t.id ? (t.id + " · ") : "") + cleanTitle;
+            return (
+              '<span class="task-chip ' + meta.cls + '" title="' + escapeHtml((t.title || t.id || "") + " [" + (t.status || "planned") + "]") + '">' +
+                "<span>" + meta.sym + "</span>" +
+                "<span>" + escapeHtml(chipText) + "</span>" +
+              "</span>"
+            );
+          }).join("") +
+          "</div>"
+        );
+      }
+
+      function renderOpenIssueBtn(item, extraCls) {
+        const href = safeUrl(item.url);
+        if (!href) return "";
+        return '<a class="btn ' + (extraCls || "btn-xs") + '" href="' + escapeHtml(href) + '" target="_blank" rel="noopener noreferrer" data-stop-open="1">' + icon("externalLink", 11) + "<span>" + tr("打开 Issue", "Open Issue") + "</span></a>";
+      }
+
+      function renderCockpitView(items) {
+        const rankStage = (item) => {
+          const k = parseStage(item.stage).key;
+          if (k === "修 CI" || k === "受阻") return 0;
+          if (k === "开发中" || k === "CI 运行中" || k.startsWith("待提") || k.startsWith("草稿")) return 1;
+          if (k === "待合入") return 2;
+          if (k === "待处理") return 4;
+          return 3;
+        };
+
+        const issueRows = items.filter((it) => it._kind === "issue").sort((a, b) => {
+          const ra = rankStage(a);
+          const rb = rankStage(b);
+          if (ra !== rb) return ra - rb;
+          return Number(b.issue_number || 0) - Number(a.issue_number || 0);
+        });
+        const localRows = items.filter((it) => it._kind !== "issue");
+        const activeCount = issueRows.filter((it) => it.worktree || it.change || (it.tasks && it.tasks.length > 0)).length;
+        const todoCount = issueRows.filter((it) => !(it.worktree || it.change || (it.tasks && it.tasks.length > 0))).length;
+
+        const displayIssues = state.todoOnly
+          ? issueRows.filter((it) => !(it.worktree || it.change || (it.tasks && it.tasks.length > 0)))
+          : issueRows;
+        const allSelectable = [...displayIssues, ...localRows];
         let selected = items.find((it) => it._key === state.selectedKey);
         if (!selected) {
-          selected = displayRows[0] || items[0] || null;
+          selected = allSelectable[0] || items[0] || null;
           if (selected) state.selectedKey = selected._key;
         }
 
         const renderWtRow = (item) => {
           const isSel = selected && selected._key === item._key;
           const dotCls = itemDotClass(item);
+          const stInfo = parseStage(item.stage);
           const { total, done } = getProgressNumbers(item);
           const pulseHtml = renderPulseSummary(item.pulse);
           const handoffPrompt = buildHandoffPrompt(item);
+          const stageBadge = '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>";
           const progBadge = total > 0 ? '<span class="badge">' + done + "/" + total + " TASK</span>" : "";
           const chBadge = item.change ? renderChangeInline(item) : "";
+          const issueBtn = renderOpenIssueBtn(item, "btn-xs");
 
           const subParts = [];
           if (item.branch) subParts.push("<span>" + escapeHtml(item.branch) + "</span>");
@@ -2102,13 +2267,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
                     renderIdHtml(item) +
                     '<span class="wt-row-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</span>" +
                     '<span class="badge tone-muted">' + escapeHtml(item.repo_name || "") + "</span>" +
+                    stageBadge +
                     progBadge +
                     chBadge +
                   "</div>" +
-                  '<div class="wt-row-sub">' + (subParts.length ? subParts.join("<span>·</span>") : "<span>" + tr("尚未创建工作目录", "Worktree not created yet") + "</span>") + "</div>" +
+                  '<div class="wt-row-sub">' + (subParts.length ? subParts.join("<span>·</span>") : "<span>" + tr("尚未创建工作目录 · 点击右侧接力词即可让 Agent 开工", "Worktree not created yet · Copy Handoff to start") + "</span>") + "</div>" +
+                  renderTaskChips(item.tasks) +
                 "</div>" +
               "</div>" +
               '<div class="wt-row-actions" data-stop-open="1">' +
+                issueBtn +
                 '<button class="btn btn-xs ' + (isSel ? "btn-primary" : "") + '" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button>" +
                 (item.worktree ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml(item.worktree) + '" data-copy-msg="' + tr("已复制工作目录路径", "Copied worktree path") + '" data-stop-open="1" type="button">' + icon("folder", 11) + "<span>" + tr("目录", "Dir") + "</span></button>" : "") +
                 (item.branch ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml(item.branch) + '" data-copy-msg="' + tr("已复制分支名", "Copied branch name") + '" data-stop-open="1" type="button">' + icon("branch", 11) + "<span>" + tr("分支", "Branch") + "</span></button>" : "") +
@@ -2117,25 +2285,43 @@ BOARD_HTML = r"""<!DOCTYPE html>
           );
         };
 
-        const todoPill = todoItems.length > 0
-          ? '<button class="btn btn-xs ' + (state.todoOnly ? "btn-primary" : "") + '" data-kpi-action="toggle-todo" type="button">' +
-              icon("circle", 11) + "<span>" + tr("待处理 Issue", "Open Issues") + " (" + todoItems.length + ")</span>" +
+        const wtPill = activeCount > 0
+          ? '<button class="btn btn-xs ' + (state.worktreeOnly ? "btn-primary" : "") + '" data-kpi-action="toggle-wt" type="button">' +
+              icon("sparkle", 11) + "<span>" + tr("进行中", "Active") + " (" + activeCount + ")</span>" +
             "</button>"
+          : "";
+        const todoPill = todoCount > 0
+          ? '<button class="btn btn-xs ' + (state.todoOnly ? "btn-primary" : "") + '" data-kpi-action="toggle-todo" type="button">' +
+              icon("circle", 11) + "<span>" + tr("待处理 Issue", "Open Issues") + " (" + todoCount + ")</span>" +
+            "</button>"
+          : "";
+
+        const localSection = localRows.length > 0 && !state.todoOnly
+          ? '<section class="bento-card" style="margin-bottom:12px;">' +
+              '<div class="bento-hdr">' +
+                '<div class="bento-title-row">' +
+                  '<span class="bento-title">' + tr("本地未绑定 Issue 工作树", "Local Worktrees (No Issue #)") + "</span>" +
+                  '<span class="bento-sub num">' + localRows.length + "</span>" +
+                "</div>" +
+              "</div>" +
+              '<div class="wt-list">' + localRows.map(renderWtRow).join("") + "</div>" +
+            "</section>"
           : "";
 
         return (
           '<section class="bento-card" style="margin-bottom:12px;">' +
             '<div class="bento-hdr">' +
               '<div class="bento-title-row">' +
-                '<span class="bento-title">' + (state.todoOnly ? tr("待处理 Issue", "Open Issues") : tr("并行工作树", "Parallel Worktrees")) + "</span>" +
-                '<span class="bento-sub num">' + displayRows.length + (state.todoOnly ? " items" : " running") + "</span>" +
+                '<span class="bento-title">' + (state.todoOnly ? tr("待处理 Issue", "Open Issues") : tr("Issue 进度总览", "Issues & Tasks")) + "</span>" +
+                '<span class="bento-sub num">' + displayIssues.length + (state.todoOnly ? " items" : " issues") + "</span>" +
               "</div>" +
-              '<div class="bento-actions">' + todoPill + "</div>" +
+              '<div class="bento-actions">' + wtPill + todoPill + "</div>" +
             "</div>" +
             '<div class="wt-list">' +
-              (displayRows.length ? displayRows.map(renderWtRow).join("") : '<div class="col-empty">' + tr("当前筛选条件下暂无并行工作树", "No worktrees match the current filter") + "</div>") +
+              (displayIssues.length ? displayIssues.map(renderWtRow).join("") : '<div class="col-empty">' + tr("当前筛选条件下暂无 Issue", "No issues match the current filter") + "</div>") +
             "</div>" +
           "</section>" +
+          localSection +
           renderCockpitConsole(selected)
         );
       }
@@ -2184,7 +2370,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             "</div>" +
             '<div class="card-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</div>" +
             (ctxParts.length ? '<div class="card-context">' + ctxParts.join("") + "</div>" : "") +
-            '<div class="card-foot"><span>' + (pulseHtml || " ") + '</span><button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></div>" +
+            '<div class="card-foot"><span>' + (pulseHtml || " ") + '</span><span style="display:inline-flex;gap:5px;">' + renderOpenIssueBtn(item, "btn-xs") + '<button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></span></div>" +
           "</article>"
         );
       }
@@ -2214,7 +2400,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
               "<td>" + progHtml + "</td>" +
               "<td>" + (renderPulseSummary(item.pulse) || "—") + "</td>" +
               "<td>" + (renderChangeInline(item) || "—") + "</td>" +
-              '<td><button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></td>" +
+              '<td><div style="display:inline-flex;gap:5px;">' + renderOpenIssueBtn(item, "btn-xs") + '<button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></div></td>" +
             "</tr>"
           );
         }).join("");
@@ -2351,7 +2537,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         panel.innerHTML =
           '<div class="inspector-hdr">' +
             '<div style="min-width:0;flex:1;">' +
-              '<div class="card-meta">' + forgeIcon(item.forge_type, 12) + "<span>" + escapeHtml(item.repo_name || "") + "</span><span>·</span>" + renderIdHtml(item) + '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" + (issueHref ? '<a class="btn btn-xs" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>" + tr("原单", "Issue") + "</span></a>" : "") + "</div>" +
+              '<div class="card-meta">' + forgeIcon(item.forge_type, 12) + "<span>" + escapeHtml(item.repo_name || "") + "</span><span>·</span>" + renderIdHtml(item) + '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" + (issueHref ? '<a class="btn btn-xs" href="' + escapeHtml(issueHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>" + tr("打开 Issue", "Open Issue") + "</span></a>" : "") + "</div>" +
               '<h2 class="inspector-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</h2>" +
             "</div>" +
             '<button class="icon-btn" id="inspector-close-btn" type="button" aria-label="' + tr("关闭详情", "Close details") + '">' + icon("x", 15) + "</button>" +
@@ -2389,6 +2575,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
           i: snap.issues,
           l: snap.local_only_items,
           o: snap.orphan_changes,
+          aa: snap.auth_alerts,
+          fs: snap.forge_syncing,
           w: snap.warnings,
           sr: state.selectedRepo,
           vm: state.viewMode,
@@ -2427,10 +2615,31 @@ BOARD_HTML = r"""<!DOCTYPE html>
         renderSidebarReposAndWorktrees(snap);
         renderInspector();
 
-        const warns = snap.warnings || [];
-        document.getElementById("warnings-wrap").innerHTML = warns.length
+        const authAlerts = snap.auth_alerts || [];
+        const authHtml = authAlerts.map((a) => {
+          const target = a.api_base || a.host || "";
+          const repoNames = (a.repos || []).join(", ");
+          const tokenHref = safeUrl(a.token_url);
+          const cmd = a.login_cmd || ("idd auth login " + target + " --token <PAT>");
+          return (
+            '<div class="auth-alert-box">' +
+              '<div class="auth-alert-main">' +
+                '<span style="color:var(--accent)">' + icon("alertTriangle", 14) + "</span>" +
+                "<span><strong>" + tr("需配置 GitLab 登录凭据", "GitLab Token Required") + "</strong> (" + escapeHtml(target) + (repoNames ? " · " + escapeHtml(repoNames) : "") + ")</span>" +
+              "</div>" +
+              '<div class="auth-alert-actions">' +
+                '<button class="btn btn-xs btn-primary" data-copy-val="' + escapeHtml(cmd) + '" data-copy-msg="' + tr("已复制登录命令，请替换 <PAT> 后在终端执行", "Copied login command") + '" type="button">' + icon("copy", 11) + "<span>" + tr("复制登录命令", "Copy Login Cmd") + "</span></button>" +
+                (tokenHref ? '<a class="btn btn-xs" href="' + escapeHtml(tokenHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 11) + "<span>" + tr("生成 Token", "Create Token") + "</span></a>" : "") +
+              "</div>" +
+            "</div>"
+          );
+        }).join("");
+
+        const warns = (snap.warnings || []).filter((w) => !authAlerts.length || !String(w).includes("需要鉴权"));
+        const warnsHtml = warns.length
           ? '<div class="warnings-box">' + icon("alertTriangle", 14) + "<div><strong>" + tr("提示：", "Notice: ") + "</strong>" + warns.map((w) => escapeHtml(w)).join(" ｜ ") + "</div></div>"
           : "";
+        document.getElementById("warnings-wrap").innerHTML = authHtml + warnsHtml;
 
         const retainedCount = (snap.repos || []).reduce((acc, r) => acc + (r.retained_idle_worktrees || []).length, 0);
         const retainedText = retainedCount > 0
@@ -2466,8 +2675,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
           state.lastClockStr = formatClock(state.snapshot.generated_at);
           updateConnectionBadge(true);
           renderAll(false);
+          clearTimeout(state.quickSyncTimerId);
+          if (state.snapshot && state.snapshot.forge_syncing && !state.paused) {
+            state.quickSyncTimerId = setTimeout(() => fetchSnapshot(false), 800);
+          }
           if (forceRefresh) {
-            showToast(tr("已同步最新状态", "Synced latest state"));
+            showToast(tr("已触发远端同步，正在更新...", "Triggered remote sync..."));
           }
         } catch (err) {
           updateConnectionBadge(false, tr("连接异常: ", "Sync error: ") + err.message);
@@ -2519,6 +2732,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
       document.getElementById("sb-filters").addEventListener("click", handleActionClick);
       document.getElementById("kpis").addEventListener("click", handleActionClick);
+      document.getElementById("warnings-wrap").addEventListener("click", handleActionClick);
 
       document.getElementById("repo-pills").addEventListener("click", (e) => {
         const btn = e.target.closest("[data-repo]");
@@ -2692,7 +2906,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       applyTheme(savedTheme);
       applySidebarState();
       syncHeaderControls();
-      fetchSnapshot(true);
+      fetchSnapshot(false);
       state.timerId = setInterval(() => {
         if (!state.paused) fetchSnapshot(false);
       }, 2000);
@@ -2759,6 +2973,12 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/snapshot":
             params = urllib.parse.parse_qs(parsed.query)
             force_refresh = params.get("refresh", ["0"])[0] in ("1", "true", "yes")
+            if force_refresh and not self.local_only:
+                if not self.global_mode and self.root is not None:
+                    self.cache.warm_async([self.root], force_refresh=True)
+                else:
+                    repos = [Path(r["path"]) for r in monitor.load_registered_repos(prune_missing=True)]
+                    self.cache.warm_async(repos, force_refresh=True)
             try:
                 snapshot = monitor.collect_scope_snapshot(
                     root=self.root,
@@ -2766,7 +2986,8 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
                     open_only=False,
                     local_only=self.local_only,
                     forge_cache=self.cache,
-                    force_refresh=force_refresh,
+                    force_refresh=False,
+                    allow_stale_async=True,
                 )
                 self._send_json(HTTPStatus.OK, snapshot)
             except Exception as exc:
@@ -2799,6 +3020,14 @@ def run_board_server(
     """Start the local IDD Web Dashboard server and open the browser unless disabled."""
     resolved_version = version if version is not None else get_version()
     cache = monitor.ForgeSnapshotCache(ttl_seconds=forge_ttl)
+    if not local_only:
+        def _warm_on_boot() -> None:
+            if not global_mode and root is not None:
+                cache.warm_async([root], force_refresh=False)
+            else:
+                repos = [Path(r["path"]) for r in monitor.load_registered_repos(prune_missing=True)]
+                cache.warm_async(repos, force_refresh=False)
+        threading.Thread(target=_warm_on_boot, daemon=True).start()
     handler_cls = partial(
         BoardRequestHandler,
         cache=cache,

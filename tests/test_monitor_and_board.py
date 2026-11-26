@@ -10,10 +10,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from unittest import mock
 import urllib.request
 
-from test_idd_cli import FAKE_GH_SCRIPT, IDD_BIN, parse_skill_version
+from test_idd_cli import FAKE_GH_SCRIPT, IDD_BIN, SCRIPTS_DIR, parse_skill_version
+
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+import monitor  # noqa: E402
 
 
 def _create_repo_harness(
@@ -300,6 +307,11 @@ class TestMonitorAndBoard(unittest.TestCase):
                     self.assertIn("待处理 Issue", html)
                     self.assertIn("跨 Agent 接力提示词", html)
                     self.assertIn("Cross-Agent Handoff Prompt", html)
+                    self.assertIn("打开 Issue", html)
+                    self.assertIn("Open Issue", html)
+                    self.assertIn("wt-tasks-strip", html)
+                    self.assertIn("auth_alerts", html)
+                    self.assertIn("forge_syncing", html)
                     self.assertIn("buildHandoffPrompt", html)
                     self.assertNotIn("backlog", html.lower())
                     self.assertNotIn("__IDD_VERSION__", html)
@@ -404,6 +416,7 @@ class TestMonitorAndBoard(unittest.TestCase):
 
             # 3. FORCE_COLOR=1 emits ANSI escapes, NO_COLOR=1 suppresses them
             color_env = dict(env)
+            color_env.pop("NO_COLOR", None)
             color_env["FORCE_COLOR"] = "1"
             color_out = self._run(color_env, repo, "status").stdout
             self.assertIn("\x1b[", color_out)
@@ -417,6 +430,88 @@ class TestMonitorAndBoard(unittest.TestCase):
             json_out = self._run(color_env, repo, "status", "--json").stdout
             parsed = json.loads(json_out)
             self.assertEqual(parsed["repo_name"], "styled-app")
+
+    def test_monitor_filters_inherited_main_tasks_and_deduplicates_pulse_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            repo, _, _, env = _create_repo_harness(root / "h", "legacy-repo", cfg)
+            subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin", "https://github.com/acme/legacy-repo.git"], check=True)
+
+            # Seed 8 historical non-issue TASK directories committed on main
+            for idx in range(1, 9):
+                old_dir = repo / "TASK" / f"old-feature-{idx}"
+                old_dir.mkdir(parents=True, exist_ok=True)
+                (old_dir / "TASK-01.md").write_text(
+                    f"# TASK-01：历史遗留 {idx}\n\n- Issue: old-feature-{idx}\n- Status: done\n- Depends on: none\n- Test: pytest\n",
+                    encoding="utf-8",
+                )
+            subprocess.run(["git", "-C", str(repo), "add", "TASK"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-m", "chore: seed legacy tasks"], check=True, capture_output=True)
+
+            # Create an isolated worktree for #42 with 2 split TASKs
+            wt42 = Path(json.loads(self._run(env, repo, "start", "42", "--slug", "export-csv", "--json").stdout)["worktree"])
+            tdir = wt42 / "TASK/42-export-csv"
+            tdir.mkdir(parents=True, exist_ok=True)
+            (tdir / "TASK-01-impl.md").write_text(
+                "# TASK-01：实现接口\n\n- Issue: #42\n- Status: done\n- Depends on: none\n- Test: pytest\n",
+                encoding="utf-8",
+            )
+            (tdir / "TASK-02-test.md").write_text(
+                "# TASK-02：补充测试\n\n- Issue: #42\n- Status: in_progress\n- Depends on: TASK-01\n- Test: pytest\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(monitor, "inspect_worktree_pulse", wraps=monitor.inspect_worktree_pulse) as spy_pulse:
+                snap = monitor.collect_repo_snapshot(repo, local_only=True, register=False)
+                self.assertLessEqual(spy_pulse.call_count, 2)
+
+            self.assertEqual(snap["local_only_items"], [])
+            self.assertEqual(len(snap["issues"]), 1)
+            row42 = snap["issues"][0]
+            self.assertEqual(row42["issue_number"], 42)
+            self.assertEqual(row42["url"], "https://github.com/acme/legacy-repo/issues/42")
+            self.assertEqual([t["status"] for t in row42["tasks"]], ["done", "in_progress"])
+
+    def test_async_forge_cache_non_blocking_and_host_deduplicated_auth_alerts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            repo1, _, _, _ = _create_repo_harness(root / "h1", "svc-one", cfg)
+            repo2, _, _, _ = _create_repo_harness(root / "h2", "svc-two", cfg)
+            subprocess.run(["git", "-C", str(repo1), "remote", "set-url", "origin", "http://127.0.0.1:19999/org/svc-one.git"], check=True)
+            subprocess.run(["git", "-C", str(repo2), "remote", "set-url", "origin", "http://127.0.0.1:19999/org/svc-two.git"], check=True)
+
+            with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
+                os.environ.pop("GITLAB_TOKEN", None)
+                os.environ.pop("GITLAB_PRIVATE_TOKEN", None)
+                for rec_repo in (repo1, repo2):
+                    monitor.register_repo(rec_repo)
+
+                cache = monitor.ForgeSnapshotCache(ttl_seconds=30.0)
+                t0 = time.perf_counter()
+                fast_snap = monitor.collect_global_snapshot(
+                    current_cwd=root,
+                    forge_cache=cache,
+                    allow_stale_async=True,
+                )
+                elapsed = time.perf_counter() - t0
+                self.assertLess(elapsed, 2.0)
+                self.assertTrue(fast_snap["forge_syncing"])
+
+                sync_snap = monitor.collect_global_snapshot(
+                    current_cwd=root,
+                    forge_cache=cache,
+                    force_refresh=True,
+                    allow_stale_async=False,
+                )
+                self.assertFalse(sync_snap["forge_syncing"])
+                self.assertEqual(len(sync_snap["auth_alerts"]), 1)
+                alert = sync_snap["auth_alerts"][0]
+                self.assertEqual(alert["api_base"], "http://127.0.0.1:19999")
+                self.assertEqual(set(alert["repos"]), {"svc-one", "svc-two"})
+                self.assertIn("idd auth login http://127.0.0.1:19999 --token", alert["login_cmd"])
+                self.assertEqual(len(sync_snap["warnings"]), 1)
 
 
 if __name__ == "__main__":
