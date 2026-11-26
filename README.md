@@ -11,7 +11,7 @@
 
 **简体中文** · [English](README.en.md)
 
-[![Version](https://img.shields.io/badge/version-v0.0.3-10b981?style=flat-square)](https://github.com/j-tide/idd/releases)
+[![Version](https://img.shields.io/badge/version-v0.0.4-10b981?style=flat-square)](https://github.com/j-tide/idd/releases)
 [![GitHub Stars](https://img.shields.io/github/stars/j-tide/idd?style=flat-square&logo=github&color=f59e0b)](https://github.com/j-tide/idd/stargazers)
 [![CI](https://img.shields.io/github/actions/workflow/status/j-tide/idd/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/j-tide/idd/actions/workflows/ci.yml)
 [![Forges](https://img.shields.io/badge/forges-GitHub%20%C2%B7%20Self--Hosted%20GitLab-fc6d26?style=flat-square)](#支持生态)

@@ -2,7 +2,7 @@
 name: idd
 description: 面向 Issue 的跨工具开发工作流（Issue-Driven Development）。让 Claude Code、Codex 与 Antigravity 共用同一套「聊想法建 Issue → 独立 Worktree 并行 → TASK 拆解与真测试 → PR/MR CI 自愈 → Squash 直线合入 main 并清理 TASK 目录」流水线，同时支持 GitHub 与自建 GitLab。支持多工具无缝接手、长期阻塞恢复与历史补录；只读咨询或评估不创建任务。
 metadata:
-  version: "0.0.3"
+  version: "0.0.4"
 ---
 
 # IDD（Issue-Driven Development）
