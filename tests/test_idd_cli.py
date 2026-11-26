@@ -1151,6 +1151,64 @@ class TestIddCli(unittest.TestCase):
             self.assertIn("Squash 提交标题: fix: 过滤遗留任务 (#43)", dry_land)
             self.assertNotIn("fix: fix:", dry_land)
 
+    def test_first_time_repo_init_hint_prompts_once_and_marks_aligned(self) -> None:
+        self.assertEqual(
+            idd_cli.evaluate_repo_init_settings(
+                {"forge": "github", "settings": {"allow_merge_commit": False, "allow_squash_merge": True, "delete_branch_on_merge": False}}
+            ),
+            (True, []),
+        )
+        self.assertEqual(
+            idd_cli.evaluate_repo_init_settings(
+                {"forge": "gitlab", "settings": {"merge_method": "ff", "squash_option": "always", "remove_source_branch_after_merge": False}}
+            ),
+            (True, []),
+        )
+        self.assertEqual(
+            idd_cli.evaluate_repo_init_settings({"forge": "gitlab", "settings": {"merge_method": None, "squash_option": None}}),
+            (True, []),
+        )
+
+        # 1. Unaligned GitHub repo prompts once on first onboarding command, then stops repeating and updates on apply
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            first_out = h.run_idd("issue", "create", "--title", "Test onboarding", "--body", "desc").stdout
+            self.assertIn("💡 首次接管提示", first_out)
+            self.assertIn("allow_merge_commit=true（建议 false）", first_out)
+            self.assertIn("idd repo-init --apply", first_out)
+
+            repos_file = h.root / "idd-config" / "repos.json"
+            repos_data = json.loads(repos_file.read_text(encoding="utf-8"))
+            self.assertEqual(repos_data["repos"][0]["repo_init_state"], "prompted")
+
+            second_out = h.run_idd("start", "42", "--slug", "export-csv").stdout
+            self.assertNotIn("💡 首次接管提示", second_out)
+
+            h.run_idd("repo-init", "--apply")
+            repos_after = json.loads(repos_file.read_text(encoding="utf-8"))
+            self.assertEqual(repos_after["repos"][0]["repo_init_state"], "aligned")
+
+        # 2. Already-aligned GitHub repo skips prompt and records `aligned`
+        with tempfile.TemporaryDirectory() as tmp:
+            h2 = GitHubHarness(Path(tmp))
+            h2.state["repo_settings"].update(
+                {"allow_merge_commit": False, "allow_squash_merge": True, "delete_branch_on_merge": False}
+            )
+            h2.save_state()
+            start_out = h2.run_idd("start", "42", "--slug", "export-csv").stdout
+            self.assertNotIn("💡 首次接管提示", start_out)
+            repos_data2 = json.loads((h2.root / "idd-config" / "repos.json").read_text(encoding="utf-8"))
+            self.assertEqual(repos_data2["repos"][0]["repo_init_state"], "aligned")
+
+        # 3. `--json` mode keeps valid JSON with `repo_init_hint`
+        with tempfile.TemporaryDirectory() as tmp:
+            h3 = GitHubHarness(Path(tmp))
+            created_json = json.loads(
+                h3.run_idd("issue", "create", "--title", "JSON onboarding", "--body", "desc", "--json").stdout
+            )
+            self.assertEqual(created_json["repo_init_hint"]["command"], "idd repo-init --apply")
+            self.assertIn("allow_merge_commit=true（建议 false）", created_json["repo_init_hint"]["mismatches"])
+
 
 if __name__ == "__main__":
     unittest.main()

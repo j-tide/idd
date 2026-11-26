@@ -69,6 +69,8 @@ metadata:
 ### 模式 B｜新开发需求建单、认领 Issue 或跨工具接手（Start / Handoff）
 **硬性前置规则**：若当前仓库已配置 GitHub / GitLab 远端且用户直接提出了新的功能/修复/重构需求、尚未关联已有 Issue，必须先运行 `idd issue create` 建单（需求清晰低风险可直接建单后立即 `idd start <issue#>`；需求模糊或存在重大设计取舍则先简明确认边界再建单）。**严禁在有远端仓库里跳过建单直接开无 Issue 分支或本地快进合入 `main`。**
 
+> **首次接管仓库合入策略提示**：首次在带 GitHub / GitLab 远端的仓库运行 `idd issue create`、`idd start` 或 `idd repos add` 时，CLI 会自动只读探测一次远端合入策略；若输出 `💡 首次接管提示`（检测到尚未锁定线性 Squash + 保留分支），Agent 应先向用户说明差异并征得确认，再执行 `idd repo-init --apply`（锁定 GitHub 仅 Squash 合入或 GitLab `ff` + `always` squash 且保留分支），避免后续产生 Merge 节点。
+
 当用户指定要做某个 Issue（如“做 `#42`”、“用 Codex/Claude 接手 `#42`”）或刚通过 `idd issue create` 完成建单后：
 1. **统一入口**：在项目根目录或任意工作树先运行 `idd start <issue#>`。
    - 若该 Issue **尚无工作树**：`idd start` 会拉取最新 `origin/<default_branch>`，在同级 `../<repo>-worktrees/<id>-<slug>` 以 `--no-track` 创建工作树和分支（绝不将 upstream 错绑到 `origin/main`），同步 `.worktreeinclude` 里的 `.env` 等本地文件，并立即执行 `git push -u origin HEAD` 将开发分支推到远端（若无特殊原因禁止传 `--no-push`）。
