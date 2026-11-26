@@ -1,7 +1,7 @@
 # TASK-02：同步规范文档并执行全量验收检查
 
 - Issue: 19-issue-title-convention
-- Status: planned
+- Status: done
 - Depends on: TASK-01
 - Test: python3 -m unittest discover -s tests -v & python3 scripts/release.py --check
 
@@ -12,9 +12,9 @@
 
 ## 验收标准
 
-- [ ] `SKILL.md`、`references/git-issue-workflow.md`、`README.md`、`README.en.md` 内容准确一致
-- [ ] `python3 -m unittest discover -s tests -v` 全量通过
-- [ ] `python3 scripts/release.py --check` 通过
+- [x] `SKILL.md`、`references/git-issue-workflow.md`、`README.md`、`README.en.md` 内容准确一致
+- [x] `python3 -m unittest discover -s tests -v` 全量通过
+- [x] `python3 scripts/release.py --check` 通过
 
 ## 实现注意事项
 
@@ -27,8 +27,8 @@
 
 ## 执行结果
 
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已同步更新 `SKILL.md`、`references/git-issue-workflow.md`、`README.md` 与 `README.en.md`，全量 63 项单元测试及版本一致性检查全部通过。
 
 ### 当前阻塞
 
@@ -36,4 +36,7 @@
 
 ### 验证记录
 
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-26 | `python3 scripts/release.py --check` | passed (`v0.0.3`) | `SKILL.md`, `README.md`, `README.en.md` |
+| 2026-11-26 | `python3 -m unittest discover -s tests -v` | passed (63 tests in 116.126s) | `tests/` |

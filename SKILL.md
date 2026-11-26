@@ -25,7 +25,7 @@ metadata:
 | `idd watch [--current-only] [--once]` | 启动终端实时监控面板（默认全局聚合，2s 刷新本地脉搏、30s 缓存远端） |
 | `idd status [-g\|--global] [--open-only] [--local-only] [--json]` | 聚合并展示 Issue、`TASK` 进度、实时脉搏与 PR/MR CI 状态（非 Git 目录自动全局聚合） |
 | `idd repos [list\|add\|remove\|prune]` | 查看或管理本机全局监控的活跃仓库索引（`~/.config/idd/repos.json`） |
-| `idd issue create --title "..." [--body "..."] [--label ...]` | 聊天确认需求后创建 GitHub / GitLab Issue |
+| `idd issue create --title "..." [--type ...] [--scope ...] [--raw] [--body "..."] [--label ...]` | 聊天确认需求后按规范标题创建 GitHub / GitLab Issue |
 | `idd start <issue# \| slug> [--slug ...] [--prefix ...] [--no-push]` | 认领 Issue 创建（或**幂等复用**已有）独立 Worktree，使用 `--no-track` 建分支并立即 `push -u origin HEAD` 推远端，同时同步 `.worktreeinclude` |
 | `idd sync [issue#] [--no-push] [--dry-run]` | 将当前 Worktree 的 `TASK` 勾选进度同步回 Issue 正文（渲染原生进度条），并自动推送当前开发分支到远端 |
 | `idd pr [issue# \| slug]` / `idd mr ...` | 基于 `TASK` 与提交记录生成结构化描述（含 `Closes #<id>`）并创建/更新 PR 或 MR |
@@ -43,6 +43,10 @@ metadata:
 
 只要当前仓库已配置 GitHub / GitLab 远端，所有可独立验收的开发需求（功能、修复、重构、样式与文档改动）**必须先绑定一个远端 Issue**，全链路使用稳定一致的命名映射：
 
+- **Issue 标题规范**：
+  - 使用 `<type>: <简明描述>` 或 `<type>(<scope>): <简明描述>`（复用 8 类 `<type>`，如 `fix(sync): 避免误匹配行内进度标记`、`feat(land): 自动勾选验收标准`），单行建议 ≤ 50 字符、不重复类型动词（如 `fix:` 后不写“修复…”）。
+  - 可选 `(<scope>)` **必须简短**：仅限单个小写英文/数字/连字符标识（`^[a-z0-9]+(?:-[a-z0-9]+)*$`，**≤ 16 字符**），禁止空格、逗号、斜杠或中文；跨模块改动直接省略括号。
+  - `idd issue create` 默认在入口校验（支持 `--type` / `--scope` 自动拼接，极少数非工程单可传 `--raw` 放行）；`idd start` 推断分支前缀优先级为 `--prefix` > Issue 标题 `<type>` > Labels > `feat`，并自动兼容历史无前缀 Issue。
 - **Issue ↔ 目录 ↔ Worktree ↔ 分支**：
   - `Issue #42` ↔ 任务目录 `42-<slug>` ↔ 独立工作树 `../<主仓库名>-worktrees/42-<slug>` ↔ 分支 `<type>/42-<slug>`（例如 `feat/42-export-csv`、`fix/43-dark-flicker`）。
   - **仅当仓库完全没有配置 GitHub / GitLab 远端（纯本地仓库）时**，才允许回退使用无 Issue 编号的 `<issue-slug>` 与 `<type>/<issue-slug>`。
@@ -64,7 +68,7 @@ metadata:
 当用户是在聊想法、提新需求、让你先建单而不急着改代码时：
 1. 做必要的只读仓库核对（只问会实质影响设计的问题，不问查仓库就能确定的内容）。
 2. 明确背景（Why）、范围与明确边界（Scope / Non-goals）、风险以及可勾选的验收标准（`- [ ]`）。
-3. 调用 `idd issue create` 创建 Issue（自动适配当前仓库所属 GitHub 或自建 GitLab），向用户返回 Issue 编号与链接，**不修改当前工作树代码**。
+3. 按规范格式（`<type>: <简明描述>` 或 `<type>(<scope>): <简明描述>`）调用 `idd issue create` 创建 Issue（自动适配当前仓库所属 GitHub 或自建 GitLab），向用户返回 Issue 编号与链接，**不修改当前工作树代码**。
 
 ### 模式 B｜新开发需求建单、认领 Issue 或跨工具接手（Start / Handoff）
 **硬性前置规则**：若当前仓库已配置 GitHub / GitLab 远端且用户直接提出了新的功能/修复/重构需求、尚未关联已有 Issue，必须先运行 `idd issue create` 建单（需求清晰低风险可直接建单后立即 `idd start <issue#>`；需求模糊或存在重大设计取舍则先简明确认边界再建单）。**严禁在有远端仓库里跳过建单直接开无 Issue 分支或本地快进合入 `main`。**
