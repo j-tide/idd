@@ -22,6 +22,7 @@ FAIL_CONCLUSIONS = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STA
 PASS_CONCLUSIONS = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 GITLAB_PASS_STATUSES = {"success", "skipped", "manual"}
 GITLAB_FAIL_STATUSES = {"failed", "canceled"}
+GITLAB_SQUASH_COMMIT_TEMPLATE = "%{title}\n\n%{description}"
 
 
 class ForgeError(Exception):
@@ -567,6 +568,10 @@ class GitHubForge:
                 "allow_squash_merge=true",
                 "-F",
                 "delete_branch_on_merge=false",
+                "-f",
+                "squash_merge_commit_title=PR_TITLE",
+                "-f",
+                "squash_merge_commit_message=PR_BODY",
             ])
         else:
             data = self._gh_json(["api", "repos/{owner}/{repo}"])
@@ -578,6 +583,8 @@ class GitHubForge:
                 "allow_squash_merge": data.get("allow_squash_merge"),
                 "allow_rebase_merge": data.get("allow_rebase_merge"),
                 "delete_branch_on_merge": data.get("delete_branch_on_merge"),
+                "squash_merge_commit_title": data.get("squash_merge_commit_title"),
+                "squash_merge_commit_message": data.get("squash_merge_commit_message"),
                 "allow_auto_merge": data.get("allow_auto_merge"),
             },
         }
@@ -1014,6 +1021,7 @@ class GitLabForge:
                     "merge_method": "ff",
                     "squash_option": "always",
                     "remove_source_branch_after_merge": False,
+                    "squash_commit_template": GITLAB_SQUASH_COMMIT_TEMPLATE,
                 },
             )
         else:
@@ -1025,8 +1033,42 @@ class GitLabForge:
                 "merge_method": data.get("merge_method"),
                 "squash_option": data.get("squash_option"),
                 "remove_source_branch_after_merge": data.get("remove_source_branch_after_merge"),
+                "squash_commit_template": data.get("squash_commit_template"),
             },
         }
+
+
+def evaluate_repo_init_settings(result: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Return `(is_aligned, mismatches)` for a `forge.repo_init` result."""
+    forge_type = result.get("forge")
+    settings = result.get("settings") or {}
+    mismatches: list[str] = []
+    if forge_type == "github":
+        if settings.get("allow_merge_commit") is True:
+            mismatches.append("allow_merge_commit=true（建议 false）")
+        if settings.get("allow_squash_merge") is False:
+            mismatches.append("allow_squash_merge=false（建议 true）")
+        if settings.get("delete_branch_on_merge") is True:
+            mismatches.append("delete_branch_on_merge=true（建议 false）")
+        squash_title = settings.get("squash_merge_commit_title")
+        if squash_title is not None and squash_title != "PR_TITLE":
+            mismatches.append(f"squash_merge_commit_title={squash_title}（建议 PR_TITLE）")
+        squash_msg = settings.get("squash_merge_commit_message")
+        if squash_msg is not None and squash_msg != "PR_BODY":
+            mismatches.append(f"squash_merge_commit_message={squash_msg}（建议 PR_BODY）")
+    elif forge_type == "gitlab":
+        merge_method = settings.get("merge_method")
+        if merge_method is not None and merge_method != "ff":
+            mismatches.append(f"merge_method={merge_method}（建议 ff）")
+        squash_option = settings.get("squash_option")
+        if squash_option is not None and squash_option != "always":
+            mismatches.append(f"squash_option={squash_option}（建议 always）")
+        if settings.get("remove_source_branch_after_merge") is True:
+            mismatches.append("remove_source_branch_after_merge=true（建议 false）")
+        squash_tpl = settings.get("squash_commit_template")
+        if squash_tpl is not None and str(squash_tpl).strip() != GITLAB_SQUASH_COMMIT_TEMPLATE:
+            mismatches.append(f"squash_commit_template={squash_tpl!r}（建议 '%{{title}}\\n\\n%{{description}}'）")
+    return len(mismatches) == 0, mismatches
 
 
 def build_repo_web_url(spec: RemoteSpec | None, forge_type: str) -> str:

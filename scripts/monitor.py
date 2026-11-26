@@ -21,6 +21,7 @@ from forge import (
     ForgeError,
     build_issue_web_url,
     build_repo_web_url,
+    evaluate_repo_init_settings,
     get_config_dir,
     get_forge,
     get_hosts_path,
@@ -151,6 +152,21 @@ def _read_raw_repos_unlocked() -> list[dict[str, Any]]:
     return result
 
 
+def _copy_repo_init_fields(src: dict[str, Any], dst: dict[str, Any]) -> None:
+    """Copy persisted `repo_init_*` metadata fields from `src` to `dst` when present."""
+    existing_state = src.get("repo_init_state")
+    if isinstance(existing_state, str) and existing_state:
+        dst["repo_init_state"] = existing_state
+    mismatches = src.get("repo_init_mismatches")
+    if isinstance(mismatches, list):
+        cleaned = [str(m) for m in mismatches if isinstance(m, str) and m]
+        if cleaned:
+            dst["repo_init_mismatches"] = cleaned
+    err = src.get("repo_init_error")
+    if isinstance(err, str) and err:
+        dst["repo_init_error"] = err
+
+
 def load_registered_repos(*, prune_missing: bool = True) -> list[dict[str, Any]]:
     """Load registered repository entries sorted by recency, optionally pruning stale paths."""
     with _REPOS_LOCK:
@@ -183,9 +199,7 @@ def load_registered_repos(*, prune_missing: bool = True) -> list[dict[str, Any]]
                 "name": str(item.get("name") or resolved.name),
                 "last_seen_at": ts,
             }
-            existing_state = item.get("repo_init_state")
-            if isinstance(existing_state, str) and existing_state:
-                entry_out["repo_init_state"] = existing_state
+            _copy_repo_init_fields(item, entry_out)
             seen[key] = entry_out
 
         entries = sorted(seen.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
@@ -215,21 +229,19 @@ def register_repo(main_worktree: Path) -> dict[str, Any]:
                     "name": str(item.get("name") or p.name),
                     "last_seen_at": float(item.get("last_seen_at") or 0.0),
                 }
-                existing_state = item.get("repo_init_state")
-                if isinstance(existing_state, str) and existing_state:
-                    rec["repo_init_state"] = existing_state
+                _copy_repo_init_fields(item, rec)
                 by_path[str(p)] = rec
         prev_entry = by_path.get(key)
-        if prev_entry and isinstance(prev_entry.get("repo_init_state"), str) and prev_entry["repo_init_state"]:
-            entry["repo_init_state"] = prev_entry["repo_init_state"]
+        if prev_entry:
+            _copy_repo_init_fields(prev_entry, entry)
         by_path[key] = entry
         entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
         _save_repos_unlocked(entries)
     return entry
 
 
-def get_repo_init_state(main_worktree: Path) -> str:
-    """Return persisted `repo_init_state` ('aligned', 'prompted', or '') for a repository."""
+def get_repo_init_meta(main_worktree: Path) -> dict[str, Any]:
+    """Return persisted repo merge-policy status `{'state', 'mismatches', 'error'}`."""
     key = str(main_worktree.expanduser().resolve())
     with _REPOS_LOCK:
         for item in _read_raw_repos_unlocked():
@@ -238,16 +250,34 @@ def get_repo_init_state(main_worktree: Path) -> str:
             except OSError:
                 continue
             if p == key:
-                val = item.get("repo_init_state")
-                return val if isinstance(val, str) else ""
-    return ""
+                raw_state = item.get("repo_init_state")
+                state = raw_state if isinstance(raw_state, str) else ""
+                if state == "prompted":
+                    state = "pending"
+                raw_mismatches = item.get("repo_init_mismatches")
+                mismatches = (
+                    [str(m) for m in raw_mismatches if isinstance(m, str) and m]
+                    if isinstance(raw_mismatches, list)
+                    else []
+                )
+                raw_err = item.get("repo_init_error")
+                error = raw_err if isinstance(raw_err, str) else ""
+                return {"state": state, "mismatches": mismatches, "error": error}
+    return {"state": "", "mismatches": [], "error": ""}
 
 
-def set_repo_init_state(main_worktree: Path, state: str) -> None:
-    """Persist `repo_init_state` for a repository main worktree in `repos.json`."""
+def set_repo_init_meta(
+    main_worktree: Path,
+    state: str,
+    *,
+    mismatches: list[str] | None = None,
+    error: str = "",
+) -> None:
+    """Persist `repo_init_state`, `repo_init_mismatches`, and `repo_init_error` in `repos.json`."""
     resolved = main_worktree.expanduser().resolve()
     key = str(resolved)
     now = time.time()
+    normalized = "pending" if state == "prompted" else state
     with _REPOS_LOCK:
         raw_items = _read_raw_repos_unlocked()
         by_path: dict[str, dict[str, Any]] = {}
@@ -262,18 +292,39 @@ def set_repo_init_state(main_worktree: Path, state: str) -> None:
                     "name": str(item.get("name") or p.name),
                     "last_seen_at": float(item.get("last_seen_at") or 0.0),
                 }
-                existing_state = item.get("repo_init_state")
-                if isinstance(existing_state, str) and existing_state:
-                    rec["repo_init_state"] = existing_state
+                _copy_repo_init_fields(item, rec)
                 by_path[str(p)] = rec
         target = by_path.get(key) or {"path": key, "name": resolved.name, "last_seen_at": now}
-        if state:
-            target["repo_init_state"] = state
+        if normalized:
+            target["repo_init_state"] = normalized
         else:
             target.pop("repo_init_state", None)
+        if normalized == "aligned" or not normalized:
+            target.pop("repo_init_mismatches", None)
+            target.pop("repo_init_error", None)
+        else:
+            cleaned_mm = [str(m) for m in (mismatches or []) if isinstance(m, str) and m]
+            if cleaned_mm:
+                target["repo_init_mismatches"] = cleaned_mm
+            else:
+                target.pop("repo_init_mismatches", None)
+            if error:
+                target["repo_init_error"] = error
+            else:
+                target.pop("repo_init_error", None)
         by_path[key] = target
         entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
         _save_repos_unlocked(entries)
+
+
+def get_repo_init_state(main_worktree: Path) -> str:
+    """Return persisted `repo_init_state` ('aligned', 'pending', or '') for a repository."""
+    return str(get_repo_init_meta(main_worktree)["state"])
+
+
+def set_repo_init_state(main_worktree: Path, state: str) -> None:
+    """Persist `repo_init_state` for a repository main worktree in `repos.json`."""
+    set_repo_init_meta(main_worktree, state)
 
 
 def unregister_repo(target: Path) -> bool:
@@ -822,6 +873,22 @@ class ForgeSnapshotCache:
                 open_issues = issues_res
                 open_changes = changes_res
                 forge_connected = True
+                prev_meta = get_repo_init_meta(main_worktree)
+                if prev_meta["state"] != "aligned":
+                    try:
+                        policy_res = forge.repo_init(apply=False)
+                        aligned, mismatches = evaluate_repo_init_settings(policy_res)
+                        if aligned:
+                            set_repo_init_meta(main_worktree, "aligned")
+                        else:
+                            set_repo_init_meta(
+                                main_worktree,
+                                "pending",
+                                mismatches=mismatches,
+                                error=str(prev_meta.get("error") or ""),
+                            )
+                    except Exception:
+                        pass
             else:
                 warnings.append("远端仓库查询不可用，已降级为本地工作树视图。")
         except ForgeAuthError as exc:
@@ -1521,6 +1588,12 @@ def collect_repo_snapshot(
             ch_copy["change_summary"] = format_change_badge(ch, mr_label, mr_prefix)
             orphan_changes.append(ch_copy)
 
+    repo_init_meta = (
+        get_repo_init_meta(main_wt)
+        if (main_wt is not None and has_origin)
+        else {"state": "local", "mismatches": [], "error": ""}
+    )
+
     return {
         "repo_name": repo_name,
         "repo_path": repo_path_str,
@@ -1530,6 +1603,7 @@ def collect_repo_snapshot(
         "forge_connected": forge_connected,
         "forge_syncing": bool(forge_info.get("syncing")),
         "auth_alert": forge_info.get("auth_alert"),
+        "repo_init": repo_init_meta,
         "mr_label": mr_label,
         "mr_prefix": mr_prefix,
         "issues": rows,
