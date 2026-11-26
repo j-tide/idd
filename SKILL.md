@@ -30,7 +30,7 @@ metadata:
 | `idd sync [issue#] [--no-push] [--dry-run]` | 将当前 Worktree 的 `TASK` 勾选进度同步回 Issue 正文（渲染原生进度条），并自动推送当前开发分支到远端 |
 | `idd pr [issue# \| slug]` / `idd mr ...` | 基于 `TASK` 与提交记录生成结构化描述（含 `Closes #<id>`）并创建/更新 PR 或 MR |
 | `idd ci [issue# \| pr# \| !mr#] [--watch] [--logs] [--json]` | 查看 PR / MR 的 CI 状态并拉取失败 Job/Run 日志 |
-| `idd land [issue# \| slug] [--keep-tasks] [--rm-worktree] [--auto] [--dry-run]` | 自动 Rebase、汇总正文、清理 `TASK/<issue>/` 并 Squash 直线合入（默认保留分支与工作树） |
+| `idd land [issue# \| slug] [--keep-tasks] [--rm-worktree] [--auto] [--no-check-acceptance] [--dry-run]` | 自动 Rebase、汇总正文、清理 `TASK/<issue>/`、Squash 直线合入并自动勾选 Issue 验收标准（默认保留分支与工作树） |
 | `idd cleanup [--dry-run]` | 按需移除已合入且 HEAD 一致的干净工作树目录（保留所有分支） |
 | `idd repo-init [--apply]` | 检查或配置 GitHub / GitLab 为线性 Squash 合入策略（保留分支） |
 | `idd auth login <host> --token <PAT>` / `status` / `logout` | 保存与检查自建 GitLab / GitHub 企业版主机凭据 |
@@ -191,6 +191,7 @@ Test: <本任务实际执行的验证及结果>
    - 在删除 `TASK/<issue>/` 前，先将完整 `Closes #<id>` 与所有 `TASK-XX` / `Test:` 写入 PR/MR 描述与 Squash Commit 正文；
    - 执行 `git rm -rf TASK/<issue>` 并提交清理（若 `evidence/` 含附件且未传 `--force-clean-evidence` 会安全暂停提示）；
    - 以**单条 Squash 提交**直线合入 `main`（GitHub 走 Squash Merge；GitLab 走 Squash + Fast-Forward，自动关闭 Issue 并**默认保留远端与本地需求分支**）；
+   - 合入真正完成后（非 `--auto` 挂起），默认自动勾选 Issue 正文「验收标准」节内的未勾选复选框并保底刷新进度块（可用 `--no-check-acceptance` 跳过）；
    - **默认保留本地 Worktree**（只有显式传入 `--rm-worktree` 时才顺带移除工作树目录，分支依然保留），并尝试将干净的主工作树 `main` 快进至最新。
 2. **释放本地工作树空间（按需手动）**：平时保留工作树便于回顾上下文；需要清理磁盘时手动运行 `idd cleanup`——它只删除工作树目录（**绝不删除分支**），且仅当工作区干净**且**本地 `HEAD` 与已合入 PR/MR 的 `headRefOid` 完全一致时才清理，避免误删合入后的本地新增提交。
 3. **无远端 / 纯本地仓库回退**：按照[Issue 与 Git 协作流 · 纯本地回退](references/git-issue-workflow.md#纯本地无远端回退流程)在临时集成分支完成压缩、删除 `TASK/<issue>/`、变基并与主线 `git merge --ff-only`。

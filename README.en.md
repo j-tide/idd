@@ -86,7 +86,7 @@ idd board
 | `idd sync [issue#]` | Sync local `TASK` checklist progress back to the Issue body and auto-push branch commits |
 | `idd pr` / `idd mr` | Summarize `TASK` and test records (`Closes #id`) to create or update a PR / MR |
 | `idd ci [issue# \| pr# \| !mr#] [--logs]` | Check PR / MR CI status and fetch failing job logs |
-| `idd land [issue# \| slug]` | Rebase, clean `TASK/<issue>/`, and Squash-merge onto `main` (keeps branches & worktrees by default; optional `--rm-worktree`) |
+| `idd land [issue# \| slug]` | Rebase, clean `TASK/<issue>/`, Squash-merge onto `main`, and auto-check Issue acceptance boxes (keeps branches & worktrees by default; optional `--no-check-acceptance` / `--rm-worktree`) |
 | `idd cleanup [--dry-run]` | Safely remove merged worktree directories when clean and `HEAD == headRefOid` (**never deletes branches**) |
 | `idd repo-init [--apply]` | Check or apply linear Squash merge rules with branch retention on GitHub / GitLab |
 | `idd auth login / status / logout` | Manage credentials for self-hosted GitLab or GitHub Enterprise hosts |
