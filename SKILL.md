@@ -1,17 +1,17 @@
 ---
 name: idd
-description: 面向 Issue 的跨工具开发工作流（Issue-Driven Development）。让 Claude Code、Codex 与 Antigravity 共用同一套「聊想法建 Issue → 独立 Worktree 并行 → TASK 拆解与真测试 → PR/MR CI 自愈 → Squash 直线合入 main 并清理 TASK 目录」流水线，同时支持 GitHub 与自建 GitLab。支持多工具无缝接手、长期阻塞恢复与历史补录；只读咨询或评估不创建任务。
+description: 面向 Issue 的跨工具开发工作流（Issue-Driven Development）。让 Claude Code、Codex 与 Antigravity 共用同一套「先确认方案再建 Issue → 独立 Worktree 并行 → TASK 拆解与真测试 → PR/MR CI 自愈 → Squash 直线合入 main 并清理 TASK 目录」流水线，同时支持 GitHub 与自建 GitLab。支持多工具无缝接手、长期阻塞恢复与历史补录；只读咨询或评估不创建任务。
 metadata:
   version: "0.0.4"
 ---
 
 # IDD（Issue-Driven Development）
 
-**先用 Issue 锚定需求，再为每个 Issue 开出独立 Worktree 与分支，逐项实现、验证并提交 `TASK`，在 PR / MR 上完成 CI 自愈与验收，最后将整个需求压缩成一条直线提交 Squash 合入 `main`（合入前清理临时 `TASK/` 目录）。**
+**先只读排查并与用户确认开发/修改方案，再用 Issue 锚定需求，再为每个 Issue 开出独立 Worktree 与分支，逐项实现、验证并提交 `TASK`，在 PR / MR 上完成 CI 自愈与验收，最后将整个需求压缩成一条直线提交 Squash 合入 `main`（合入前清理临时 `TASK/` 目录）。**
 
 本工作流通过统一的目录约定与共用 CLI 工具 **`idd`**，同时支持 **GitHub** 与 **自建 GitLab**，让 **Claude Code、Codex、Antigravity** 之间随时无缝接手同一个 Issue，多个 Issue 并行开发互不冲突。
 
-保持流程轻量。不要生成重量级的 Spec、Plan、Design 文档，只保留执行和验证任务所必需的文件。
+保持流程轻量。不要生成重量级的 Spec、Plan、Design 文档，只保留执行和验证任务所必需的文件；但动代码与建单前仍须先给出简明方案由用户确认。
 
 ---
 
@@ -26,7 +26,7 @@ metadata:
 | `idd watch [--current-only] [--once]` | 启动终端实时监控面板（默认全局聚合，2s 刷新本地脉搏、30s 缓存远端） |
 | `idd status [-g\|--global] [--open-only] [--local-only] [--json]` | 聚合并展示 Issue、`TASK` 进度、实时脉搏与 PR/MR CI 状态（非 Git 目录自动全局聚合） |
 | `idd repos [list\|add\|remove\|prune]` | 查看或管理本机全局监控的活跃仓库索引（`~/.config/idd/repos.json`） |
-| `idd issue create --title "..." [--type ...] [--scope ...] [--raw] [--body "..."] [--label ...]` | 聊天确认需求后按规范标题创建 GitHub / GitLab Issue |
+| `idd issue create --title "..." [--type ...] [--scope ...] [--raw] [--body "..."] [--label ...]` | 用户确认开发/修改方案后按规范标题创建 GitHub / GitLab Issue |
 | `idd start <issue# \| slug> [--slug ...] [--prefix ...] [--no-push]` | 认领 Issue 创建（或**幂等复用**已有）独立 Worktree，使用 `--no-track` 建分支并立即 `push -u origin HEAD` 推远端，同时同步 `.worktreeinclude` |
 | `idd sync [issue#] [--no-push] [--dry-run]` | 将当前 Worktree 的 `TASK` 勾选进度同步回 Issue 正文（渲染原生进度条），并自动推送当前开发分支到远端 |
 | `idd pr [issue# \| slug] [--auto-merge \| --no-auto-merge]` / `idd mr ...` | 基于 `TASK` 与提交记录生成结构化描述（含 `Closes #<id>`）并创建/更新 PR 或 MR；若 `auto_merge` 生效则自动等待 CI 结算并直线合入 |
@@ -66,14 +66,23 @@ metadata:
 
 动手前先读取 `AGENTS.md`、适用的嵌套指令文件及相关项目文档；在制定计划前检查相关实现代码、测试、脚本、配置和 `git status`。
 
-### 模式 A｜想法建单（Chat → Preview → Issue）
-当用户是在聊想法、提新需求、让你先建单而不急着改代码时：
-1. 做必要的只读仓库核对（只问会实质影响设计的问题，不问查仓库就能确定的内容）；存在多种做法时先收敛 2~3 个关键取舍。
-2. **直观对齐门禁（Show, Don't Just Tell）**：不要只甩大段文字方案让用户盲审，按[直观对齐规范](references/visual-alignment.md)先给可交互 HTML 原型（Antigravity 发交互 Artifact，Claude Code / Codex 写仓库外临时文件并用 `idd preview` 打开）、Before/After 真实样例或 Mermaid 状态流转图（明确单点 Bug 除外）。
-3. 用户对预览效果拍板后，将确认的视觉/交互/边界态要点写入范围、边界（Scope / Non-goals）与可勾选验收标准（`- [ ]`），按规范格式（`<type>: <简明描述>` 或 `<type>(<scope>): <简明描述>`）调用 `idd issue create` 创建 Issue，向用户返回 Issue 编号与链接，**不修改当前工作树代码**。
+### 前置硬门禁：先确认方案，再建单开工
 
-### 模式 B｜新开发需求建单、认领 Issue 或跨工具接手（Start / Handoff）
-**硬性前置规则**：若当前仓库已配置 GitHub / GitLab 远端且用户直接提出了新的功能/修复/重构需求、尚未关联已有 Issue，必须先完成直观对齐并运行 `idd issue create` 建单再开干。**仅当**属于无 UI / 无交互歧义的明确单点修复，或用户已直接确认具体原型/已有清晰验收标准的 Issue 时，才可直接 `idd start <issue#>` 推进；凡涉及 UI 页面、交互流转、终端输出格式或复杂分支的新需求，**严禁仅凭文字猜测直接写代码**，必须先按[直观对齐规范](references/visual-alignment.md)看样确认再建单。**严禁在有远端仓库里跳过建单直接开无 Issue 分支或本地快进合入 `main`。**
+除下方仅有的 2 条免确认例外外，凡涉及新增功能、Bug 修复、重构、样式、配置或文档改动且尚未关联已有 Issue：
+1. **先只读排查并输出简明开发/修改方案**：说明目标或根因定位、拟改文件与核心思路、影响边界及验证方式；涉及 UI、交互、输出或复杂流程时，须按[直观对齐规范](references/visual-alignment.md)同步附上原型或样例。
+2. **停下来等待用户明确确认**：在用户明确回复同意或拍板之前，**严禁执行 `idd issue create`、`idd start` 或任何代码/文件写操作**，严禁在同一轮“先写方案再顺手建单”。
+3. **仅有的 2 条免确认例外**：
+   - ① 用户本轮明确指定推进**已有且验收标准清晰的 Issue**（如“开工 `#42`”、“接手 `#42`”）；
+   - ② 用户本轮**显式授权跳过确认**（如“不用确认，直接建单改”）。
+
+### 模式 A｜方案确认与建单（Chat → Align → Issue）
+当用户是在聊想法、提新需求、让你先确认方案并建单而不急着改代码时：
+1. 做必要的只读仓库核对（只问会实质影响设计的问题，不问查仓库就能确定的内容）；存在多种做法时先收敛 2~3 个关键取舍。
+2. 输出**简明开发/修改方案**；涉及 UI、交互、终端输出或复杂流程时，按[直观对齐规范](references/visual-alignment.md)先给可交互 HTML 原型（Antigravity 发交互 Artifact，Claude Code / Codex 写仓库外临时文件并用 `idd preview` 打开）、Before/After 真实样例或 Mermaid 状态流转图。
+3. **等待用户明确确认方案或对预览效果拍板后**，将确认的视觉/交互/边界态要点写入范围、边界（Scope / Non-goals）与可勾选验收标准（`- [ ]`），按规范格式（`<type>: <简明描述>` 或 `<type>(<scope>): <简明描述>`）调用 `idd issue create` 创建 Issue，向用户返回 Issue 编号与链接，**不修改当前工作树代码**。
+
+### 模式 B｜建单开工、认领 Issue 或跨工具接手（Start / Handoff）
+**硬性前置规则**：若当前仓库已配置 GitHub / GitLab 远端且用户提出了新的功能、修复、重构、样式、配置或文档需求、尚未关联已有 Issue，**必须先按前置硬门禁给出简明方案（涉及 UI、交互、终端输出或复杂分支的新需求，严禁仅凭文字猜测直接写代码，必须同步按[直观对齐规范](references/visual-alignment.md)看样对齐）并等待用户明确确认**，确认后才可运行 `idd issue create` 建单再 `idd start <issue#>` 开干。即使是明确的单点 Bug 修复或纯内部重构，也**仅豁免交互原型，不豁免方案确认**。除上述 2 条免确认例外外，严禁在未确认方案前直接建单或开工，也**严禁在有远端仓库里跳过建单直接开无 Issue 分支或本地快进合入 `main`**。
 
 > **首次接管仓库自动初始化合入策略**：首次在带 GitHub / GitLab 远端的仓库运行 `idd issue create`、`idd start`、`idd repos add`，或在 `idd ui` 初始化向导保存令牌时，默认会自动只读探测并尝试执行 `idd repo-init --apply`（锁定 GitHub 仅 Squash、`PR_TITLE`/`PR_BODY` 模板，或 GitLab `ff` + `always` squash、`%{title}\n\n%{description}` 模板，且保留分支）。若用户选择跳过（`--no-repo-init` 或取消向导勾选）或因无权限失败，会在 `~/.config/idd/repos.json` 持久标记为 `pending`，并在 `idd repos list` 与 `idd ui` 中持续展示可点击的「待初始化 / 重试」入口。
 
@@ -102,7 +111,7 @@ TASK/
 - 每个代码任务必须关联验证真实产品行为的自动化测试（可多任务共用同一测试文件）；确实不适合自动化测试的须说明原因并定义具体替代检查。
 - 测试命令从项目配置、CI 或文档确认。
 - **薄切片早验收（UI / 交互类需求）**：高视觉或强交互需求拆解时，应让 `TASK-01` 优先跑通最小可交互真界面 / 主链路，尽早向用户展示真实效果并确认手感，再继续补齐边缘逻辑与全量测试，避免整批开发后再返工。
-- 若由已明确验收标准的 Issue 启动且范围清晰低风险，或用户已明确授权覆盖本轮范围，创建完 `TASK` 文件（建议顺手跑一次 `idd sync` 更新 Issue 进度条）后直接进入执行；若需求本身模糊或存在重大设计取舍，先向用户展示任务列表、依赖关系与测试映射并等待确认。
+- 若由**已有清晰验收标准的 Issue**（例外 ①）或**已经用户明确确认的方案**进入执行且范围清晰低风险，或用户已明确授权覆盖本轮范围，创建完 `TASK` 文件（建议顺手跑一次 `idd sync` 更新 Issue 进度条）后直接进入执行；不得把未经确认的自行建单视作已授权范围；若需求本身仍模糊或拆解中发现新的重大设计取舍，先向用户展示任务列表、依赖关系与测试映射并等待确认。
 
 ### 模式 D｜只读全局进度与实时监控
 当用户询问“有哪些 Issue 在跑”、“做到哪一步了”或跨工具查看总览时，优先运行：
@@ -239,10 +248,11 @@ Test: <简短命令或命令标签> — <结果>
 - **执行记录与证据**：任务头部为唯一当前状态源，`Status` 与 `Outcome` 独立记录；`run/` 等忽略目录不能作为唯一长期依据。详情见[任务记录约定](references/task-records.md)。
 - **最终回复**：结束本轮开发或恢复执行时，读取[最终回复模板](references/final-reply.md)。首次提请验收、同轮直通合入、部分完成或受阻时按「标准模板」汇报结论、完成内容、验证结果与交付状态；**验收后仅执行准入合入（`idd land`）时改用「验收后准入回执（精简版）」**，明确写清 PR / MR 已合入，且所有关联的 Issue 与 PR / MR 均使用可点击 Markdown 链接。纯咨询或仅建单不套用开发交付报告。
 - **执行红线**：
+  - **未经方案确认严禁建单或开工**：除「用户明确指定推进已有清晰验收标准的 Issue」或「用户本轮显式授权跳过确认」两条例外外，所有新需求与修改（含 Bug 修复、重构、配置与文档）必须先只读排查并输出简明方案，等待用户明确确认后才可执行 `idd issue create`、`idd start` 或任何写操作；严禁同轮一边发方案一边顺手建单；
   - 不创建重复规划文档或人工维护的平行索引；
   - 不得为了让测试通过而削弱或删除测试；
   - 除非确有必要且理由充分，否则不要增加依赖；
   - 不修改无关文件，不覆盖用户已有修改；
   - 没有实际运行并通过的测试，绝不能声称通过；
   - **常规开发分支推送默认允许且必须执行**：有 `origin` 远端时，向当前需求开发分支（`<type>/*`）执行 `git push -u origin HEAD`（含 `idd start` / `idd sync` 自动推送）属于标准开发动作，不属于“越权外部写入”；未经明确授权不得执行的是强推主干/重写共享历史、未经验收且未开启 `auto_merge` 开关时擅自合入 `main`、发版打 Tag、部署或生产变更（若已开启全局 `auto_merge` 开关且满足安全门禁，则视作已获自动合入授权）；
-  - 若当前项目的 `AGENTS.md` 在技术栈、测试门禁、安全边界等业务规则上更严格，以项目指令为准；若项目文档中仍残留已废弃的旧 `TaskFlow` 工作流引用，一律以本 IDD 流程替代（先建 Issue、独立 Worktree、PR/MR 与 Squash 直线合入），不得退回无 Issue 的旧流程。
+  - 若当前项目的 `AGENTS.md` 在技术栈、测试门禁、安全边界等业务规则上更严格，以项目指令为准；若项目文档中仍残留已废弃的旧 `TaskFlow` 工作流引用，一律以本 IDD 流程替代（先确认方案再建 Issue、独立 Worktree、PR/MR 与 Squash 直线合入），不得退回无 Issue 的旧流程。
