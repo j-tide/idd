@@ -2965,10 +2965,52 @@ BOARD_HTML = r"""<!DOCTYPE html>
       45% { transform: scale(1.035); }
       100% { transform: scale(1); }
     }
+    .view-enter { animation: panelSwap var(--dur-fast) var(--ease-out); }
+    .card-enter { animation: cardIn var(--dur-panel) var(--ease-out); }
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(6px) scale(0.985); }
+      to { opacity: 1; transform: none; }
+    }
 
     @media (max-width: 780px) {
-      .app-shell { flex-direction: column; }
-      .sidebar { width: 100% !important; position: static; max-height: none; }
+      .app-shell { flex-direction: column; padding: 10px; gap: 10px; }
+      .sidebar { width: 100% !important; position: static; max-height: none; padding: 10px 12px; }
+      .sb-nav { flex-direction: row; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+      .sb-nav::-webkit-scrollbar { display: none; }
+      .sb-nav .sb-item { width: auto; flex: 1 0 auto; justify-content: center; }
+      .sb-list { flex-direction: row; overflow-x: auto; scrollbar-width: none; gap: 6px; padding-bottom: 2px; }
+      .sb-list::-webkit-scrollbar { display: none; }
+      .sb-list .sb-item { width: auto; flex: 0 0 auto; }
+    }
+    @media (max-width: 600px) {
+      .ws-controls { width: 100%; }
+      .sb-search { flex: 1; min-width: 140px; }
+      .stat-strip {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+        max-width: 100%;
+        padding-bottom: 2px;
+      }
+      .stat-strip::-webkit-scrollbar { display: none; }
+      .stat-chip { flex-shrink: 0; }
+    }
+    @media (max-width: 560px) {
+      .inspector-panel {
+        top: auto;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        max-width: 100%;
+        max-height: 86dvh;
+        border-radius: 18px 18px 0 0;
+        border-bottom: 0;
+        transform: translateY(104%);
+      }
+      .inspector-panel.open { transform: translateY(0); }
+      .toast-wrap { right: 12px; left: 12px; bottom: 12px; align-items: center; }
     }
   </style>
 </head>
@@ -3193,7 +3235,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
         lastFocusBeforeModal: null,
         pendingManualSyncToast: false,
         lastToastSig: "",
-        lastToastTime: 0
+        lastToastTime: 0,
+        lastSetupBtnSig: "",
+        lastPauseBtnSig: "",
+        lastSyncBtnSig: "",
+        lastViewsSig: "",
+        lastConnModeSig: "",
+        lastSidebarReposSig: ""
       };
 
       function prefersReducedMotion() {
@@ -3749,20 +3797,28 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const unconfCnt = state.authStatus && typeof state.authStatus.unconfigured_count === "number"
             ? state.authStatus.unconfigured_count
             : authAlerts.length;
-          setupBtn.classList.toggle("btn-warn", unconfCnt > 0);
-          setupBtn.title = tr("打开连接配置与 IDD 四步上手指南", "Open GitHub/GitLab setup & IDD 4-step guide");
-          setupBtn.innerHTML =
-            icon(unconfCnt > 0 ? "key" : "compass", 12) +
-            "<span>" + (unconfCnt > 0 ? tr("配置令牌", "Setup Token") : tr("引导与配置", "Setup & Guide")) + "</span>" +
-            (unconfCnt > 0 ? '<span class="setup-badge-cnt num">' + unconfCnt + "</span>" : "");
+          const setupSig = state.lang + ":" + unconfCnt;
+          if (setupSig !== state.lastSetupBtnSig) {
+            state.lastSetupBtnSig = setupSig;
+            setupBtn.classList.toggle("btn-warn", unconfCnt > 0);
+            setupBtn.title = tr("打开连接配置与 IDD 四步上手指南", "Open GitHub/GitLab setup & IDD 4-step guide");
+            setupBtn.innerHTML =
+              icon(unconfCnt > 0 ? "key" : "compass", 12) +
+              "<span>" + (unconfCnt > 0 ? tr("配置令牌", "Setup Token") : tr("引导与配置", "Setup & Guide")) + "</span>" +
+              (unconfCnt > 0 ? '<span class="setup-badge-cnt num">' + unconfCnt + "</span>" : "");
+          }
         }
         const pauseBtn = document.getElementById("pause-btn");
         if (pauseBtn) {
-          const pLabel = state.paused ? tr("继续自动轮询", "Resume auto-refresh") : tr("暂停自动轮询", "Pause auto-refresh");
-          pauseBtn.classList.toggle("is-paused", Boolean(state.paused));
-          pauseBtn.title = pLabel;
-          pauseBtn.setAttribute("aria-label", pLabel);
-          pauseBtn.innerHTML = state.paused ? icon("play", 12) : icon("pause", 12);
+          const pauseSig = state.lang + ":" + (state.paused ? "1" : "0");
+          if (pauseSig !== state.lastPauseBtnSig) {
+            state.lastPauseBtnSig = pauseSig;
+            const pLabel = state.paused ? tr("继续自动轮询", "Resume auto-refresh") : tr("暂停自动轮询", "Pause auto-refresh");
+            pauseBtn.classList.toggle("is-paused", Boolean(state.paused));
+            pauseBtn.title = pLabel;
+            pauseBtn.setAttribute("aria-label", pLabel);
+            pauseBtn.innerHTML = state.paused ? icon("play", 12) : icon("pause", 12);
+          }
         }
         const isBusy =
           (!state.hasLiveSnapshot && !state.initError) ||
@@ -3771,34 +3827,42 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const syncBtn = document.getElementById("sync-btn");
         if (syncBtn) {
           const localOnly = Boolean(state.snapshot && state.snapshot.local_only);
-          syncBtn.classList.toggle("spin", isBusy);
-          syncBtn.title = localOnly
-            ? tr("当前为仅本地模式 (快捷键 r 刷新本地)", "Local-only mode (press r to refresh)")
-            : tr("同步 GitHub / GitLab 远端 (快捷键 r)", "Sync GitHub / GitLab (shortcut r)");
-          const syncLabel = localOnly
-            ? (isBusy ? tr("扫描中", "Scanning") : tr("刷新本地", "Refresh"))
-            : (isBusy ? tr("同步中", "Syncing") : tr("同步远端", "Sync Forge"));
-          syncBtn.innerHTML = icon("refresh", 12) + "<span>" + syncLabel + "</span>";
+          const syncSig = state.lang + ":" + (localOnly ? "1" : "0") + ":" + (isBusy ? "1" : "0");
+          if (syncSig !== state.lastSyncBtnSig) {
+            state.lastSyncBtnSig = syncSig;
+            syncBtn.classList.toggle("spin", isBusy);
+            syncBtn.title = localOnly
+              ? tr("当前为仅本地模式 (快捷键 r 刷新本地)", "Local-only mode (press r to refresh)")
+              : tr("同步 GitHub / GitLab 远端 (快捷键 r)", "Sync GitHub / GitLab (shortcut r)");
+            const syncLabel = localOnly
+              ? (isBusy ? tr("扫描中", "Scanning") : tr("刷新本地", "Refresh"))
+              : (isBusy ? tr("同步中", "Syncing") : tr("同步远端", "Sync Forge"));
+            syncBtn.innerHTML = icon("refresh", 12) + "<span>" + syncLabel + "</span>";
+          }
         }
 
         renderForgeStatus(false);
 
         const s = (state.snapshot && state.snapshot.summary) || {};
         const hasLive = Number(s.coding_now_count || 0) > 0 || Number(s.active_worktrees || 0) > 0;
-        const modes = [
-          { id: "view-repos", mode: "repos", ic: "folder", label: tr("按仓库", "By Repo"), dot: hasLive },
-          { id: "view-kanban", mode: "kanban", ic: "columns", label: tr("流程看板", "Kanban"), dot: false },
-          { id: "view-list", mode: "list", ic: "list", label: tr("紧凑列表", "List"), dot: false }
-        ];
-        for (const m of modes) {
-          const el = document.getElementById(m.id);
-          if (!el) continue;
-          el.classList.toggle("active", state.viewMode === m.mode);
-          el.innerHTML =
-            '<span class="sb-item-left">' + icon(m.ic, 14) + '<span class="hide-collapsed">' + escapeHtml(m.label) + "</span></span>" +
-            '<span class="tile-dot ' + (m.dot ? "show" : "") + '"></span>';
+        const viewsSig = state.lang + ":" + state.viewMode + ":" + (hasLive ? "1" : "0");
+        if (viewsSig !== state.lastViewsSig) {
+          state.lastViewsSig = viewsSig;
+          const modes = [
+            { id: "view-repos", mode: "repos", ic: "folder", label: tr("按仓库", "By Repo"), dot: hasLive },
+            { id: "view-kanban", mode: "kanban", ic: "columns", label: tr("流程看板", "Kanban"), dot: false },
+            { id: "view-list", mode: "list", ic: "list", label: tr("紧凑列表", "List"), dot: false }
+          ];
+          for (const m of modes) {
+            const el = document.getElementById(m.id);
+            if (!el) continue;
+            el.classList.toggle("active", state.viewMode === m.mode);
+            el.innerHTML =
+              '<span class="sb-item-left">' + icon(m.ic, 14) + '<span class="hide-collapsed">' + escapeHtml(m.label) + "</span></span>" +
+              '<span class="tile-dot ' + (m.dot ? "show" : "") + '"></span>';
+          }
+          syncAllGliders();
         }
-        syncAllGliders();
         updateTopProgress();
       }
 
@@ -3807,7 +3871,25 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const cluster = document.getElementById("status-cluster");
         if (cluster) cluster.classList.toggle("is-err", !ok);
         if (!tag) return;
-        const clock = escapeHtml(state.lastClockStr || tr("同步中...", "Syncing..."));
+        const clockRaw = state.lastClockStr || tr("同步中...", "Syncing...");
+        const clock = escapeHtml(clockRaw);
+        const modeSig = [
+          ok ? "1" : "0",
+          errorMsg || "",
+          state.paused ? "1" : "0",
+          state.hasLiveSnapshot ? "1" : "0",
+          state.snapshot ? "1" : "0",
+          state.fromCache ? "1" : "0",
+          Boolean(state.snapshot && state.snapshot.local_only) ? "1" : "0",
+          Boolean(state.snapshot && state.snapshot.forge_syncing) ? "1" : "0",
+          state.lang
+        ].join("|");
+        if (modeSig === state.lastConnModeSig && tag.querySelector("#updated-tag")) {
+          const upd = tag.querySelector("#updated-tag");
+          if (upd && upd.textContent !== clockRaw) upd.textContent = clockRaw;
+          return;
+        }
+        state.lastConnModeSig = modeSig;
         if (!ok) {
           tag.className = "live-pill is-err";
           tag.innerHTML = icon("alertTriangle", 12) + "<span>" + escapeHtml(errorMsg || tr("连接中断", "Disconnected")) + '</span><span id="updated-tag" style="display:none;">' + clock + "</span>";
@@ -4365,7 +4447,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
             "</div>"
           );
         }
-        document.getElementById("repo-pills").innerHTML = repoHtml.join("");
+        const nextHtmlStr = repoHtml.join("");
+        const pillsEl = document.getElementById("repo-pills");
+        if (pillsEl) {
+          if (typeof window !== "undefined" && typeof pillsEl.querySelectorAll === "function") {
+            if (nextHtmlStr !== state.lastSidebarReposSig) {
+              state.lastSidebarReposSig = nextHtmlStr;
+              pillsEl.innerHTML = nextHtmlStr;
+            }
+          } else {
+            pillsEl.innerHTML = nextHtmlStr;
+          }
+        }
       }
 
       function renderWorkspaceHeader(snap) {
@@ -4511,7 +4604,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           ? '<div class="glass-filter-hint"><span>' + escapeHtml(tr("已筛选 · ", "Filtered · ") + activeChip.label) + '</span><button type="button" class="glass-filter-reset" data-kpi-action="filter-all">' + tr("重置筛选", "Reset") + "</button></div>"
           : '<div class="glass-filter-hint"><span>' + tr("点击胶囊切换筛选视角", "Click chips to filter") + "</span></div>";
 
-        kpisEl.innerHTML =
+        const kpiMarkup =
           '<div class="stat-strip">' +
             statChips.map((c) =>
               '<button class="stat-chip ' + c.cls + (c.active ? " active" : "") + '" type="button" data-kpi-action="' + c.act + '">' +
@@ -4524,7 +4617,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
           filterHintHtml;
 
         const bentoEl = document.getElementById("bento-kpis");
-        if (!bentoEl) return;
         const pct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
         const reposCnt = ((snap && snap.repos) || []).length;
         const issueSlots = buildSegSlots(scopedItems.length, 8, [
@@ -4547,7 +4639,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           ? tr("CI 失败 " + ciFail, ciFail + " Failing")
           : (issueReady > 0 ? tr("就绪 " + issueReady, issueReady + " Ready") : tr("暂无异常", "Healthy"));
 
-        bentoEl.innerHTML =
+        const bentoMarkup =
           '<article class="bento-card">' +
             '<div class="bento-top"><span class="bento-lbl">' + tr("Issue 状态", "Issue Status") + '</span><span class="bento-sub-badge">' + escapeHtml(state.selectedRepo === "ALL" ? (reposCnt + tr(" 仓库", " repos")) : tr("单仓视角", "Single Repo")) + "</span></div>" +
             '<div class="bento-val-row"><div><span class="bento-num">' + scopedItems.length + '</span><span class="bento-unit">' + tr("活跃", "active") + '</span></div><span class="bento-frac">' + escapeHtml(tr("施工 ", "WT ") + activeWt + " · " + tr("待办 ", "Queued ") + issueQueued) + "</span></div>" +
@@ -4566,6 +4658,94 @@ BOARD_HTML = r"""<!DOCTYPE html>
             '<div class="bento-segs cols-8" title="' + escapeHtml(tr("CI 全绿 ", "Green ") + issueReady + " · " + tr("运行中 ", "Running ") + ciRun + " · " + tr("失败 ", "Failed ") + ciFail) + '">' + prSlots + "</div>" +
             '<div class="bento-foot">' + escapeHtml(tr("CI 全绿 ", "Green ") + issueReady + " · " + tr("运行中 ", "Running ") + ciRun + " · " + tr("失败 ", "Failed ") + ciFail + (retainedCnt ? (" · " + tr("可清理 ", "Cleanable ") + retainedCnt) : "")) + "</div>" +
           "</article>";
+
+        const canPatchKpi = typeof window !== "undefined" && typeof kpisEl.querySelector === "function" && kpisEl.querySelector(".stat-strip");
+        if (!canPatchKpi) {
+          kpisEl.innerHTML = kpiMarkup;
+          if (bentoEl) bentoEl.innerHTML = bentoMarkup;
+          return;
+        }
+        const tplK = document.createElement("template");
+        tplK.innerHTML = kpiMarkup;
+        const curStrip = kpisEl.querySelector(".stat-strip");
+        const nextChips = tplK.content.querySelectorAll(".stat-chip");
+        const curChips = curStrip ? curStrip.querySelectorAll(".stat-chip") : [];
+        if (curChips.length === nextChips.length) {
+          for (let i = 0; i < curChips.length; i++) {
+            const cEl = curChips[i];
+            const nEl = nextChips[i];
+            cEl.className = nEl.className;
+            const cLbl = cEl.querySelector(".stat-lbl");
+            const nLbl = nEl.querySelector(".stat-lbl");
+            if (cLbl && nLbl && cLbl.textContent !== nLbl.textContent) cLbl.textContent = nLbl.textContent;
+            const cVal = cEl.querySelector(".stat-val");
+            const nVal = nEl.querySelector(".stat-val");
+            if (cVal && nVal && cVal.textContent !== nVal.textContent) {
+              cVal.textContent = nVal.textContent;
+              if (typeof window !== "undefined") {
+                cVal.classList.remove("num-tick");
+                void cVal.offsetWidth;
+                cVal.classList.add("num-tick");
+              }
+            }
+          }
+          const curHint = kpisEl.querySelector(".glass-filter-hint");
+          const nextHint = tplK.content.querySelector(".glass-filter-hint");
+          if (curHint && nextHint && curHint.innerHTML !== nextHint.innerHTML) {
+            curHint.innerHTML = nextHint.innerHTML;
+          }
+        } else {
+          kpisEl.innerHTML = kpiMarkup;
+        }
+
+        if (bentoEl) {
+          const curCards = bentoEl.querySelectorAll("article.bento-card");
+          if (curCards.length === 3) {
+            const tplB = document.createElement("template");
+            tplB.innerHTML = bentoMarkup;
+            const nextCards = tplB.content.querySelectorAll("article.bento-card");
+            for (let i = 0; i < 3; i++) {
+              const cc = curCards[i];
+              const nc = nextCards[i];
+              const patchTxt = (sel, tick) => {
+                const a = cc.querySelector(sel);
+                const b = nc.querySelector(sel);
+                if (!a || !b) return;
+                if (a.className !== b.className) a.className = b.className;
+                if (a.textContent !== b.textContent) {
+                  a.textContent = b.textContent;
+                  if (tick) {
+                    a.classList.remove("num-tick");
+                    void a.offsetWidth;
+                    a.classList.add("num-tick");
+                  }
+                }
+              };
+              patchTxt(".bento-lbl", false);
+              patchTxt(".bento-sub-badge", false);
+              patchTxt(".bento-num", true);
+              patchTxt(".bento-unit", false);
+              patchTxt(".bento-frac", false);
+              patchTxt(".bento-foot", false);
+              const cSegs = cc.querySelector(".bento-segs");
+              const nSegs = nc.querySelector(".bento-segs");
+              if (cSegs && nSegs) {
+                if (cSegs.title !== nSegs.title) cSegs.title = nSegs.title;
+                const cSlots = cSegs.querySelectorAll(".bento-slot");
+                const nSlots = nSegs.querySelectorAll(".bento-slot");
+                if (cSlots.length === nSlots.length) {
+                  for (let j = 0; j < cSlots.length; j++) {
+                    if (cSlots[j].className !== nSlots[j].className) cSlots[j].className = nSlots[j].className;
+                  }
+                } else {
+                  cSegs.innerHTML = nSegs.innerHTML;
+                }
+              }
+            }
+          } else {
+            bentoEl.innerHTML = bentoMarkup;
+          }
+        }
       }
 
       function resolvePrimaryLink(item) {
@@ -4658,7 +4838,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const cardChip = options.inRepoGroup ? "" : renderRepoChip(item, { compact: true, hideName: !options.showRepo });
         const idHtml = renderIdHtml(item, { pill: Boolean(options.inRepoGroup) });
         return (
-          '<article class="card ' + (isSelected ? "is-selected" : "") + '" data-forge="' + escapeHtml(forgeAttr) + '" data-open-key="' + escapeHtml(item._key) + '">' +
+          '<article class="card ' + (isSelected ? "is-selected" : "") + '" tabindex="0" data-forge="' + escapeHtml(forgeAttr) + '" data-open-key="' + escapeHtml(item._key) + '">' +
             '<div class="card-top">' +
               '<div class="card-meta">' + cardChip + idHtml + "</div>" +
               '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" +
@@ -4687,7 +4867,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             ? '<div style="display:flex;align-items:center;gap:8px;min-width:110px;"><div class="progress-track"><div class="progress-fill" style="width:' + pct + '%"></div></div><span class="prog-num">' + done + "/" + total + "</span></div>"
             : '<span style="color:var(--text-faint);">—</span>';
           return (
-            '<tr class="' + (isSelected ? "is-selected" : "") + '" data-open-key="' + escapeHtml(item._key) + '">' +
+            '<tr class="' + (isSelected ? "is-selected" : "") + '" tabindex="0" data-open-key="' + escapeHtml(item._key) + '">' +
               "<td><div style=\"display:flex;align-items:center;gap:8px;\">" + renderIdHtml(item) + "<span>" + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</span></div></td>" +
               "<td>" + renderRepoChip(item, { compact: true }) + "</td>" +
               '<td><span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span></td>" +
@@ -4912,7 +5092,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml((grp.path ? ("cd " + grp.path + " && ") : "") + "idd cleanup") + '" data-copy-msg="' + tr("已复制清理命令 idd cleanup", "Copied idd cleanup") + '" type="button">' + icon("trash", 11) + "<span>" + tr("复制 idd cleanup", "Copy idd cleanup") + "</span></button>"
             : "";
           return (
-            '<section class="repo-section" data-forge="' + escapeHtml(grp.forge || "local") + '">' +
+            '<section class="repo-section" data-forge="' + escapeHtml(grp.forge || "local") + '" data-repo-group="' + escapeHtml(grp.path) + '">' +
               '<div class="repo-hdr">' +
                 '<div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
                   renderRepoChip({ forgeType: grp.forge, repoUrl: grp.repoUrl, repoName: "" }, { hideName: true, customLabel: forgeLabel(grp.forge) + (grp.repoUrl ? tr(" 主页", " Home") : "") }) +
@@ -4962,6 +5142,250 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return repoSections + emptyActiveBlock + cleanupDrawer;
       }
 
+      function patchHtmlPreservingCopied(curEl, nextEl) {
+        if (!curEl || !nextEl) return;
+        const activeCopy = new Map();
+        curEl.querySelectorAll("[data-copy-val]").forEach((btn) => {
+          if (btn.dataset.timerId) {
+            activeCopy.set(btn.getAttribute("data-copy-val") || "", {
+              html: btn.innerHTML,
+              cls: btn.className,
+              timerId: btn.dataset.timerId,
+              prevHtml: btn.dataset.prevHtml || "",
+              minWidth: btn.style.minWidth || ""
+            });
+          }
+        });
+        const curFill = curEl.querySelector(".progress-fill");
+        const nextFill = nextEl.querySelector(".progress-fill");
+        const savedFill = (curFill && nextFill) ? {
+          cls: nextFill.className,
+          width: nextFill.style.width
+        } : null;
+        if (savedFill && curFill) {
+          curFill.className = savedFill.cls;
+          curFill.style.width = savedFill.width;
+          const curTrack = curFill.parentElement;
+          const nextTrack = nextFill.parentElement;
+          if (curTrack && nextTrack) {
+            const placeholder = document.createElement("span");
+            placeholder.dataset.fillSlot = "1";
+            nextTrack.replaceChild(placeholder, nextFill);
+          }
+        }
+        curEl.innerHTML = nextEl.innerHTML;
+        if (savedFill && curFill) {
+          const slot = curEl.querySelector("[data-fill-slot]");
+          if (slot && slot.parentElement) {
+            slot.parentElement.replaceChild(curFill, slot);
+          }
+        }
+        if (activeCopy.size) {
+          curEl.querySelectorAll("[data-copy-val]").forEach((btn) => {
+            const saved = activeCopy.get(btn.getAttribute("data-copy-val") || "");
+            if (saved) {
+              btn.className = saved.cls;
+              btn.innerHTML = saved.html;
+              btn.dataset.timerId = saved.timerId;
+              btn.dataset.prevHtml = saved.prevHtml;
+              btn.style.minWidth = saved.minWidth;
+            }
+          });
+        }
+      }
+
+      function reconcileCardGrid(targetContainer, nextContainer, poolByKey, oldRects, oldStages) {
+        const frag = document.createDocumentFragment();
+        const children = Array.from(nextContainer.children);
+        for (const nextChild of children) {
+          const key = nextChild.getAttribute("data-open-key");
+          if (!key) {
+            frag.appendChild(nextChild.cloneNode(true));
+            continue;
+          }
+          const reused = poolByKey.get(key);
+          if (reused) {
+            poolByKey.delete(key);
+            reused.className = nextChild.className;
+            reused.setAttribute("tabindex", nextChild.getAttribute("tabindex") || "0");
+            const fgAttr = nextChild.getAttribute("data-forge");
+            if (fgAttr != null) reused.setAttribute("data-forge", fgAttr);
+            patchHtmlPreservingCopied(reused, nextChild);
+            const nextBadge = reused.querySelector(".card-top .badge") || reused.querySelector("td .badge");
+            if (nextBadge && oldStages.has(key) && oldStages.get(key) !== nextBadge.textContent && !prefersReducedMotion()) {
+              nextBadge.classList.remove("is-stage-bumped");
+              void nextBadge.offsetWidth;
+              nextBadge.classList.add("is-stage-bumped");
+              setTimeout(() => nextBadge.classList.remove("is-stage-bumped"), 220);
+            }
+            frag.appendChild(reused);
+          } else {
+            const fresh = nextChild.cloneNode(true);
+            if (!prefersReducedMotion() && oldRects.size > 0) {
+              fresh.classList.add("card-enter");
+              setTimeout(() => fresh.classList.remove("card-enter"), 240);
+            }
+            frag.appendChild(fresh);
+          }
+        }
+        targetContainer.innerHTML = "";
+        targetContainer.appendChild(frag);
+      }
+
+      function reconcileMainContent(container, htmlStr, viewKey) {
+        if (typeof window === "undefined" || typeof container.querySelectorAll !== "function") {
+          container.innerHTML = htmlStr;
+          return;
+        }
+        const prevViewKey = container.dataset.viewKey || "";
+        if (prevViewKey !== viewKey) {
+          container.innerHTML = htmlStr;
+          container.dataset.viewKey = viewKey;
+          if (!prefersReducedMotion()) {
+            container.classList.remove("view-enter");
+            void container.offsetWidth;
+            container.classList.add("view-enter");
+          }
+          return;
+        }
+
+        const oldRects = new Map();
+        const oldStages = new Map();
+        const poolByKey = new Map();
+        const existingItems = Array.from(container.querySelectorAll("[data-open-key]"));
+        const trackFlip = !prefersReducedMotion() && existingItems.length <= 160;
+        for (const el of existingItems) {
+          const k = el.getAttribute("data-open-key");
+          if (!k) continue;
+          poolByKey.set(k, el);
+          if (trackFlip) {
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) oldRects.set(k, r);
+          }
+          const badge = el.querySelector(".card-top .badge") || el.querySelector("td .badge");
+          if (badge) oldStages.set(k, badge.textContent || "");
+        }
+
+        const tpl = document.createElement("template");
+        tpl.innerHTML = htmlStr;
+
+        if (viewKey === "kanban") {
+          const curKanban = container.querySelector(".kanban");
+          const nextKanban = tpl.content.querySelector(".kanban");
+          if (!curKanban || !nextKanban || curKanban.children.length !== nextKanban.children.length) {
+            container.innerHTML = htmlStr;
+            return;
+          }
+          for (let i = 0; i < curKanban.children.length; i++) {
+            const curCol = curKanban.children[i];
+            const nextCol = nextKanban.children[i];
+            const curCnt = curCol.querySelector(".col-count");
+            const nextCnt = nextCol.querySelector(".col-count");
+            if (curCnt && nextCnt && curCnt.textContent !== nextCnt.textContent) {
+              curCnt.textContent = nextCnt.textContent;
+            }
+            const curStack = curCol.querySelector(".card-stack");
+            const nextStack = nextCol.querySelector(".card-stack");
+            if (curStack && nextStack) {
+              reconcileCardGrid(curStack, nextStack, poolByKey, oldRects, oldStages);
+            }
+          }
+        } else if (viewKey === "list") {
+          const curBody = container.querySelector(".list-table tbody");
+          const nextBody = tpl.content.querySelector(".list-table tbody");
+          if (!curBody || !nextBody) {
+            container.innerHTML = htmlStr;
+            return;
+          }
+          reconcileCardGrid(curBody, nextBody, poolByKey, oldRects, oldStages);
+        } else if (viewKey === "repos") {
+          const curSections = new Map();
+          container.querySelectorAll(".repo-section[data-repo-group]").forEach((s) => {
+            curSections.set(s.getAttribute("data-repo-group") || "", s);
+          });
+          const curDrawer = container.querySelector(".cleanup-drawer");
+          const frag = document.createDocumentFragment();
+          for (const nextChild of Array.from(tpl.content.children)) {
+            if (nextChild.classList.contains("repo-section")) {
+              const gKey = nextChild.getAttribute("data-repo-group") || "";
+              const reusedSec = curSections.get(gKey);
+              if (reusedSec) {
+                curSections.delete(gKey);
+                const curHdr = reusedSec.querySelector(".repo-hdr");
+                const nextHdr = nextChild.querySelector(".repo-hdr");
+                if (curHdr && nextHdr && curHdr.innerHTML !== nextHdr.innerHTML) {
+                  patchHtmlPreservingCopied(curHdr, nextHdr);
+                }
+                const curGrid = reusedSec.querySelector(".repo-grid");
+                const nextGrid = nextChild.querySelector(".repo-grid");
+                if (curGrid && nextGrid) {
+                  reconcileCardGrid(curGrid, nextGrid, poolByKey, oldRects, oldStages);
+                }
+                frag.appendChild(reusedSec);
+              } else {
+                const clonedSec = nextChild.cloneNode(true);
+                if (!prefersReducedMotion() && oldRects.size > 0) clonedSec.classList.add("view-enter");
+                frag.appendChild(clonedSec);
+              }
+            } else if (nextChild.classList.contains("cleanup-drawer")) {
+              if (curDrawer) {
+                curDrawer.className = nextChild.className;
+                const curHdr = curDrawer.querySelector(".cleanup-hdr");
+                const nextHdr = nextChild.querySelector(".cleanup-hdr");
+                if (curHdr && nextHdr) {
+                  curHdr.setAttribute("aria-expanded", nextHdr.getAttribute("aria-expanded") || "false");
+                  const curBadge = curHdr.querySelector(".badge");
+                  const nextBadge = nextHdr.querySelector(".badge");
+                  if (curBadge && nextBadge) curBadge.textContent = nextBadge.textContent;
+                }
+                const curBody = curDrawer.querySelector(".cleanup-body");
+                const nextBody = nextChild.querySelector(".cleanup-body");
+                if (curBody && nextBody) {
+                  const cg = curBody.querySelector(".repo-grid");
+                  const ng = nextBody.querySelector(".repo-grid");
+                  if (cg && ng) reconcileCardGrid(cg, ng, poolByKey, oldRects, oldStages);
+                } else if (nextBody && !curBody) {
+                  curDrawer.appendChild(nextBody.cloneNode(true));
+                } else if (!nextBody && curBody) {
+                  curBody.remove();
+                }
+                frag.appendChild(curDrawer);
+              } else {
+                frag.appendChild(nextChild.cloneNode(true));
+              }
+            } else {
+              frag.appendChild(nextChild.cloneNode(true));
+            }
+          }
+          container.innerHTML = "";
+          container.appendChild(frag);
+        } else {
+          container.innerHTML = htmlStr;
+          return;
+        }
+
+        if (trackFlip && oldRects.size > 0) {
+          container.querySelectorAll("[data-open-key]").forEach((el) => {
+            const k = el.getAttribute("data-open-key");
+            const oldR = k ? oldRects.get(k) : null;
+            if (!oldR || typeof el.animate !== "function") return;
+            const newR = el.getBoundingClientRect();
+            const dx = oldR.left - newR.left;
+            const dy = oldR.top - newR.top;
+            if (newR.width > 0 && (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5)) {
+              if (el._flipAnim) {
+                try { el._flipAnim.cancel(); } catch (_e) {}
+              }
+              el._flipAnim = el.animate(
+                [{ transform: "translate3d(" + dx + "px," + dy + "px,0)" }, { transform: "translate3d(0,0,0)" }],
+                { duration: 240, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }
+              );
+              el._flipAnim.onfinish = () => { el._flipAnim = null; };
+            }
+          });
+        }
+      }
+
       function renderMain() {
         const snap = state.snapshot;
         const container = document.getElementById("main-content");
@@ -4969,27 +5393,34 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
         const repos = snap.repos || [];
         if (repos.length === 0) {
-          container.innerHTML =
+          reconcileMainContent(
+            container,
             '<div class="empty-state">' +
               '<h3 style="margin:0 0 6px;font-size:14.5px;color:var(--text);">' + tr("暂无已纳管的 Git 仓库", "No monitored Git repositories yet") + "</h3>" +
               '<p style="margin:0;font-size:12.5px;">' + tr("在任意项目目录执行以下任一命令后，仓库会自动同步到这里：", "Run any of these commands inside a project directory to register it here:") + "</p>" +
               '<div class="empty-cmds"><code class="empty-cmd">idd start &lt;issue#&gt;</code><code class="empty-cmd">idd status</code><code class="empty-cmd">idd repos add .</code></div>' +
-            "</div>";
+            "</div>",
+            "empty-norepo"
+          );
           return;
         }
 
         const items = state.cleanupOnly ? collectRetainedWorktrees(snap, false) : collectItems(false);
         const hasFilters = Boolean(state.search.trim() || state.worktreeOnly || state.alertsOnly || state.readyOnly || state.todoOnly || state.cleanupOnly);
         if (items.length === 0 && snap.forge_syncing && !hasFilters) {
-          container.innerHTML = renderMainSkeleton(
-            tr("正在从远端同步 " + repos.length + " 个仓库的 Issue 与 PR/MR…", "Syncing open Issues & PR/MRs from " + repos.length + " repository(ies)…"),
-            tr("同步完成后将自动展示，无需刷新页面", "Results will appear automatically once sync completes")
+          reconcileMainContent(
+            container,
+            renderMainSkeleton(
+              tr("正在从远端同步 " + repos.length + " 个仓库的 Issue 与 PR/MR…", "Syncing open Issues & PR/MRs from " + repos.length + " repository(ies)…"),
+              tr("同步完成后将自动展示，无需刷新页面", "Results will appear automatically once sync completes")
+            ),
+            "loading-sync"
           );
           return;
         }
         if (items.length === 0) {
           if (state.viewMode === "repos" && !state.cleanupOnly && collectRetainedWorktrees(snap, false).length > 0) {
-            container.innerHTML = renderReposView(items, snap);
+            reconcileMainContent(container, renderReposView(items, snap), "repos");
             return;
           }
           const qText = state.search.trim();
@@ -5014,12 +5445,15 @@ BOARD_HTML = r"""<!DOCTYPE html>
             emptyTitle = tr("当前无正在施工的工作树", "No active worktrees in progress");
             emptyDesc = tr("执行 idd start <issue#> 开工后，工作树脉搏会实时出现在这里。", "Run idd start <issue#> to spin up an isolated worktree.");
           }
-          container.innerHTML =
+          reconcileMainContent(
+            container,
             '<div class="empty-state">' +
               '<h3 style="margin:0 0 6px;font-size:14.5px;color:var(--text);">' + escapeHtml(emptyTitle) + "</h3>" +
               '<p style="margin:0 0 12px;font-size:12.5px;">' + escapeHtml(emptyDesc) + "</p>" +
               '<button class="btn" type="button" data-kpi-action="clear-filters">' + icon("refresh", 12) + "<span>" + tr("重置筛选", "Reset Filters") + "</span></button>" +
-            "</div>";
+            "</div>",
+            "empty-filtered"
+          );
           return;
         }
 
@@ -5034,16 +5468,17 @@ BOARD_HTML = r"""<!DOCTYPE html>
           for (const item of items) {
             buckets[cardBucket(item)].items.push(item);
           }
-          container.innerHTML = '<div class="kanban">' + Object.values(buckets).map((col) =>
+          const kanbanHtml = '<div class="kanban">' + Object.values(buckets).map((col) =>
             '<section class="column">' +
               '<div class="col-hdr"><span class="col-title"><span class="status-dot ' + col.dot + '"></span><span>' + escapeHtml(col.title) + '</span></span><span class="col-count">' + col.items.length + "</span></div>" +
               '<div class="card-stack">' + (col.items.length ? col.items.map((it) => renderCard(it, { showRepo: showRepoOnCard })).join("") : '<div class="col-empty">' + tr("暂无", "Empty") + "</div>") + "</div>" +
             "</section>"
           ).join("") + "</div>";
+          reconcileMainContent(container, kanbanHtml, "kanban");
         } else if (state.viewMode === "list" || (state.viewMode === "kanban" && state.cleanupOnly)) {
-          container.innerHTML = renderListTable(items);
+          reconcileMainContent(container, renderListTable(items), "list");
         } else {
-          container.innerHTML = renderReposView(items, snap);
+          reconcileMainContent(container, renderReposView(items, snap), "repos");
         }
       }
 
@@ -5106,7 +5541,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
               }).join("");
         }
 
-        panel.innerHTML =
+        const nextInspectorHtml =
           '<div class="inspector-hdr">' +
             '<div style="min-width:0;flex:1;">' +
               '<div class="card-meta" style="flex-wrap:wrap;">' + renderRepoChip(item, { compact: true }) + renderIdHtml(item) + '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" + renderPrimaryLinkBtn(item, "btn-xs", { stopOpen: false }) + "</div>" +
@@ -5131,14 +5566,86 @@ BOARD_HTML = r"""<!DOCTYPE html>
             '<div class="tab-pane">' + tabBody + "</div>" +
           "</div>";
 
+        const canPatchInsp = typeof window !== "undefined" && typeof panel.querySelector === "function";
+        if (!canPatchInsp) {
+          panel.innerHTML = nextInspectorHtml;
+          overlay.classList.add("open");
+          panel.classList.add("open");
+          overlay.setAttribute("aria-hidden", "false");
+          panel.setAttribute("aria-hidden", "false");
+          return;
+        }
+
+        const wasOpen = panel.classList.contains("open");
+        const prevKey = panel.dataset.inspectedKey || "";
+        const prevTab = panel.dataset.tab || "";
+        if (wasOpen && prevKey === state.inspectedKey && panel.querySelector(".inspector-body")) {
+          const tplI = document.createElement("template");
+          tplI.innerHTML = nextInspectorHtml;
+          const curHdr = panel.querySelector(".inspector-hdr");
+          const nextHdr = tplI.content.querySelector(".inspector-hdr");
+          if (curHdr && nextHdr && curHdr.innerHTML !== nextHdr.innerHTML) {
+            curHdr.innerHTML = nextHdr.innerHTML;
+          }
+          const curMeta = panel.querySelector(".meta-grid");
+          const nextMeta = tplI.content.querySelector(".meta-grid");
+          if (curMeta && nextMeta) patchHtmlPreservingCopied(curMeta, nextMeta);
+
+          const curPre = panel.querySelector(".handoff-pre");
+          const nextPre = tplI.content.querySelector(".handoff-pre");
+          if (curPre && nextPre && curPre.textContent !== nextPre.textContent) {
+            curPre.textContent = nextPre.textContent;
+          }
+          const curHandoffBtn = panel.querySelector(".handoff-box [data-copy-val]");
+          const nextHandoffBtn = tplI.content.querySelector(".handoff-box [data-copy-val]");
+          if (curHandoffBtn && nextHandoffBtn) {
+            curHandoffBtn.setAttribute("data-copy-val", nextHandoffBtn.getAttribute("data-copy-val") || "");
+          }
+
+          const curCmd = panel.querySelector(".cmd-box");
+          const nextCmd = tplI.content.querySelector(".cmd-box");
+          if (curCmd && nextCmd) patchHtmlPreservingCopied(curCmd, nextCmd);
+
+          const curTabBtns = panel.querySelectorAll(".tabs .tab-btn");
+          const nextTabBtns = tplI.content.querySelectorAll(".tabs .tab-btn");
+          if (curTabBtns.length === nextTabBtns.length) {
+            for (let i = 0; i < curTabBtns.length; i++) {
+              curTabBtns[i].className = nextTabBtns[i].className;
+              curTabBtns[i].textContent = nextTabBtns[i].textContent;
+            }
+          }
+          const curPane = panel.querySelector(".tab-pane");
+          const nextPane = tplI.content.querySelector(".tab-pane");
+          if (curPane && nextPane) {
+            if (prevTab !== state.inspectorTab) {
+              curPane.innerHTML = nextPane.innerHTML;
+              if (!prefersReducedMotion()) {
+                curPane.classList.remove("is-fading");
+                void curPane.offsetWidth;
+                curPane.classList.add("is-fading");
+              }
+            } else {
+              patchHtmlPreservingCopied(curPane, nextPane);
+            }
+          }
+          panel.dataset.tab = state.inspectorTab;
+        } else {
+          panel.innerHTML = nextInspectorHtml;
+          panel.dataset.inspectedKey = state.inspectedKey;
+          panel.dataset.tab = state.inspectorTab;
+          if (wasOpen && prevKey !== state.inspectedKey && !prefersReducedMotion()) {
+            panel.classList.remove("inspector-swap");
+            void panel.offsetWidth;
+            panel.classList.add("inspector-swap");
+          }
+        }
+
         overlay.classList.add("open");
         panel.classList.add("open");
         overlay.setAttribute("aria-hidden", "false");
         panel.setAttribute("aria-hidden", "false");
-        if (typeof window !== "undefined" && typeof panel.querySelector === "function") {
-          const inspTabs = panel.querySelector(".tabs");
-          if (inspTabs) syncSegmentedIndicator(inspTabs, ".tab-btn.active");
-        }
+        const inspTabs = panel.querySelector(".tabs");
+        if (inspTabs) syncSegmentedIndicator(inspTabs, ".tab-btn.active");
       }
 
       function buildFallbackAuthHosts() {
@@ -6589,6 +7096,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
         renderAll(true);
       });
 
+      document.getElementById("repo-pills").addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        const btn = e.target.closest("[data-repo]");
+        if (!btn || e.target !== btn) return;
+        e.preventDefault();
+        btn.click();
+      });
+
       document.getElementById("main-content").addEventListener("click", (e) => {
         if (handleActionClick(e)) return;
         const toggleDrawer = e.target.closest("[data-toggle-cleanup-drawer]");
@@ -6640,6 +7155,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
           state.inspectedKey = openEl.getAttribute("data-open-key");
           renderAll(true);
         }
+      });
+
+      document.getElementById("main-content").addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        const openEl = e.target.closest("[data-open-key]");
+        if (!openEl || e.target !== openEl) return;
+        e.preventDefault();
+        openEl.click();
       });
 
       document.getElementById("inspector-panel").addEventListener("click", (e) => {

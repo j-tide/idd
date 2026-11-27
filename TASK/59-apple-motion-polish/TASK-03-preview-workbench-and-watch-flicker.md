@@ -1,7 +1,7 @@
 # TASK-03：`idd preview` 苹果级工作台重构、跟手拖拽缩放与 `idd watch` 终端无闪烁刷新
 
 - Issue: 59-apple-motion-polish
-- Status: planned
+- Status: in_progress
 - Depends on: TASK-01
 - Test: `tests/test_preview_ui.py` 与 `tests/test_monitor_and_board.py`
 
