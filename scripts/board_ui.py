@@ -260,14 +260,21 @@ BOARD_HTML = r"""<!DOCTYPE html>
       width: 100%;
     }
     body.sidebar-collapsed .sb-brand {
+      flex-direction: column;
+      align-items: center;
       justify-content: center;
+      gap: 6px;
       padding: 2px 0 8px;
+    }
+    body.sidebar-collapsed .sb-brand-left {
+      justify-content: center;
     }
     .sb-brand-left {
       display: flex;
       align-items: center;
       gap: 8px;
       min-width: 0;
+      overflow: hidden;
     }
     .sb-logo {
       width: 26px;
@@ -606,7 +613,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .ws-title-group {
       display: flex;
       align-items: center;
-      gap: 10px;
+      flex-wrap: wrap;
+      gap: 8px 10px;
       min-width: 0;
     }
     .icon-btn {
@@ -620,6 +628,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       cursor: pointer;
       display: grid;
       place-items: center;
+      flex-shrink: 0;
       transition:
         background-color var(--dur-micro) var(--ease-standard),
         color var(--dur-micro) var(--ease-standard),
@@ -677,6 +686,23 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: var(--bg-tile);
       border: 1px solid var(--border-subtle);
       flex-shrink: 0;
+    }
+    #ws-repo-link-wrap {
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-width: 0;
+    }
+    #ws-repo-link-wrap:empty {
+      display: none;
+    }
+    #ws-repo-link-wrap .forge-chip,
+    #ws-repo-link-wrap .btn-xs {
+      height: 26px;
+      padding: 0 10px;
+      border-radius: 999px;
+      font-size: 11.5px;
     }
 
     .sb-right-group {
@@ -2393,6 +2419,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--text-dim);
       font-size: 11.5px;
       font-weight: 560;
+      white-space: nowrap;
+      flex-shrink: 0;
       cursor: pointer;
       transition:
         background-color var(--dur-micro) var(--ease-standard),
@@ -2975,6 +3003,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
     @media (max-width: 780px) {
       .app-shell { flex-direction: column; padding: 10px; gap: 10px; }
       .sidebar { width: 100% !important; position: static; max-height: none; padding: 10px 12px; }
+      body.sidebar-collapsed .sb-brand { flex-direction: row; justify-content: space-between; padding: 2px 4px 8px; }
       .sb-nav { flex-direction: row; gap: 4px; overflow-x: auto; scrollbar-width: none; }
       .sb-nav::-webkit-scrollbar { display: none; }
       .sb-nav .sb-item { width: auto; flex: 1 0 auto; justify-content: center; }
