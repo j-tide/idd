@@ -75,7 +75,7 @@ IDD 用三层轻量组件把整套研发闭环串起来，平时只需要对 Age
     </td>
     <td width="50%" valign="top">
       <h3>CI 日志自愈 · 可控自动合入 (<code>auto-merge</code>)</h3>
-      <code>idd pr</code> / <code>idd mr</code> 自动汇总 <code>TASK</code> 与测试记录并关联 <code>Closes #id</code>；CI 失败自动拉取日志并严格限制最多 2 轮定位修复；支持全局或单仓库开启 <code>auto-merge</code>（默认关闭，Draft/冲突/证据附件自动安全暂停）。
+      <code>idd pr</code> / <code>idd mr</code> 自动汇总 <code>TASK</code> 与测试记录并关联 <code>Closes #id</code>；CI 失败自动拉取日志并严格限制最多 2 轮定位修复；支持全局开启 <code>auto-merge</code>（默认关闭，Draft/冲突/证据附件自动安全暂停）。
     </td>
   </tr>
   <tr>
@@ -230,7 +230,7 @@ idd board
 | `idd land [issue# \| slug]` | Rebase、清理 `TASK/<issue>/`、Squash 直线合入并自动勾选 Issue 验收标准（默认保留分支与工作树，可选 `--wait-ci` / `--no-check-acceptance` / `--rm-worktree`） |
 | `idd cleanup [--dry-run]` | 按需清理工作区干净且 `HEAD == headRefOid` 的已合入工作树目录（**不删分支**） |
 | `idd repo-init [--apply]` | 检查或配置 GitHub / GitLab 为线性 Squash 合入策略且保留分支 |
-| `idd config [auto-merge on\|off\|inherit] [-g]` | 查看或切换全局与单仓库 PR/MR 自动准入及自动合入开关（默认关闭） |
+| `idd config [auto-merge on\|off\|status]` | 查看或切换全局 PR/MR 自动准入及自动合入开关（默认关闭） |
 | `idd auth login / status / logout` | 管理自建 GitLab / GitHub 企业版主机凭据 |
 | `idd upgrade [--check]` | 检查或立即快进更新本地 `idd`（`idd --version` 查看当前版本） |
 | `idd uninstall [--dry-run] [--keep-config] [-y]` | 安全完全卸载 `idd`（移除软链、技能仓库、配置与缓存） |

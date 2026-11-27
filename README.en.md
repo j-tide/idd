@@ -75,7 +75,7 @@ IDD connects three lightweight pieces into a single loop that you drive with nat
     </td>
     <td width="50%" valign="top">
       <h3>CI Self-Healing · Opt-In Auto-Merge (<code>auto-merge</code>)</h3>
-      <code>idd pr</code> / <code>idd mr</code> summarizes <code>TASK</code> and test records with <code>Closes #id</code>; failing CI triggers log inspection capped at 2 targeted fix rounds. Toggle global or per-repo <code>auto-merge</code> via CLI or the board top bar (auto-pauses on Drafts, conflicts, or evidence files).
+      <code>idd pr</code> / <code>idd mr</code> summarizes <code>TASK</code> and test records with <code>Closes #id</code>; failing CI triggers log inspection capped at 2 targeted fix rounds. Toggle global <code>auto-merge</code> via CLI or the board top bar (auto-pauses on Drafts, conflicts, or evidence files).
     </td>
   </tr>
   <tr>
@@ -230,7 +230,7 @@ This repository uses the `idd` skill (Issue-Driven Development) for all changes:
 | `idd land [issue# \| slug]` | Rebase, clean `TASK/<issue>/`, Squash-merge onto `main`, and auto-check Issue acceptance boxes (keeps branches & worktrees by default; optional `--wait-ci` / `--no-check-acceptance` / `--rm-worktree`) |
 | `idd cleanup [--dry-run]` | Safely remove merged worktree directories when clean and `HEAD == headRefOid` (**never deletes branches**) |
 | `idd repo-init [--apply]` | Check or apply linear Squash merge rules with branch retention on GitHub / GitLab |
-| `idd config [auto-merge on\|off\|inherit] [-g]` | View or toggle global and per-repository PR/MR auto-merge switches (off by default) |
+| `idd config [auto-merge on\|off\|status]` | View or toggle the global PR/MR auto-merge switch (off by default) |
 | `idd auth login / status / logout` | Manage credentials for self-hosted GitLab or GitHub Enterprise hosts |
 | `idd upgrade [--check]` | Check for updates or fast-forward `idd` (`idd --version` prints current version) |
 | `idd uninstall [--dry-run] [--keep-config] [-y]` | Completely remove `idd` symlinks, skill clone, config, and cache |
