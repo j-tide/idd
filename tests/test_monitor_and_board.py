@@ -2643,6 +2643,229 @@ class TestMonitorAndBoard(unittest.TestCase):
         assert am_pill_match is not None
         self.assertIn("white-space: nowrap;", am_pill_match.group(1))
 
+    def test_board_cleanup_endpoint_security_and_safety_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            outside_dir = root / "outside"
+            outside_dir.mkdir()
+            issues = {
+                str(n): {
+                    "number": n,
+                    "title": f"feat: issue {n}",
+                    "body": f"Body {n}",
+                    "labels": [{"name": "feat"}],
+                    "state": "OPEN",
+                    "url": f"https://github.com/acme/demo/issues/{n}",
+                }
+                for n in (10, 11, 12, 13)
+            }
+            repo, origin, gh_state_file, env = _create_repo_harness(root / "h", "demo", cfg, issues=issues)
+
+            with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
+                monitor.register_repo(repo)
+
+            # Create 3 worktrees and land them so they have merged PRs with matching headRefOid
+            wt_clean1 = Path(json.loads(self._run(env, repo, "start", "10", "--slug", "clean-one", "--json").stdout)["worktree"])
+            (wt_clean1 / "c1.txt").write_text("clean 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt_clean1), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt_clean1), "commit", "-m", "feat: clean1"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(wt_clean1), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
+            head_clean1 = subprocess.run(["git", "-C", str(wt_clean1), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+            wt_dirty = Path(json.loads(self._run(env, repo, "start", "11", "--slug", "dirty-one", "--json").stdout)["worktree"])
+            (wt_dirty / "d1.txt").write_text("dirty 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt_dirty), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt_dirty), "commit", "-m", "feat: dirty1"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(wt_dirty), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
+            head_dirty = subprocess.run(["git", "-C", str(wt_dirty), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+            (wt_dirty / "uncommitted.txt").write_text("wip\n", encoding="utf-8")
+
+            wt_ahead = Path(json.loads(self._run(env, repo, "start", "12", "--slug", "ahead-one", "--json").stdout)["worktree"])
+            (wt_ahead / "a1.txt").write_text("ahead 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt_ahead), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt_ahead), "commit", "-m", "feat: ahead1"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(wt_ahead), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
+            merged_head_ahead = subprocess.run(["git", "-C", str(wt_ahead), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+            (wt_ahead / "a2.txt").write_text("extra local commit\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt_ahead), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt_ahead), "commit", "-m", "feat: extra"], check=True, capture_output=True)
+
+            wt_clean2 = Path(json.loads(self._run(env, repo, "start", "13", "--slug", "clean-two", "--json").stdout)["worktree"])
+            (wt_clean2 / "c2.txt").write_text("clean 2\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt_clean2), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt_clean2), "commit", "-m", "feat: clean2"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(wt_clean2), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
+            head_clean2 = subprocess.run(["git", "-C", str(wt_clean2), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+            gh_state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+            gh_state["prs"] = {
+                "100": {
+                    "number": 100,
+                    "title": "feat: clean1",
+                    "body": "",
+                    "url": "https://github.com/acme/demo/pull/100",
+                    "state": "MERGED",
+                    "baseRefName": "main",
+                    "headRefName": "feat/10-clean-one",
+                    "headRefOid": head_clean1,
+                    "mergeStateStatus": "CLEAN",
+                    "isDraft": False,
+                    "statusCheckRollup": [],
+                },
+                "101": {
+                    "number": 101,
+                    "title": "feat: dirty1",
+                    "body": "",
+                    "url": "https://github.com/acme/demo/pull/101",
+                    "state": "MERGED",
+                    "baseRefName": "main",
+                    "headRefName": "feat/11-dirty-one",
+                    "headRefOid": head_dirty,
+                    "mergeStateStatus": "CLEAN",
+                    "isDraft": False,
+                    "statusCheckRollup": [],
+                },
+                "102": {
+                    "number": 102,
+                    "title": "feat: ahead1",
+                    "body": "",
+                    "url": "https://github.com/acme/demo/pull/102",
+                    "state": "MERGED",
+                    "baseRefName": "main",
+                    "headRefName": "feat/12-ahead-one",
+                    "headRefOid": merged_head_ahead,
+                    "mergeStateStatus": "CLEAN",
+                    "isDraft": False,
+                    "statusCheckRollup": [],
+                },
+                "103": {
+                    "number": 103,
+                    "title": "feat: clean2",
+                    "body": "",
+                    "url": "https://github.com/acme/demo/pull/103",
+                    "state": "MERGED",
+                    "baseRefName": "main",
+                    "headRefName": "feat/13-clean-two",
+                    "headRefOid": head_clean2,
+                    "mergeStateStatus": "CLEAN",
+                    "isDraft": False,
+                    "statusCheckRollup": [],
+                },
+            }
+            gh_state_file.write_text(json.dumps(gh_state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            sub_env = dict(env)
+            sub_env["PYTHONUNBUFFERED"] = "1"
+            proc = subprocess.Popen(
+                [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--local-only", "--no-open"],
+                cwd=str(outside_dir),
+                env=sub_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                assert proc.stdout is not None
+                banner = proc.stdout.readline().strip()
+                m = re.search(r"(http://127\.0\.0\.1:\d+)", banner)
+                self.assertIsNotNone(m, f"Unexpected board startup output: {banner!r}")
+                base_url = m.group(1)
+
+                def _post_cleanup(payload: dict, headers: dict | None = None) -> tuple[int, dict]:
+                    hdrs = {"Content-Type": "application/json", "X-IDD-Request": "1"}
+                    if headers is not None:
+                        hdrs = headers
+                    req = urllib.request.Request(
+                        f"{base_url}/api/cleanup",
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers=hdrs,
+                        method="POST",
+                    )
+                    try:
+                        with urllib.request.urlopen(req, timeout=5) as resp:
+                            return resp.status, json.loads(resp.read().decode("utf-8"))
+                    except urllib.error.HTTPError as err:
+                        body = json.loads(err.read().decode("utf-8"))
+                        err.close()
+                        return err.code, body
+
+                # 1. Missing CSRF -> 403
+                code_csrf, _ = _post_cleanup(
+                    {"repo_path": str(repo), "worktree": str(wt_clean1)},
+                    headers={"Content-Type": "application/json"},
+                )
+                self.assertEqual(code_csrf, 403)
+
+                # 2. Missing params -> 400
+                code_400, _ = _post_cleanup({"repo_path": str(repo), "worktree": ""})
+                self.assertEqual(code_400, 400)
+
+                # 3. Repo not in whitelist -> 403
+                code_403, _ = _post_cleanup({"repo_path": str(outside_dir), "worktree": str(wt_clean1)})
+                self.assertEqual(code_403, 403)
+
+                # 4. Main worktree rejected
+                code_main, res_main = _post_cleanup({"repo_path": str(repo), "worktree": str(repo)})
+                self.assertEqual(code_main, 200)
+                self.assertFalse(res_main["ok"])
+                self.assertEqual(res_main["status"], "rejected")
+
+                # 5. Dirty worktree skipped
+                code_dirty, res_dirty = _post_cleanup({"repo_path": str(repo), "worktree": str(wt_dirty)})
+                self.assertEqual(code_dirty, 200)
+                self.assertFalse(res_dirty["ok"])
+                self.assertEqual(res_dirty["status"], "skipped_dirty")
+                self.assertTrue(wt_dirty.exists())
+
+                # 6. Ahead / mismatched HEAD skipped
+                code_ahead, res_ahead = _post_cleanup({"repo_path": str(repo), "worktree": str(wt_ahead)})
+                self.assertEqual(code_ahead, 200)
+                self.assertFalse(res_ahead["ok"])
+                self.assertEqual(res_ahead["status"], "skipped_unmerged")
+                self.assertTrue(wt_ahead.exists())
+
+                # 7. Clean merged worktree #1 removed while preserving local branch
+                code_ok1, res_ok1 = _post_cleanup({"repo_path": str(repo), "worktree": str(wt_clean1)})
+                self.assertEqual(code_ok1, 200)
+                self.assertTrue(res_ok1["ok"])
+                self.assertEqual(res_ok1["status"], "removed")
+                self.assertFalse(wt_clean1.exists())
+                branch_chk = subprocess.run(
+                    ["git", "-C", str(repo), "rev-parse", "--verify", "feat/10-clean-one"],
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(branch_chk.returncode, 0)
+
+                # 8. Idempotent re-clean returns already_removed
+                code_idem, res_idem = _post_cleanup({"repo_path": str(repo), "worktree": str(wt_clean1)})
+                self.assertEqual(code_idem, 200)
+                self.assertTrue(res_idem["ok"])
+                self.assertEqual(res_idem["status"], "already_removed")
+
+                # 9. Clean merged worktree #2 removed, and _MergedChangesCache avoids redundant pr list calls
+                code_ok2, res_ok2 = _post_cleanup({"repo_path": str(repo), "worktree": str(wt_clean2)})
+                self.assertEqual(code_ok2, 200)
+                self.assertTrue(res_ok2["ok"])
+                self.assertEqual(res_ok2["status"], "removed")
+                self.assertFalse(wt_clean2.exists())
+                after_calls = json.loads(gh_state_file.read_text(encoding="utf-8"))["calls"]
+                pr_list_calls = [c for c in after_calls if c[:2] == ["pr", "list"]]
+                # First cleanup (wt_dirty) populated the 60s TTL bulk cache, so wt_ahead, wt_clean1, wt_clean2 reused it
+                self.assertEqual(len(pr_list_calls), 1, f"Expected 1 cached pr list call, got {pr_list_calls}")
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                if proc.stdout is not None:
+                    proc.stdout.close()
+                if proc.stderr is not None:
+                    proc.stderr.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,8 +11,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 import webbrowser
 
@@ -7351,6 +7353,223 @@ def _repo_matches_host(repo_path: Path, host_key: str) -> bool:
     return spec.host.lower() == target or spec.hostname.lower() == target
 
 
+CLEANUP_ALLOWED_PREFIXES = ("feat/", "fix/", "refactor/", "perf/", "docs/", "test/", "ci/", "chore/")
+
+
+class _MergedChangesCache:
+    """Short-TTL per-repo cache of merged PR/MR records for batch worktree cleanup."""
+
+    def __init__(self, ttl_seconds: float = 60.0) -> None:
+        self.ttl_seconds = max(0.0, float(ttl_seconds))
+        self._lock = threading.Lock()
+        self._entries: dict[str, tuple[float, list[dict[str, object]]]] = {}
+
+    def get_merged_for_branch(
+        self,
+        repo_path: Path,
+        forge: object,
+        branch: str,
+    ) -> list[dict[str, object]] | None:
+        key = str(repo_path.expanduser().resolve())
+        now = time.monotonic()
+        cached_list: list[dict[str, object]] | None = None
+        if self.ttl_seconds > 0:
+            with self._lock:
+                rec = self._entries.get(key)
+                if rec is not None and (now - rec[0]) < self.ttl_seconds:
+                    cached_list = rec[1]
+
+        if cached_list is None:
+            bulk = forge.list_changes(state="merged", limit=100)  # type: ignore[attr-defined]
+            if isinstance(bulk, list):
+                cached_list = bulk
+                if self.ttl_seconds > 0:
+                    with self._lock:
+                        self._entries[key] = (time.monotonic(), bulk)
+
+        if cached_list is not None:
+            matched = [c for c in cached_list if str(c.get("headRefName") or "") == branch]
+            if matched:
+                return matched
+
+        return forge.list_changes(state="merged", head_branch=branch, limit=10)  # type: ignore[attr-defined]
+
+
+def _cleanup_single_worktree(
+    repo_path: Path,
+    worktree_path: Path,
+    *,
+    merged_cache: _MergedChangesCache | None = None,
+) -> dict[str, object]:
+    """Safely remove a single clean, merged worktree directory while preserving its branch."""
+    main_wt = monitor.resolve_main_worktree_ro(repo_path)
+    if main_wt is None:
+        return {"ok": False, "status": "error", "error": f"无效的 Git 仓库路径：{repo_path}"}
+
+    main_resolved = main_wt.resolve()
+    target_wt = worktree_path.expanduser().resolve()
+    if target_wt == main_resolved:
+        return {
+            "ok": False,
+            "status": "rejected",
+            "worktree": str(target_wt),
+            "error": "禁止清理主工作树目录",
+        }
+
+    worktrees = monitor.list_git_worktrees_ro(main_resolved)
+    wt_entry = next(
+        (w for w in worktrees if w.get("path") and Path(w["path"]).resolve() == target_wt),
+        None,
+    )
+    if wt_entry is None:
+        if not target_wt.exists():
+            return {
+                "ok": True,
+                "status": "already_removed",
+                "worktree": str(target_wt),
+                "message": "工作树目录已不存在",
+            }
+        return {
+            "ok": False,
+            "status": "rejected",
+            "worktree": str(target_wt),
+            "error": "目标目录不属于该仓库的活动工作树",
+        }
+
+    branch = str(wt_entry.get("branch") or "")
+    if not branch or branch == "(detached)":
+        return {
+            "ok": False,
+            "status": "rejected",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": "工作树处于游离 HEAD 状态，已跳过清理",
+        }
+
+    worktree_root = main_resolved.parent / f"{main_resolved.name}-worktrees"
+    under_managed_root = worktree_root == target_wt.parent
+    feature_branch = branch.startswith(CLEANUP_ALLOWED_PREFIXES)
+    if not (under_managed_root or feature_branch):
+        return {
+            "ok": False,
+            "status": "rejected",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": "工作树不在受管目录或规范分支前缀下，已跳过清理",
+        }
+
+    status_proc = subprocess.run(
+        ["git", "-C", str(target_wt), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if status_proc.returncode != 0:
+        return {
+            "ok": False,
+            "status": "error",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": (status_proc.stderr or "读取工作区状态失败").strip(),
+        }
+    dirty_lines = [ln for ln in status_proc.stdout.splitlines() if ln.strip()]
+    if dirty_lines:
+        return {
+            "ok": False,
+            "status": "skipped_dirty",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": f"工作区存在 {len(dirty_lines)} 处未提交改动，已跳过清理",
+        }
+
+    head_proc = subprocess.run(
+        ["git", "-C", str(target_wt), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if head_proc.returncode != 0:
+        return {
+            "ok": False,
+            "status": "error",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": (head_proc.stderr or "读取本地 HEAD 失败").strip(),
+        }
+    local_head = head_proc.stdout.strip()
+
+    try:
+        forge = get_forge(main_resolved)
+        merged_changes = (
+            merged_cache.get_merged_for_branch(main_resolved, forge, branch)
+            if merged_cache is not None
+            else forge.list_changes(state="merged", head_branch=branch, limit=10)
+        )
+    except ForgeError as exc:
+        return {
+            "ok": False,
+            "status": "error",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": str(exc),
+        }
+
+    if not isinstance(merged_changes, list):
+        return {
+            "ok": False,
+            "status": "error",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": "远端已合入 PR/MR 查询失败，已跳过清理",
+        }
+    if not merged_changes:
+        return {
+            "ok": False,
+            "status": "skipped_unmerged",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": f"未查询到分支 {branch} 的已合入 PR/MR，已跳过清理",
+        }
+
+    matching = next(
+        (c for c in merged_changes if c.get("headRefOid") and c.get("headRefOid") == local_head),
+        None,
+    )
+    if matching is None:
+        return {
+            "ok": False,
+            "status": "skipped_unmerged",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": f"本地 HEAD ({local_head[:7]}) 与已合入 PR/MR 不一致，可能存在合入后新增提交，已跳过清理",
+        }
+
+    rm_proc = subprocess.run(
+        ["git", "-C", str(main_resolved), "worktree", "remove", str(target_wt)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if rm_proc.returncode != 0:
+        return {
+            "ok": False,
+            "status": "error",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": (rm_proc.stderr or rm_proc.stdout or "移除工作树失败").strip(),
+        }
+
+    ref = f"{forge.mr_label} {forge.mr_prefix}{matching['number']}"
+    return {
+        "ok": True,
+        "status": "removed",
+        "worktree": str(target_wt),
+        "branch": branch,
+        "ref": ref,
+        "message": f"已移除工作树目录（保留分支 {branch}）— {ref}",
+    }
+
+
 class BoardHTTPServer(ThreadingHTTPServer):
     """Threaded HTTP server configured for clean local port reuse and shutdown."""
 
@@ -7375,6 +7594,7 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
         global_mode: bool,
         local_only: bool,
         version: str,
+        merged_cache: _MergedChangesCache | None = None,
         **kwargs: object,
     ) -> None:
         self.cache = cache
@@ -7382,6 +7602,7 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
         self.global_mode = global_mode
         self.local_only = local_only
         self.version = version
+        self.merged_cache = merged_cache
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
 
     def log_message(self, format: str, *args: object) -> None:
@@ -7680,6 +7901,34 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if parsed.path == "/api/cleanup":
+            payload = self._read_json_body()
+            if payload is None:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "请求格式无效"})
+                return
+            raw_repo_path = str(payload.get("repo_path") or "").strip()
+            raw_worktree = str(payload.get("worktree") or "").strip()
+            if not raw_repo_path or not raw_worktree:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "缺少 repo_path 或 worktree 参数"})
+                return
+            try:
+                req_path = Path(raw_repo_path).expanduser().resolve()
+                wt_path = Path(raw_worktree).expanduser().resolve()
+            except OSError:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "无效的路径参数"})
+                return
+            target_repos = [p.expanduser().resolve() for p in self._target_repos()]
+            if req_path not in target_repos:
+                self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "仓库不在当前监控白名单内"})
+                return
+            result = _cleanup_single_worktree(
+                req_path,
+                wt_path,
+                merged_cache=getattr(self, "merged_cache", None),
+            )
+            self._send_json(HTTPStatus.OK, result)
+            return
+
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
 
 
@@ -7714,6 +7963,7 @@ def run_board_server(
                 repos = [Path(r["path"]) for r in monitor.load_registered_repos(prune_missing=True)]
                 cache.warm_async(repos, force_refresh=False)
         threading.Thread(target=_warm_on_boot, daemon=True).start()
+    merged_cache = _MergedChangesCache(ttl_seconds=60.0)
     handler_cls = partial(
         BoardRequestHandler,
         cache=cache,
@@ -7721,6 +7971,7 @@ def run_board_server(
         global_mode=global_mode,
         local_only=local_only,
         version=resolved_version,
+        merged_cache=merged_cache,
     )
     server = _bind_server(host, port, handler_cls)  # type: ignore[arg-type]
     actual_host, actual_port = server.server_address[:2]
