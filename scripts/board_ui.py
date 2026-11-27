@@ -11,8 +11,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 import webbrowser
 
@@ -1673,6 +1675,66 @@ BOARD_HTML = r"""<!DOCTYPE html>
       border-top: 1px solid var(--border-subtle);
       overflow: hidden;
     }
+    .cleanup-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .cleanup-status-note {
+      font-size: 11.5px;
+      color: var(--text-faint);
+    }
+    .cleanup-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+      flex-wrap: wrap;
+    }
+    .cleanup-confirm-list {
+      margin: 0;
+      padding: 6px;
+      list-style: none;
+      border-radius: 9px;
+      background: var(--bg-well);
+      border: 1px solid var(--border-subtle);
+      max-height: 168px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .cleanup-confirm-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 5px 7px;
+      border-radius: 7px;
+      background: var(--bg-inset);
+      font-size: 11.5px;
+      color: var(--text);
+    }
+    .cleanup-confirm-item .mono {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+      color: var(--text-dim);
+      font-size: 11px;
+    }
+    .btn-danger-soft {
+      background: var(--red-soft);
+      border-color: var(--red-border);
+      color: var(--red);
+    }
+    .btn-danger-soft:hover:not(:disabled) {
+      border-color: var(--red);
+      color: var(--red);
+    }
 
     /* Badges & Inline Chips */
     .badge {
@@ -1692,6 +1754,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       transition: background-color var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
     }
     .badge.is-stage-bumped { animation: stagePop var(--dur-fast) var(--ease-pop); }
+    .badge.is-pulse { animation: pulse 1.1s infinite; }
     @keyframes stagePop {
       0% { transform: scale(0.92); }
       60% { transform: scale(1.06); }
@@ -1819,6 +1882,39 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .card.is-selected {
       border-color: var(--accent);
       box-shadow: 0 0 0 2px var(--accent-ring), var(--shadow-card);
+    }
+    .card.is-cleaning {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-ring), var(--shadow-card);
+    }
+    .card.is-cleanup-skipped {
+      border-color: var(--amber-border);
+    }
+    .card.is-leaving {
+      opacity: 0;
+      transform: scale(0.92);
+      pointer-events: none;
+      transition: opacity var(--dur-exit) var(--ease-in), transform var(--dur-exit) var(--ease-in);
+    }
+    .cleanup-skip-reason {
+      margin-top: 7px;
+      padding: 6px 8px;
+      border-radius: 7px;
+      font-size: 11px;
+      font-weight: 550;
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      background: var(--amber-soft);
+      color: var(--amber);
+      border: 1px solid var(--amber-border);
+      word-break: break-word;
+    }
+    .cleanup-skip-reason svg { flex-shrink: 0; margin-top: 1px; }
+    .cleanup-skip-reason.is-error {
+      background: var(--red-soft);
+      color: var(--red);
+      border-color: var(--red-border);
     }
     .card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .card-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-faint); min-width: 0; }
@@ -3084,6 +3180,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
   <div id="am-confirm-overlay" class="modal-overlay am-confirm-overlay" aria-hidden="true">
     <div id="am-confirm-modal" class="am-confirm-modal" role="alertdialog" aria-modal="true" aria-label="确认切换 PR 自动准入"></div>
   </div>
+  <div id="cleanup-confirm-overlay" class="modal-overlay am-confirm-overlay" aria-hidden="true">
+    <div id="cleanup-confirm-modal" class="am-confirm-modal" role="alertdialog" aria-modal="true" aria-label="确认清理已合入工作树"></div>
+  </div>
   <div id="inspector-overlay" class="inspector-overlay" aria-hidden="true"></div>
   <aside id="inspector-panel" class="inspector-panel" aria-label="任务详情抽屉" aria-hidden="true"></aside>
   <div id="toast-wrap" class="toast-wrap" aria-live="polite"></div>
@@ -3104,6 +3203,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         alertTriangle: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
         pause: '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>',
         play: '<polygon points="5 3 19 12 5 21 5 3"/>',
+        stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
         refresh: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
         sun: '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>',
         moon: '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
@@ -3155,6 +3255,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         todoOnly: false,
         cleanupOnly: false,
         cleanupDrawerOpen: false,
+        initialLoadSettled: false,
         paused: false,
         inspectedKey: null,
         didAutoInspect: false,
@@ -3176,6 +3277,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
         repoInitBannerDismissed: false,
         autoMergeSaving: {},
         amConfirm: null,
+        cleanupConfirm: null,
+        cleanupRun: { active: false, stopRequested: false, scopeKey: "", activeKey: "", total: 0, done: 0, cleaned: 0, skipped: 0 },
+        cleanupRemovedKeys: {},
+        cleanupResults: {},
         statusPopoverOpen: false,
         statusPopoverForge: "",
         lastForgeStatusSig: "",
@@ -4014,9 +4119,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
         for (const r of s.repos || []) {
           if (state.selectedRepo !== "ALL" && r.repo_path !== state.selectedRepo) continue;
           for (const w of r.retained_idle_worktrees || []) {
+            const itemKey = r.repo_path + "#retained#" + (w.worktree || w.name || w.branch || "");
+            if (state.cleanupRemovedKeys && state.cleanupRemovedKeys[itemKey]) continue;
             const it = {
               _kind: "retained",
-              _key: r.repo_path + "#retained#" + (w.worktree || w.name || w.branch || ""),
+              _key: itemKey,
               repo_path: r.repo_path,
               repo_name: r.repo_name,
               repo_url: r.repo_url || "",
@@ -4771,6 +4878,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
           ctxParts.push(renderChangeInline(item));
         }
 
+        const runState = state.cleanupRun || {};
+        const isCleaning = item._kind === "retained" && Boolean(runState.active && runState.activeKey === item._key);
+        const skipInfo = (item._kind === "retained" && state.cleanupResults) ? state.cleanupResults[item._key] : null;
+        const badgeTone = isCleaning ? "tone-info is-pulse" : (skipInfo ? (skipInfo.isError ? "tone-danger" : "tone-warning") : stInfo.tone);
+        const badgeLabel = isCleaning ? tr("清理中…", "Cleaning…") : (skipInfo ? tr("已跳过", "Skipped") : stInfo.label);
+        const skipHtml = skipInfo
+          ? '<div class="cleanup-skip-reason' + (skipInfo.isError ? " is-error" : "") + '">' + icon("alertTriangle", 12) + "<span>" + escapeHtml(skipInfo.message || "") + "</span></div>"
+          : "";
+        const cleanOneBtn = item._kind === "retained"
+          ? '<button class="btn btn-xs' + (isCleaning ? " spin" : "") + '" type="button" data-cleanup-one="' + escapeHtml(item._key) + '" data-stop-open="1" ' + (runState.active ? "disabled" : "") + ' title="' + escapeHtml(tr("仅移除此工作树目录，保留分支", "Remove this worktree directory only, keeping branch")) + '">' + icon(isCleaning ? "refresh" : "trash", 11) + "<span>" + (isCleaning ? tr("清理中", "Cleaning") : tr("清理", "Clean")) + "</span></button>"
+          : "";
+
         const pulseHtml = renderPulseSummary(item.pulse) || (
           item._kind === "retained"
             ? (tr("已合入主干 · 工作区干净", "Merged · Clean") + (item.last_active_ago ? " · " + escapeHtml(localizeAgo(item.last_active_ago)) : ""))
@@ -4778,15 +4897,22 @@ BOARD_HTML = r"""<!DOCTYPE html>
         );
         const cardChip = options.inRepoGroup ? "" : renderRepoChip(item, { compact: true, hideName: !options.showRepo });
         const idHtml = renderIdHtml(item, { pill: Boolean(options.inRepoGroup) });
+        const cardCls = [
+          "card",
+          isSelected ? "is-selected" : "",
+          isCleaning ? "is-cleaning" : "",
+          skipInfo ? "is-cleanup-skipped" : ""
+        ].filter(Boolean).join(" ");
         return (
-          '<article class="card ' + (isSelected ? "is-selected" : "") + '" tabindex="0" data-forge="' + escapeHtml(forgeAttr) + '" data-open-key="' + escapeHtml(item._key) + '">' +
+          '<article class="' + cardCls + '" tabindex="0" data-forge="' + escapeHtml(forgeAttr) + '" data-open-key="' + escapeHtml(item._key) + '">' +
             '<div class="card-top">' +
               '<div class="card-meta">' + cardChip + idHtml + "</div>" +
-              '<span class="badge ' + stInfo.tone + '">' + escapeHtml(stInfo.label) + "</span>" +
+              '<span class="badge ' + badgeTone + '">' + escapeHtml(badgeLabel) + "</span>" +
             "</div>" +
             '<div class="card-title">' + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</div>" +
             (ctxParts.length ? '<div class="card-context">' + ctxParts.join("") + "</div>" : "") +
-            '<div class="card-foot"><span>' + (pulseHtml || " ") + '</span><span style="display:inline-flex;gap:5px;">' + renderPrimaryLinkBtn(item, "btn-xs") + '<button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></span></div>" +
+            skipHtml +
+            '<div class="card-foot"><span>' + (pulseHtml || " ") + '</span><span style="display:inline-flex;gap:5px;">' + renderPrimaryLinkBtn(item, "btn-xs") + cleanOneBtn + '<button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></span></div>" +
           "</article>"
         );
       }
@@ -4807,6 +4933,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const progHtml = total > 0
             ? '<div style="display:flex;align-items:center;gap:8px;min-width:110px;"><div class="progress-track"><div class="progress-fill" style="width:' + pct + '%"></div></div><span class="prog-num">' + done + "/" + total + "</span></div>"
             : '<span style="color:var(--text-faint);">—</span>';
+          const runState = state.cleanupRun || {};
+          const isCleaningRow = item._kind === "retained" && Boolean(runState.active && runState.activeKey === item._key);
+          const cleanRowBtn = item._kind === "retained"
+            ? '<button class="btn btn-xs' + (isCleaningRow ? " spin" : "") + '" type="button" data-cleanup-one="' + escapeHtml(item._key) + '" data-stop-open="1" ' + (runState.active ? "disabled" : "") + ">" + icon(isCleaningRow ? "refresh" : "trash", 11) + "<span>" + (isCleaningRow ? tr("清理中", "Cleaning") : tr("清理", "Clean")) + "</span></button>"
+            : "";
           return (
             '<tr class="' + (isSelected ? "is-selected" : "") + '" tabindex="0" data-open-key="' + escapeHtml(item._key) + '">' +
               "<td><div style=\"display:flex;align-items:center;gap:8px;\">" + renderIdHtml(item) + "<span>" + escapeHtml(item.title || item.issue || tr("未命名任务", "Untitled task")) + "</span></div></td>" +
@@ -4816,7 +4947,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
               "<td>" + progHtml + "</td>" +
               "<td>" + (renderPulseSummary(item.pulse) || "—") + "</td>" +
               "<td>" + (renderChangeInline(item) || "—") + "</td>" +
-              '<td><div style="display:inline-flex;gap:5px;">' + renderPrimaryLinkBtn(item, "btn-xs") + '<button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></div></td>" +
+              '<td><div style="display:inline-flex;gap:5px;">' + renderPrimaryLinkBtn(item, "btn-xs") + cleanRowBtn + '<button class="btn btn-xs" data-copy-val="' + escapeHtml(handoffPrompt) + '" data-copy-msg="' + tr("已复制 Agent 接力词，可直接粘贴给任意 Agent", "Copied Agent handoff prompt") + '" data-stop-open="1" type="button">' + icon("copy", 11) + "<span>" + tr("接力词", "Handoff") + "</span></button></div></td>" +
             "</tr>"
           );
         }).join("");
@@ -5018,6 +5149,25 @@ BOARD_HTML = r"""<!DOCTYPE html>
           byRepo.get(key).items.push(item);
         }
 
+        const runState = state.cleanupRun || {};
+        const renderCleanupToolbar = (scopeKey, copyCmd, copyMsg) => {
+          const scopeActive = Boolean(runState.active && (!runState.scopeKey || runState.scopeKey === scopeKey || scopeKey === "__all__"));
+          if (scopeActive) {
+            return (
+              '<div class="cleanup-actions">' +
+                '<span class="badge tone-info num">' + icon("refresh", 11) + " <span>" + tr("清理中 " + (runState.done || 0) + "/" + (runState.total || 0) + "…", "Cleaning " + (runState.done || 0) + "/" + (runState.total || 0) + "…") + "</span></span>" +
+                '<button class="btn btn-xs btn-danger-soft" type="button" data-cleanup-stop="1" ' + (runState.stopRequested ? "disabled" : "") + ">" + icon("stop", 11) + "<span>" + (runState.stopRequested ? tr("正在停止…", "Stopping…") : tr("停止", "Stop")) + "</span></button>" +
+              "</div>"
+            );
+          }
+          return (
+            '<div class="cleanup-actions">' +
+              '<button class="btn btn-xs btn-primary" type="button" data-cleanup-open-batch="' + escapeHtml(scopeKey) + '" ' + (runState.active ? "disabled" : "") + ">" + icon("sparkle", 11) + "<span>" + tr("一键清理", "Clean All") + "</span></button>" +
+              '<button class="btn btn-xs btn-icon-only" data-copy-val="' + escapeHtml(copyCmd) + '" data-copy-msg="' + escapeHtml(copyMsg) + '" type="button" title="' + escapeHtml(tr("复制命令: ", "Copy CLI: ") + copyCmd) + '">' + icon("copy", 11) + "</button>" +
+            "</div>"
+          );
+        };
+
         const repoSections = Array.from(byRepo.values()).map((grp) => {
           const sortedItems = grp.items.slice().sort(sortByStage);
           const gri = grp.repoInit || {};
@@ -5030,7 +5180,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
               "</button>"
             : "";
           const cleanupCmdBtn = state.cleanupOnly
-            ? '<button class="btn btn-xs" data-copy-val="' + escapeHtml((grp.path ? ("cd " + grp.path + " && ") : "") + "idd cleanup") + '" data-copy-msg="' + tr("已复制清理命令 idd cleanup", "Copied idd cleanup") + '" type="button">' + icon("trash", 11) + "<span>" + tr("复制 idd cleanup", "Copy idd cleanup") + "</span></button>"
+            ? renderCleanupToolbar(
+                grp.path || "__all__",
+                (grp.path ? ("cd " + grp.path + " && ") : "") + "idd cleanup",
+                tr("已复制清理命令 idd cleanup", "Copied idd cleanup")
+              )
             : "";
           return (
             '<section class="repo-section" data-forge="' + escapeHtml(grp.forge || "local") + '" data-repo-group="' + escapeHtml(grp.path) + '">' +
@@ -5060,12 +5214,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
                   "<span>" + tr("已合入但仍保留的本地工作树", "Merged & Retained Worktrees") + "</span>" +
                   '<span class="badge tone-violet num">' + retainedRows.length + "</span>" +
                 "</span>" +
-                '<span style="font-weight:400;font-size:11px;color:var(--text-faint);">' + tr("工作区干净 · 运行 idd cleanup 可安全释放空间", "Clean · run idd cleanup when ready") + "</span>" +
+                '<span style="font-weight:400;font-size:11px;color:var(--text-faint);">' + tr("工作区干净 · 点击「一键清理」可安全释放空间并保留分支", "Clean · click Clean All to remove directories & keep branches") + "</span>" +
               "</button>" +
               (state.cleanupDrawerOpen
                 ? '<div class="cleanup-body">' +
-                    '<div style="display:flex;justify-content:flex-end;margin-bottom:10px;">' +
-                      '<button class="btn btn-xs" data-copy-val="idd cleanup" data-copy-msg="' + tr("已复制清理命令 idd cleanup", "Copied idd cleanup") + '" type="button">' + icon("trash", 11) + "<span>" + tr("复制 idd cleanup", "Copy idd cleanup") + "</span></button>" +
+                    '<div class="cleanup-toolbar">' +
+                      '<span class="cleanup-status-note">' + tr("安全门禁：仅移除干净且 HEAD 与已合入 PR/MR 一致的目录，绝不删除分支", "Safety guard: removes clean directories matching merged HEAD only; branches stay intact") + "</span>" +
+                      renderCleanupToolbar("__all__", "idd cleanup", tr("已复制清理命令 idd cleanup", "Copied idd cleanup")) +
                     "</div>" +
                     '<div class="repo-grid">' + retainedRows.map((it) => renderCard(it, { showRepo: showRepoOnRetained })).join("") + "</div>" +
                   "</div>"
@@ -5223,6 +5378,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       function reconcileMainContent(container, htmlStr, viewKey) {
         if (typeof window === "undefined" || typeof container.querySelectorAll !== "function") {
           container.innerHTML = htmlStr;
+          if (container.dataset) container.dataset.viewKey = viewKey;
           return;
         }
         const prevViewKey = container.dataset.viewKey || "";
@@ -5291,11 +5447,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
           }
           reconcileCardGrid(curBody, nextBody, poolByKey, oldRects, oldStages);
         } else if (viewKey === "repos") {
+          container._lastSimpleHtml = "";
           const curSections = new Map();
           container.querySelectorAll(".repo-section[data-repo-group]").forEach((s) => {
             curSections.set(s.getAttribute("data-repo-group") || "", s);
           });
           const curDrawer = container.querySelector(".cleanup-drawer");
+          const curEmpty = container.querySelector(":scope > .empty-state");
           const desired = [];
           for (const nextChild of Array.from(tpl.content.children)) {
             if (nextChild.classList.contains("repo-section")) {
@@ -5333,6 +5491,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 const curBody = curDrawer.querySelector(".cleanup-body");
                 const nextBody = nextChild.querySelector(".cleanup-body");
                 if (curBody && nextBody) {
+                  const curTb = curBody.querySelector(".cleanup-toolbar");
+                  const nextTb = nextBody.querySelector(".cleanup-toolbar");
+                  if (curTb && nextTb) patchHtmlPreservingCopied(curTb, nextTb);
+                  else if (!curTb && nextTb) curBody.insertBefore(nextTb.cloneNode(true), curBody.firstChild);
                   const cg = curBody.querySelector(".repo-grid");
                   const ng = nextBody.querySelector(".repo-grid");
                   if (cg && ng) reconcileCardGrid(cg, ng, poolByKey, oldRects, oldStages);
@@ -5345,13 +5507,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
               } else {
                 desired.push(nextChild.cloneNode(true));
               }
+            } else if (nextChild.classList.contains("empty-state") && curEmpty) {
+              patchHtmlPreservingCopied(curEmpty, nextChild);
+              desired.push(curEmpty);
             } else {
               desired.push(nextChild.cloneNode(true));
             }
           }
           syncChildrenOrder(container, desired);
         } else {
-          container.innerHTML = htmlStr;
+          if (container._lastSimpleHtml !== htmlStr) {
+            container._lastSimpleHtml = htmlStr;
+            container.innerHTML = htmlStr;
+          }
           return;
         }
 
@@ -5398,7 +5566,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
         const items = state.cleanupOnly ? collectRetainedWorktrees(snap, false) : collectItems(false);
         const hasFilters = Boolean(state.search.trim() || state.worktreeOnly || state.alertsOnly || state.readyOnly || state.todoOnly || state.cleanupOnly);
-        if (items.length === 0 && snap.forge_syncing && !hasFilters) {
+        if (items.length === 0 && snap.forge_syncing && !hasFilters && !state.initialLoadSettled) {
           reconcileMainContent(
             container,
             renderMainSkeleton(
@@ -5408,6 +5576,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
             "loading-sync"
           );
           return;
+        }
+        if (!snap.forge_syncing || snap.local_only || items.length > 0) {
+          state.initialLoadSettled = true;
         }
         if (items.length === 0) {
           if (state.viewMode === "repos" && !state.cleanupOnly && collectRetainedWorktrees(snap, false).length > 0) {
@@ -5967,6 +6138,203 @@ BOARD_HTML = r"""<!DOCTYPE html>
           "</div>";
       }
 
+      function openCleanupConfirm(mode, targetKeyOrRepo) {
+        if (state.cleanupRun && state.cleanupRun.active) return;
+        const allRetained = collectRetainedWorktrees(state.snapshot, true);
+        let items = [];
+        let scopeKey = "__all__";
+        if (mode === "single") {
+          const found = allRetained.find((it) => it._key === targetKeyOrRepo);
+          if (!found) return;
+          items = [found];
+          scopeKey = found._key;
+        } else {
+          scopeKey = targetKeyOrRepo || "__all__";
+          const scoped = collectRetainedWorktrees(state.snapshot, false);
+          items = scopeKey === "__all__" ? scoped : scoped.filter((it) => it.repo_path === scopeKey);
+          if (!items.length) return;
+        }
+        state.cleanupConfirm = { mode, scopeKey, items };
+        if (typeof document !== "undefined" && document.activeElement) {
+          state.lastFocusBeforeModal = document.activeElement;
+        }
+        renderCleanupConfirmModal();
+        if (typeof document !== "undefined" && typeof document.getElementById === "function") {
+          const m = document.getElementById("cleanup-confirm-modal");
+          if (m && typeof m.querySelector === "function") focusInsideModal(m);
+        }
+      }
+
+      function closeCleanupConfirm() {
+        state.cleanupConfirm = null;
+        renderCleanupConfirmModal();
+        if (typeof document !== "undefined" && typeof restoreSavedFocus === "function") {
+          restoreSavedFocus();
+        }
+      }
+
+      function renderCleanupConfirmModal() {
+        const overlay = document.getElementById("cleanup-confirm-overlay");
+        const modal = document.getElementById("cleanup-confirm-modal");
+        if (!overlay || !modal) return;
+        const pending = state.cleanupConfirm;
+        if (!pending || !pending.items || !pending.items.length) {
+          overlay.classList.remove("open");
+          overlay.setAttribute("aria-hidden", "true");
+          return;
+        }
+        overlay.classList.add("open");
+        overlay.setAttribute("aria-hidden", "false");
+
+        const items = pending.items;
+        const isSingle = pending.mode === "single" || items.length === 1;
+        const first = items[0];
+        const refTag = first.issue_number != null ? ("#" + first.issue_number) : (first.title || first.branch || "worktree");
+        const titleText = isSingle
+          ? tr("确认清理 " + refTag + " 工作树目录？", "Clean up worktree " + refTag + "?")
+          : tr("确认清理 " + items.length + " 个已合入工作树？", "Clean up " + items.length + " merged worktrees?");
+        const subText = isSingle
+          ? tr("仅移除该本地工作树目录，分支与提交记录会完整保留。", "Removes only this local worktree directory; branches and commits stay intact.")
+          : tr("将逐项校验并移除工作树目录，每完成一项立即删掉对应卡片，执行中可随时点击「停止」。", "Validates and removes each worktree sequentially, removing cards one by one. Stop anytime.");
+
+        const previewHtml = isSingle
+          ? '<div class="am-confirm-scope"><span>' + tr("工作树分支", "Branch") + '</span><strong class="mono">' + escapeHtml(first.branch || "—") + "</strong></div>" +
+            '<div class="am-confirm-scope"><span>' + tr("工作区路径", "Worktree") + '</span><strong class="mono" style="word-break:break-all;">' + escapeHtml(first.worktree || "—") + "</strong></div>"
+          : '<ul class="cleanup-confirm-list">' +
+              items.map((it) => {
+                const idBadge = it.issue_number != null ? ("#" + it.issue_number) : escapeHtml(it.title || "");
+                return '<li class="cleanup-confirm-item"><strong>' + escapeHtml(idBadge) + '</strong><span class="mono" title="' + escapeHtml(it.worktree || "") + '">' + escapeHtml(it.branch || it.worktree || "") + "</span></li>";
+              }).join("") +
+            "</ul>";
+
+        const submitLabel = isSingle
+          ? tr("确认清理", "Confirm Cleanup")
+          : tr("确认开始清理 (" + items.length + ")", "Start Cleanup (" + items.length + ")");
+
+        modal.setAttribute("aria-label", titleText);
+        modal.innerHTML =
+          '<div class="am-confirm-hdr">' +
+            '<div class="am-confirm-icon is-info">' + icon("trash", 18) + "</div>" +
+            '<div style="min-width:0;flex:1;">' +
+              '<h3 class="am-confirm-title">' + escapeHtml(titleText) + "</h3>" +
+              '<p class="am-confirm-sub">' + escapeHtml(subText) + "</p>" +
+            "</div>" +
+            '<button class="icon-btn" type="button" data-cleanup-confirm-cancel="1" aria-label="' + escapeHtml(tr("取消", "Cancel")) + '">' + icon("x", 15) + "</button>" +
+          "</div>" +
+          '<div class="am-confirm-body">' +
+            previewHtml +
+            '<div class="am-confirm-note is-info">' +
+              tr("安全保障：复用 `idd cleanup` 门禁，仅执行 `git worktree remove`（绝不删除本地或远端分支）；若检测到未提交改动或合入后新增本地提交将自动跳过并保留卡片。", "Safety guard: runs `git worktree remove` only (never deletes branches). Dirty trees or local commits after merge are automatically skipped.") +
+            "</div>" +
+          "</div>" +
+          '<div class="am-confirm-ftr">' +
+            '<button class="btn" type="button" data-cleanup-confirm-cancel="1">' + tr("取消", "Cancel") + "</button>" +
+            '<button class="btn btn-primary" type="button" data-cleanup-confirm-submit="1">' + icon("check", 13) + "<span>" + escapeHtml(submitLabel) + "</span></button>" +
+          "</div>";
+      }
+
+      async function runCleanupQueue(items, scopeKey) {
+        if (!items || !items.length || (state.cleanupRun && state.cleanupRun.active)) return;
+        state.cleanupRun = {
+          active: true,
+          stopRequested: false,
+          scopeKey: scopeKey || "__all__",
+          activeKey: "",
+          total: items.length,
+          done: 0,
+          cleaned: 0,
+          skipped: 0
+        };
+        for (const it of items) {
+          delete state.cleanupResults[it._key];
+        }
+        renderAll(true);
+
+        for (const item of items) {
+          if (state.cleanupRun.stopRequested) break;
+          state.cleanupRun.activeKey = item._key;
+          renderAll(true);
+          try {
+            const res = await fetch("/api/cleanup", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-IDD-Request": "1"
+              },
+              body: JSON.stringify({
+                repo_path: item.repo_path,
+                worktree: item.worktree
+              })
+            });
+            let data = null;
+            try { data = await res.json(); } catch (_e) {}
+            if (res.ok && data && data.ok) {
+              const cardEl = typeof document !== "undefined"
+                ? Array.from(document.querySelectorAll("[data-open-key]")).find((el) => el.getAttribute("data-open-key") === item._key)
+                : null;
+              if (cardEl && !prefersReducedMotion()) {
+                cardEl.classList.remove("is-cleaning");
+                cardEl.classList.add("is-leaving");
+                await new Promise((r) => setTimeout(r, 180));
+              }
+              state.cleanupRemovedKeys[item._key] = true;
+              delete state.cleanupResults[item._key];
+              if (state.inspectedKey === item._key) state.inspectedKey = null;
+              state.cleanupRun.cleaned += 1;
+              if (items.length === 1) {
+                showToast(data.message || tr("已移除工作树目录（保留分支）", "Removed worktree directory (branch preserved)"));
+              }
+            } else {
+              const errMsg = (data && (data.error || data.message)) || ("HTTP " + res.status);
+              const isErr = !data || (data.status !== "skipped_dirty" && data.status !== "skipped_unmerged");
+              state.cleanupResults[item._key] = {
+                status: (data && data.status) || "error",
+                message: errMsg,
+                isError: isErr
+              };
+              state.cleanupRun.skipped += 1;
+              if (items.length === 1) {
+                showToast(errMsg, isErr ? "err" : "warn");
+              }
+            }
+          } catch (err) {
+            const errMsg = (err && err.message) || tr("请求失败", "Request failed");
+            state.cleanupResults[item._key] = { status: "error", message: errMsg, isError: true };
+            state.cleanupRun.skipped += 1;
+            if (items.length === 1) showToast(errMsg, "err");
+          }
+          state.cleanupRun.done += 1;
+          state.cleanupRun.activeKey = "";
+          renderAll(true);
+        }
+
+        const wasStopped = state.cleanupRun.stopRequested;
+        const cleanedCnt = state.cleanupRun.cleaned;
+        const skippedCnt = state.cleanupRun.skipped;
+        state.cleanupRun = {
+          active: false,
+          stopRequested: false,
+          scopeKey: "",
+          activeKey: "",
+          total: 0,
+          done: 0,
+          cleaned: 0,
+          skipped: 0
+        };
+        renderAll(true);
+
+        if (items.length > 1 || wasStopped) {
+          if (wasStopped) {
+            showToast(tr("已停止批量清理（已移除 " + cleanedCnt + " 个）", "Cleanup stopped (" + cleanedCnt + " removed)"), "info");
+          } else if (skippedCnt > 0) {
+            showToast(tr("已清理 " + cleanedCnt + " 个，跳过 " + skippedCnt + " 个（分支均已保留）", "Cleaned " + cleanedCnt + ", skipped " + skippedCnt + " (branches kept)"), "err");
+          } else {
+            showToast(tr("已清理 " + cleanedCnt + " 个已合入工作树（分支均已保留）", "Cleaned " + cleanedCnt + " merged worktree(s) (branches kept)"));
+          }
+        }
+        await fetchSnapshot(false);
+      }
+
       async function removeHostToken(targetHost) {
         state.authSavingHost = targetHost;
         if (state.setupOpen) renderSetupModal();
@@ -6488,6 +6856,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           ac: state.authStatus ? state.authStatus.unconfigured_count : -1,
           fc: state.fromCache,
           hl: state.hasLiveSnapshot,
+          ils: Boolean(state.initialLoadSettled),
           w: snap.warnings,
           sr: state.selectedRepo,
           vm: state.viewMode,
@@ -6506,7 +6875,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
           rie: state.repoInitErrors,
           ribd: state.repoInitBannerDismissed,
           cfg: snap.config,
-          ams: state.autoMergeSaving
+          ams: state.autoMergeSaving,
+          cr: state.cleanupRun ? (state.cleanupRun.active ? state.cleanupRun.done + ":" + state.cleanupRun.activeKey + ":" + state.cleanupRun.stopRequested : "0") : "0",
+          crk: state.cleanupRemovedKeys,
+          cres: state.cleanupResults
         });
       }
 
@@ -6584,8 +6956,20 @@ BOARD_HTML = r"""<!DOCTYPE html>
           clearTimeout(state.slowInitTimerId);
           state.slowInitTimerId = null;
           state.snapshot = nextSnap;
+          const liveRetainedKeys = new Set();
+          for (const r of (nextSnap.repos || [])) {
+            for (const w of (r.retained_idle_worktrees || [])) {
+              liveRetainedKeys.add(r.repo_path + "#retained#" + (w.worktree || w.name || w.branch || ""));
+            }
+          }
+          for (const k of Object.keys(state.cleanupRemovedKeys)) {
+            if (!liveRetainedKeys.has(k)) delete state.cleanupRemovedKeys[k];
+          }
           state.hasLiveSnapshot = true;
           state.fromCache = false;
+          if (!nextSnap.forge_syncing || nextSnap.local_only) {
+            state.initialLoadSettled = true;
+          }
           state.initError = "";
           state.slowInit = false;
           setTimeout(() => saveCachedSnapshot(nextSnap), 0);
@@ -6977,6 +7361,25 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
       });
 
+      document.getElementById("cleanup-confirm-overlay").addEventListener("click", (e) => {
+        if (e.target.id === "cleanup-confirm-overlay") {
+          closeCleanupConfirm();
+        }
+      });
+
+      document.getElementById("cleanup-confirm-modal").addEventListener("click", (e) => {
+        if (e.target.closest("[data-cleanup-confirm-cancel]")) {
+          closeCleanupConfirm();
+          return;
+        }
+        const submitBtn = e.target.closest("[data-cleanup-confirm-submit]");
+        if (submitBtn && state.cleanupConfirm) {
+          const pending = state.cleanupConfirm;
+          closeCleanupConfirm();
+          runCleanupQueue(pending.items, pending.scopeKey);
+        }
+      });
+
       document.getElementById("ws-repo-link-wrap").addEventListener("click", (e) => {
         const applyBtn = e.target.closest("[data-apply-repo-init]");
         if (applyBtn) {
@@ -7015,6 +7418,27 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
       document.getElementById("main-content").addEventListener("click", (e) => {
         if (handleActionClick(e)) return;
+        const stopCleanupBtn = e.target.closest("[data-cleanup-stop]");
+        if (stopCleanupBtn) {
+          e.stopPropagation();
+          if (state.cleanupRun && state.cleanupRun.active) {
+            state.cleanupRun.stopRequested = true;
+            renderAll(true);
+          }
+          return;
+        }
+        const batchCleanupBtn = e.target.closest("[data-cleanup-open-batch]");
+        if (batchCleanupBtn) {
+          e.stopPropagation();
+          openCleanupConfirm("batch", batchCleanupBtn.getAttribute("data-cleanup-open-batch") || "__all__");
+          return;
+        }
+        const oneCleanupBtn = e.target.closest("[data-cleanup-one]");
+        if (oneCleanupBtn) {
+          e.stopPropagation();
+          openCleanupConfirm("single", oneCleanupBtn.getAttribute("data-cleanup-one") || "");
+          return;
+        }
         const toggleDrawer = e.target.closest("[data-toggle-cleanup-drawer]");
         if (toggleDrawer) {
           const drawerEl = toggleDrawer.closest(".cleanup-drawer");
@@ -7219,7 +7643,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const tag = (e.target && e.target.tagName) || "";
         const inInput = tag === "INPUT" || tag === "TEXTAREA" || (e.target && e.target.isContentEditable);
         if (e.key === "Escape") {
-          if (state.amConfirm) {
+          if (state.cleanupConfirm) {
+            closeCleanupConfirm();
+          } else if (state.amConfirm) {
             closeAutoMergeConfirm();
           } else if (state.setupOpen) {
             closeSetupModal(true);
@@ -7261,6 +7687,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       if (cachedSnap) {
         state.snapshot = cachedSnap;
         state.fromCache = true;
+        state.initialLoadSettled = true;
         state.lastClockStr = formatClock(cachedSnap.generated_at);
       }
       syncHeaderControls();
@@ -7351,6 +7778,223 @@ def _repo_matches_host(repo_path: Path, host_key: str) -> bool:
     return spec.host.lower() == target or spec.hostname.lower() == target
 
 
+CLEANUP_ALLOWED_PREFIXES = ("feat/", "fix/", "refactor/", "perf/", "docs/", "test/", "ci/", "chore/")
+
+
+class _MergedChangesCache:
+    """Short-TTL per-repo cache of merged PR/MR records for batch worktree cleanup."""
+
+    def __init__(self, ttl_seconds: float = 60.0) -> None:
+        self.ttl_seconds = max(0.0, float(ttl_seconds))
+        self._lock = threading.Lock()
+        self._entries: dict[str, tuple[float, list[dict[str, object]]]] = {}
+
+    def get_merged_for_branch(
+        self,
+        repo_path: Path,
+        forge: object,
+        branch: str,
+    ) -> list[dict[str, object]] | None:
+        key = str(repo_path.expanduser().resolve())
+        now = time.monotonic()
+        cached_list: list[dict[str, object]] | None = None
+        if self.ttl_seconds > 0:
+            with self._lock:
+                rec = self._entries.get(key)
+                if rec is not None and (now - rec[0]) < self.ttl_seconds:
+                    cached_list = rec[1]
+
+        if cached_list is None:
+            bulk = forge.list_changes(state="merged", limit=100)  # type: ignore[attr-defined]
+            if isinstance(bulk, list):
+                cached_list = bulk
+                if self.ttl_seconds > 0:
+                    with self._lock:
+                        self._entries[key] = (time.monotonic(), bulk)
+
+        if cached_list is not None:
+            matched = [c for c in cached_list if str(c.get("headRefName") or "") == branch]
+            if matched:
+                return matched
+
+        return forge.list_changes(state="merged", head_branch=branch, limit=10)  # type: ignore[attr-defined]
+
+
+def _cleanup_single_worktree(
+    repo_path: Path,
+    worktree_path: Path,
+    *,
+    merged_cache: _MergedChangesCache | None = None,
+) -> dict[str, object]:
+    """Safely remove a single clean, merged worktree directory while preserving its branch."""
+    main_wt = monitor.resolve_main_worktree_ro(repo_path)
+    if main_wt is None:
+        return {"ok": False, "status": "error", "error": f"无效的 Git 仓库路径：{repo_path}"}
+
+    main_resolved = main_wt.resolve()
+    target_wt = worktree_path.expanduser().resolve()
+    if target_wt == main_resolved:
+        return {
+            "ok": False,
+            "status": "rejected",
+            "worktree": str(target_wt),
+            "error": "禁止清理主工作树目录",
+        }
+
+    worktrees = monitor.list_git_worktrees_ro(main_resolved)
+    wt_entry = next(
+        (w for w in worktrees if w.get("path") and Path(w["path"]).resolve() == target_wt),
+        None,
+    )
+    if wt_entry is None:
+        if not target_wt.exists():
+            return {
+                "ok": True,
+                "status": "already_removed",
+                "worktree": str(target_wt),
+                "message": "工作树目录已不存在",
+            }
+        return {
+            "ok": False,
+            "status": "rejected",
+            "worktree": str(target_wt),
+            "error": "目标目录不属于该仓库的活动工作树",
+        }
+
+    branch = str(wt_entry.get("branch") or "")
+    if not branch or branch == "(detached)":
+        return {
+            "ok": False,
+            "status": "rejected",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": "工作树处于游离 HEAD 状态，已跳过清理",
+        }
+
+    worktree_root = main_resolved.parent / f"{main_resolved.name}-worktrees"
+    under_managed_root = worktree_root == target_wt.parent
+    feature_branch = branch.startswith(CLEANUP_ALLOWED_PREFIXES)
+    if not (under_managed_root or feature_branch):
+        return {
+            "ok": False,
+            "status": "rejected",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": "工作树不在受管目录或规范分支前缀下，已跳过清理",
+        }
+
+    status_proc = subprocess.run(
+        ["git", "-C", str(target_wt), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if status_proc.returncode != 0:
+        return {
+            "ok": False,
+            "status": "error",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": (status_proc.stderr or "读取工作区状态失败").strip(),
+        }
+    dirty_lines = [ln for ln in status_proc.stdout.splitlines() if ln.strip()]
+    if dirty_lines:
+        return {
+            "ok": False,
+            "status": "skipped_dirty",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": f"工作区存在 {len(dirty_lines)} 处未提交改动，已跳过清理",
+        }
+
+    head_proc = subprocess.run(
+        ["git", "-C", str(target_wt), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if head_proc.returncode != 0:
+        return {
+            "ok": False,
+            "status": "error",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": (head_proc.stderr or "读取本地 HEAD 失败").strip(),
+        }
+    local_head = head_proc.stdout.strip()
+
+    try:
+        forge = get_forge(main_resolved)
+        merged_changes = (
+            merged_cache.get_merged_for_branch(main_resolved, forge, branch)
+            if merged_cache is not None
+            else forge.list_changes(state="merged", head_branch=branch, limit=10)
+        )
+    except ForgeError as exc:
+        return {
+            "ok": False,
+            "status": "error",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": str(exc),
+        }
+
+    if not isinstance(merged_changes, list):
+        return {
+            "ok": False,
+            "status": "error",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": "远端已合入 PR/MR 查询失败，已跳过清理",
+        }
+    if not merged_changes:
+        return {
+            "ok": False,
+            "status": "skipped_unmerged",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": f"未查询到分支 {branch} 的已合入 PR/MR，已跳过清理",
+        }
+
+    matching = next(
+        (c for c in merged_changes if c.get("headRefOid") and c.get("headRefOid") == local_head),
+        None,
+    )
+    if matching is None:
+        return {
+            "ok": False,
+            "status": "skipped_unmerged",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": f"本地 HEAD ({local_head[:7]}) 与已合入 PR/MR 不一致，可能存在合入后新增提交，已跳过清理",
+        }
+
+    rm_proc = subprocess.run(
+        ["git", "-C", str(main_resolved), "worktree", "remove", str(target_wt)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if rm_proc.returncode != 0:
+        return {
+            "ok": False,
+            "status": "error",
+            "worktree": str(target_wt),
+            "branch": branch,
+            "error": (rm_proc.stderr or rm_proc.stdout or "移除工作树失败").strip(),
+        }
+
+    ref = f"{forge.mr_label} {forge.mr_prefix}{matching['number']}"
+    return {
+        "ok": True,
+        "status": "removed",
+        "worktree": str(target_wt),
+        "branch": branch,
+        "ref": ref,
+        "message": f"已移除工作树目录（保留分支 {branch}）— {ref}",
+    }
+
+
 class BoardHTTPServer(ThreadingHTTPServer):
     """Threaded HTTP server configured for clean local port reuse and shutdown."""
 
@@ -7375,6 +8019,7 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
         global_mode: bool,
         local_only: bool,
         version: str,
+        merged_cache: _MergedChangesCache | None = None,
         **kwargs: object,
     ) -> None:
         self.cache = cache
@@ -7382,6 +8027,7 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
         self.global_mode = global_mode
         self.local_only = local_only
         self.version = version
+        self.merged_cache = merged_cache
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
 
     def log_message(self, format: str, *args: object) -> None:
@@ -7680,6 +8326,34 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if parsed.path == "/api/cleanup":
+            payload = self._read_json_body()
+            if payload is None:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "请求格式无效"})
+                return
+            raw_repo_path = str(payload.get("repo_path") or "").strip()
+            raw_worktree = str(payload.get("worktree") or "").strip()
+            if not raw_repo_path or not raw_worktree:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "缺少 repo_path 或 worktree 参数"})
+                return
+            try:
+                req_path = Path(raw_repo_path).expanduser().resolve()
+                wt_path = Path(raw_worktree).expanduser().resolve()
+            except OSError:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "无效的路径参数"})
+                return
+            target_repos = [p.expanduser().resolve() for p in self._target_repos()]
+            if req_path not in target_repos:
+                self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "仓库不在当前监控白名单内"})
+                return
+            result = _cleanup_single_worktree(
+                req_path,
+                wt_path,
+                merged_cache=getattr(self, "merged_cache", None),
+            )
+            self._send_json(HTTPStatus.OK, result)
+            return
+
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
 
 
@@ -7714,6 +8388,7 @@ def run_board_server(
                 repos = [Path(r["path"]) for r in monitor.load_registered_repos(prune_missing=True)]
                 cache.warm_async(repos, force_refresh=False)
         threading.Thread(target=_warm_on_boot, daemon=True).start()
+    merged_cache = _MergedChangesCache(ttl_seconds=60.0)
     handler_cls = partial(
         BoardRequestHandler,
         cache=cache,
@@ -7721,6 +8396,7 @@ def run_board_server(
         global_mode=global_mode,
         local_only=local_only,
         version=resolved_version,
+        merged_cache=merged_cache,
     )
     server = _bind_server(host, port, handler_cls)  # type: ignore[arg-type]
     actual_host, actual_port = server.server_address[:2]

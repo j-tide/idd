@@ -2643,6 +2643,599 @@ class TestMonitorAndBoard(unittest.TestCase):
         assert am_pill_match is not None
         self.assertIn("white-space: nowrap;", am_pill_match.group(1))
 
+    def test_board_cleanup_endpoint_security_and_safety_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            outside_dir = root / "outside"
+            outside_dir.mkdir()
+            issues = {
+                str(n): {
+                    "number": n,
+                    "title": f"feat: issue {n}",
+                    "body": f"Body {n}",
+                    "labels": [{"name": "feat"}],
+                    "state": "OPEN",
+                    "url": f"https://github.com/acme/demo/issues/{n}",
+                }
+                for n in (10, 11, 12, 13)
+            }
+            repo, origin, gh_state_file, env = _create_repo_harness(root / "h", "demo", cfg, issues=issues)
+
+            with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
+                monitor.register_repo(repo)
+
+            # Create 3 worktrees and land them so they have merged PRs with matching headRefOid
+            wt_clean1 = Path(json.loads(self._run(env, repo, "start", "10", "--slug", "clean-one", "--json").stdout)["worktree"])
+            (wt_clean1 / "c1.txt").write_text("clean 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt_clean1), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt_clean1), "commit", "-m", "feat: clean1"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(wt_clean1), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
+            head_clean1 = subprocess.run(["git", "-C", str(wt_clean1), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+            wt_dirty = Path(json.loads(self._run(env, repo, "start", "11", "--slug", "dirty-one", "--json").stdout)["worktree"])
+            (wt_dirty / "d1.txt").write_text("dirty 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt_dirty), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt_dirty), "commit", "-m", "feat: dirty1"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(wt_dirty), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
+            head_dirty = subprocess.run(["git", "-C", str(wt_dirty), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+            (wt_dirty / "uncommitted.txt").write_text("wip\n", encoding="utf-8")
+
+            wt_ahead = Path(json.loads(self._run(env, repo, "start", "12", "--slug", "ahead-one", "--json").stdout)["worktree"])
+            (wt_ahead / "a1.txt").write_text("ahead 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt_ahead), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt_ahead), "commit", "-m", "feat: ahead1"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(wt_ahead), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
+            merged_head_ahead = subprocess.run(["git", "-C", str(wt_ahead), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+            (wt_ahead / "a2.txt").write_text("extra local commit\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt_ahead), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt_ahead), "commit", "-m", "feat: extra"], check=True, capture_output=True)
+
+            wt_clean2 = Path(json.loads(self._run(env, repo, "start", "13", "--slug", "clean-two", "--json").stdout)["worktree"])
+            (wt_clean2 / "c2.txt").write_text("clean 2\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(wt_clean2), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(wt_clean2), "commit", "-m", "feat: clean2"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(wt_clean2), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
+            head_clean2 = subprocess.run(["git", "-C", str(wt_clean2), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+            gh_state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+            gh_state["prs"] = {
+                "100": {
+                    "number": 100,
+                    "title": "feat: clean1",
+                    "body": "",
+                    "url": "https://github.com/acme/demo/pull/100",
+                    "state": "MERGED",
+                    "baseRefName": "main",
+                    "headRefName": "feat/10-clean-one",
+                    "headRefOid": head_clean1,
+                    "mergeStateStatus": "CLEAN",
+                    "isDraft": False,
+                    "statusCheckRollup": [],
+                },
+                "101": {
+                    "number": 101,
+                    "title": "feat: dirty1",
+                    "body": "",
+                    "url": "https://github.com/acme/demo/pull/101",
+                    "state": "MERGED",
+                    "baseRefName": "main",
+                    "headRefName": "feat/11-dirty-one",
+                    "headRefOid": head_dirty,
+                    "mergeStateStatus": "CLEAN",
+                    "isDraft": False,
+                    "statusCheckRollup": [],
+                },
+                "102": {
+                    "number": 102,
+                    "title": "feat: ahead1",
+                    "body": "",
+                    "url": "https://github.com/acme/demo/pull/102",
+                    "state": "MERGED",
+                    "baseRefName": "main",
+                    "headRefName": "feat/12-ahead-one",
+                    "headRefOid": merged_head_ahead,
+                    "mergeStateStatus": "CLEAN",
+                    "isDraft": False,
+                    "statusCheckRollup": [],
+                },
+                "103": {
+                    "number": 103,
+                    "title": "feat: clean2",
+                    "body": "",
+                    "url": "https://github.com/acme/demo/pull/103",
+                    "state": "MERGED",
+                    "baseRefName": "main",
+                    "headRefName": "feat/13-clean-two",
+                    "headRefOid": head_clean2,
+                    "mergeStateStatus": "CLEAN",
+                    "isDraft": False,
+                    "statusCheckRollup": [],
+                },
+            }
+            gh_state_file.write_text(json.dumps(gh_state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            sub_env = dict(env)
+            sub_env["PYTHONUNBUFFERED"] = "1"
+            proc = subprocess.Popen(
+                [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--local-only", "--no-open"],
+                cwd=str(outside_dir),
+                env=sub_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                assert proc.stdout is not None
+                banner = proc.stdout.readline().strip()
+                m = re.search(r"(http://127\.0\.0\.1:\d+)", banner)
+                self.assertIsNotNone(m, f"Unexpected board startup output: {banner!r}")
+                base_url = m.group(1)
+
+                def _post_cleanup(payload: dict, headers: dict | None = None) -> tuple[int, dict]:
+                    hdrs = {"Content-Type": "application/json", "X-IDD-Request": "1"}
+                    if headers is not None:
+                        hdrs = headers
+                    req = urllib.request.Request(
+                        f"{base_url}/api/cleanup",
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers=hdrs,
+                        method="POST",
+                    )
+                    try:
+                        with urllib.request.urlopen(req, timeout=5) as resp:
+                            return resp.status, json.loads(resp.read().decode("utf-8"))
+                    except urllib.error.HTTPError as err:
+                        body = json.loads(err.read().decode("utf-8"))
+                        err.close()
+                        return err.code, body
+
+                # 1. Missing CSRF -> 403
+                code_csrf, _ = _post_cleanup(
+                    {"repo_path": str(repo), "worktree": str(wt_clean1)},
+                    headers={"Content-Type": "application/json"},
+                )
+                self.assertEqual(code_csrf, 403)
+
+                # 2. Missing params -> 400
+                code_400, _ = _post_cleanup({"repo_path": str(repo), "worktree": ""})
+                self.assertEqual(code_400, 400)
+
+                # 3. Repo not in whitelist -> 403
+                code_403, _ = _post_cleanup({"repo_path": str(outside_dir), "worktree": str(wt_clean1)})
+                self.assertEqual(code_403, 403)
+
+                # 4. Main worktree rejected
+                code_main, res_main = _post_cleanup({"repo_path": str(repo), "worktree": str(repo)})
+                self.assertEqual(code_main, 200)
+                self.assertFalse(res_main["ok"])
+                self.assertEqual(res_main["status"], "rejected")
+
+                # 5. Dirty worktree skipped
+                code_dirty, res_dirty = _post_cleanup({"repo_path": str(repo), "worktree": str(wt_dirty)})
+                self.assertEqual(code_dirty, 200)
+                self.assertFalse(res_dirty["ok"])
+                self.assertEqual(res_dirty["status"], "skipped_dirty")
+                self.assertTrue(wt_dirty.exists())
+
+                # 6. Ahead / mismatched HEAD skipped
+                code_ahead, res_ahead = _post_cleanup({"repo_path": str(repo), "worktree": str(wt_ahead)})
+                self.assertEqual(code_ahead, 200)
+                self.assertFalse(res_ahead["ok"])
+                self.assertEqual(res_ahead["status"], "skipped_unmerged")
+                self.assertTrue(wt_ahead.exists())
+
+                # 7. Clean merged worktree #1 removed while preserving local branch
+                code_ok1, res_ok1 = _post_cleanup({"repo_path": str(repo), "worktree": str(wt_clean1)})
+                self.assertEqual(code_ok1, 200)
+                self.assertTrue(res_ok1["ok"])
+                self.assertEqual(res_ok1["status"], "removed")
+                self.assertFalse(wt_clean1.exists())
+                branch_chk = subprocess.run(
+                    ["git", "-C", str(repo), "rev-parse", "--verify", "feat/10-clean-one"],
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(branch_chk.returncode, 0)
+
+                # 8. Idempotent re-clean returns already_removed
+                code_idem, res_idem = _post_cleanup({"repo_path": str(repo), "worktree": str(wt_clean1)})
+                self.assertEqual(code_idem, 200)
+                self.assertTrue(res_idem["ok"])
+                self.assertEqual(res_idem["status"], "already_removed")
+
+                # 9. Clean merged worktree #2 removed, and _MergedChangesCache avoids redundant pr list calls
+                code_ok2, res_ok2 = _post_cleanup({"repo_path": str(repo), "worktree": str(wt_clean2)})
+                self.assertEqual(code_ok2, 200)
+                self.assertTrue(res_ok2["ok"])
+                self.assertEqual(res_ok2["status"], "removed")
+                self.assertFalse(wt_clean2.exists())
+                after_calls = json.loads(gh_state_file.read_text(encoding="utf-8"))["calls"]
+                pr_list_calls = [c for c in after_calls if c[:2] == ["pr", "list"]]
+                # First cleanup (wt_dirty) populated the 60s TTL bulk cache, so wt_ahead, wt_clean1, wt_clean2 reused it
+                self.assertEqual(len(pr_list_calls), 1, f"Expected 1 cached pr list call, got {pr_list_calls}")
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                if proc.stdout is not None:
+                    proc.stdout.close()
+                if proc.stderr is not None:
+                    proc.stderr.close()
+
+    def test_board_cleanup_ui_modal_and_streaming_removal(self) -> None:
+        html_doc = board_ui.BOARD_HTML
+        for marker in (
+            "cleanup-confirm-overlay",
+            "cleanup-confirm-modal",
+            "openCleanupConfirm",
+            "runCleanupQueue",
+            "data-cleanup-open-batch",
+            "data-cleanup-one",
+            "data-cleanup-stop",
+            "/api/cleanup",
+        ):
+            self.assertIn(marker, html_doc)
+
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to evaluate board_ui.py cleanup UI helpers")
+
+        script_match = re.search(r"<script>\s*([\s\S]*?)\s*</script>", html_doc)
+        self.assertIsNotNone(script_match)
+        assert script_match is not None
+        js_src = script_match.group(1)
+
+        def _extract_js_fn(name: str) -> str:
+            marker = f"function {name}("
+            start = js_src.index(marker)
+            brace_start = js_src.index("{", start)
+            depth = 0
+            for idx in range(brace_start, len(js_src)):
+                ch = js_src[idx]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return js_src[start : idx + 1]
+            raise AssertionError(f"Unclosed JS function: {name}")
+
+        fn_names = (
+            "isEn",
+            "tr",
+            "escapeHtml",
+            "safeUrl",
+            "icon",
+            "forgeIcon",
+            "forgeLabel",
+            "parseStage",
+            "isItemAlert",
+            "collectItems",
+            "matchesFilters",
+            "getProgressNumbers",
+            "shortWorktreePath",
+            "shortDirSlug",
+            "collectRetainedWorktrees",
+            "getStageQuickCli",
+            "buildHandoffPrompt",
+            "resolveRepoMeta",
+            "renderRepoChip",
+            "renderIdHtml",
+            "renderChangeInline",
+            "localizeAgo",
+            "renderPulseSummary",
+            "renderSegBar",
+            "resolvePrimaryLink",
+            "renderPrimaryLinkBtn",
+            "renderCard",
+            "renderReposView",
+            "openCleanupConfirm",
+            "closeCleanupConfirm",
+            "renderCleanupConfirmModal",
+        )
+        harness = "\n".join(
+            [
+                """
+                const makeEl = () => ({
+                  innerHTML: '',
+                  attrs: {},
+                  classes: new Set(),
+                  classList: {
+                    add(c) { this._p.classes.add(c); },
+                    remove(c) { this._p.classes.delete(c); }
+                  },
+                  setAttribute(k, v) { this.attrs[k] = v; },
+                  querySelector() { return null; }
+                });
+                const overlayEl = makeEl();
+                overlayEl.classList._p = overlayEl;
+                const modalEl = makeEl();
+                modalEl.classList._p = modalEl;
+                const els = {
+                  'cleanup-confirm-overlay': overlayEl,
+                  'cleanup-confirm-modal': modalEl
+                };
+                const document = {
+                  activeElement: null,
+                  getElementById: (id) => els[id] || null
+                };
+                const focusInsideModal = () => {};
+                const restoreSavedFocus = () => {};
+                const ICONS = {
+                  github: '<gh/>', gitlab: '<gl/>', terminal: '<tm/>', externalLink: '<ext/>',
+                  copy: '<cp/>', folder: '<fd/>', branch: '<br/>', trash: '<tr/>',
+                  chevronRight: '<cr/>', x: '<x/>', sparkle: '<sp/>', check: '<ck/>',
+                  refresh: '<rf/>', stop: '<st/>', alertTriangle: '<at/>'
+                };
+                const state = {
+                  lang: 'zh',
+                  viewMode: 'repos',
+                  selectedRepo: 'ALL',
+                  search: '',
+                  worktreeOnly: false,
+                  alertsOnly: false,
+                  readyOnly: false,
+                  todoOnly: false,
+                  cleanupOnly: false,
+                  cleanupDrawerOpen: true,
+                  inspectedKey: null,
+                  repoInitRunning: {},
+                  cleanupConfirm: null,
+                  cleanupRun: { active: false, stopRequested: false, scopeKey: '', activeKey: '', total: 0, done: 0, cleaned: 0, skipped: 0 },
+                  cleanupRemovedKeys: {},
+                  cleanupResults: {},
+                  snapshot: {
+                    repos: [
+                      {
+                        repo_path: '/repos/demo',
+                        repo_name: 'demo',
+                        repo_url: 'https://github.com/o/demo',
+                        forge: 'github',
+                        retained_idle_worktrees: [
+                          {
+                            worktree: '/repos/demo-worktrees/1-one',
+                            name: '1-one',
+                            branch: 'fix/1-one',
+                            issue_number: 1,
+                            last_active_ago: '1 天前',
+                            last_commit_sha: 'aaa1111'
+                          },
+                          {
+                            worktree: '/repos/demo-worktrees/2-two',
+                            name: '2-two',
+                            branch: 'feat/2-two',
+                            issue_number: 2,
+                            last_active_ago: '2 天前',
+                            last_commit_sha: 'bbb2222'
+                          }
+                        ]
+                      }
+                    ],
+                    issues: [],
+                    local_only_items: [],
+                    orphan_changes: []
+                  }
+                };
+                """,
+                *(_extract_js_fn(n) for n in fn_names),
+                """
+                const assert = require('assert');
+
+                const retained0 = collectRetainedWorktrees(state.snapshot, false);
+                assert.strictEqual(retained0.length, 2);
+
+                const html0 = renderReposView([], state.snapshot);
+                assert(html0.includes('data-cleanup-open-batch="__all__"'));
+                assert(html0.includes('一键清理'));
+                assert(html0.includes('data-cleanup-one="' + retained0[0]._key + '"'));
+
+                // Batch modal opens with both items & safety note
+                openCleanupConfirm('batch', '__all__');
+                assert(overlayEl.classes.has('open'));
+                assert(modalEl.innerHTML.includes('确认清理 2 个已合入工作树？'));
+                assert(modalEl.innerHTML.includes('fix/1-one'));
+                assert(modalEl.innerHTML.includes('feat/2-two'));
+                assert(modalEl.innerHTML.includes('data-cleanup-confirm-submit="1"'));
+                closeCleanupConfirm();
+                assert(!overlayEl.classes.has('open'));
+
+                // Single modal opens for one card
+                openCleanupConfirm('single', retained0[1]._key);
+                assert(overlayEl.classes.has('open'));
+                assert(modalEl.innerHTML.includes('确认清理 #2 工作树目录？'));
+                assert(modalEl.innerHTML.includes('/repos/demo-worktrees/2-two'));
+                closeCleanupConfirm();
+
+                // Active cleaning & skipped card rendering + streaming removal via cleanupRemovedKeys
+                state.cleanupRun = { active: true, stopRequested: false, scopeKey: '__all__', activeKey: retained0[0]._key, total: 2, done: 0, cleaned: 0, skipped: 0 };
+                state.cleanupResults[retained0[1]._key] = { status: 'skipped_dirty', message: '工作区存在 1 处未提交改动，已跳过清理', isError: false };
+                const htmlRunning = renderReposView([], state.snapshot);
+                assert(htmlRunning.includes('清理中 0/2'));
+                assert(htmlRunning.includes('data-cleanup-stop="1"'));
+                assert(htmlRunning.includes('is-cleaning'));
+                assert(htmlRunning.includes('is-cleanup-skipped'));
+                assert(htmlRunning.includes('工作区存在 1 处未提交改动，已跳过清理'));
+
+                // Removing first card drops it immediately and decrements retained count to 1
+                state.cleanupRun.active = false;
+                state.cleanupRemovedKeys[retained0[0]._key] = true;
+                const retained1 = collectRetainedWorktrees(state.snapshot, false);
+                assert.strictEqual(retained1.length, 1);
+                assert.strictEqual(retained1[0].issue_number, 2);
+
+                console.log('JS_CLEANUP_UI_MODAL_OK');
+                """,
+            ]
+        )
+        proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        self.assertIn("JS_CLEANUP_UI_MODAL_OK", proc.stdout)
+
+    def test_board_first_load_only_skeleton_and_incremental_reconcile(self) -> None:
+        html_doc = board_ui.BOARD_HTML
+        self.assertIn("initialLoadSettled", html_doc)
+
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to evaluate board_ui.py skeleton helpers")
+
+        script_match = re.search(r"<script>\s*([\s\S]*?)\s*</script>", html_doc)
+        self.assertIsNotNone(script_match)
+        assert script_match is not None
+        js_src = script_match.group(1)
+
+        def _extract_js_fn(name: str) -> str:
+            marker = f"function {name}("
+            start = js_src.index(marker)
+            brace_start = js_src.index("{", start)
+            depth = 0
+            for idx in range(brace_start, len(js_src)):
+                ch = js_src[idx]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return js_src[start : idx + 1]
+            raise AssertionError(f"Unclosed JS function: {name}")
+
+        fn_names = (
+            "isEn",
+            "tr",
+            "escapeHtml",
+            "safeUrl",
+            "icon",
+            "forgeIcon",
+            "forgeLabel",
+            "parseStage",
+            "isItemAlert",
+            "collectItems",
+            "matchesFilters",
+            "getProgressNumbers",
+            "shortWorktreePath",
+            "shortDirSlug",
+            "collectRetainedWorktrees",
+            "getStageQuickCli",
+            "buildHandoffPrompt",
+            "resolveRepoMeta",
+            "renderRepoChip",
+            "renderIdHtml",
+            "renderChangeInline",
+            "localizeAgo",
+            "renderPulseSummary",
+            "renderSegBar",
+            "resolvePrimaryLink",
+            "renderPrimaryLinkBtn",
+            "renderCard",
+            "renderReposView",
+            "skelBar",
+            "renderMainSkeleton",
+            "reconcileMainContent",
+            "renderMain",
+        )
+        harness = "\n".join(
+            [
+                """
+                const container = {
+                  innerHTML: '',
+                  dataset: {},
+                  _lastSimpleHtml: ''
+                };
+                const document = {
+                  getElementById: (id) => (id === 'main-content' ? container : null)
+                };
+                const ICONS = {
+                  github: '<gh/>', gitlab: '<gl/>', terminal: '<tm/>', externalLink: '<ext/>',
+                  copy: '<cp/>', folder: '<fd/>', branch: '<br/>', trash: '<tr/>',
+                  chevronRight: '<cr/>', x: '<x/>', sparkle: '<sp/>', refresh: '<rf/>',
+                  stop: '<st/>', alertTriangle: '<at/>'
+                };
+                const state = {
+                  lang: 'zh',
+                  viewMode: 'repos',
+                  selectedRepo: 'ALL',
+                  search: '',
+                  worktreeOnly: false,
+                  alertsOnly: false,
+                  readyOnly: false,
+                  todoOnly: false,
+                  cleanupOnly: false,
+                  cleanupDrawerOpen: true,
+                  initialLoadSettled: false,
+                  inspectedKey: null,
+                  repoInitRunning: {},
+                  cleanupRun: { active: false },
+                  cleanupRemovedKeys: {},
+                  cleanupResults: {},
+                  snapshot: {
+                    forge_syncing: true,
+                    local_only: false,
+                    repos: [
+                      {
+                        repo_path: '/repos/demo',
+                        repo_name: 'demo',
+                        repo_url: 'https://github.com/o/demo',
+                        forge: 'github',
+                        retained_idle_worktrees: [
+                          {
+                            worktree: '/repos/demo-worktrees/1-one',
+                            name: '1-one',
+                            branch: 'fix/1-one',
+                            issue_number: 1,
+                            last_active_ago: '1 天前',
+                            last_commit_sha: 'aaa1111'
+                          }
+                        ]
+                      }
+                    ],
+                    issues: [],
+                    local_only_items: [],
+                    orphan_changes: []
+                  }
+                };
+                """,
+                *(_extract_js_fn(n) for n in fn_names),
+                """
+                const assert = require('assert');
+
+                // 1. Initial cold load with 0 active items & forge_syncing=true shows skeleton
+                renderMain();
+                assert.strictEqual(container.dataset.viewKey, 'loading-sync');
+                assert(container.innerHTML.includes('skel-block'));
+
+                // 2. First sync settles -> initialLoadSettled becomes true and renders repos view
+                state.snapshot.forge_syncing = false;
+                renderMain();
+                assert.strictEqual(state.initialLoadSettled, true);
+                assert.strictEqual(container.dataset.viewKey, 'repos');
+                assert(!container.innerHTML.includes('skel-block'));
+                assert(container.innerHTML.includes('已合入但仍保留的本地工作树'));
+
+                // 3. Subsequent incremental refresh (forge_syncing=true again) does NOT revert to skeleton
+                state.snapshot.forge_syncing = true;
+                renderMain();
+                assert.strictEqual(container.dataset.viewKey, 'repos');
+                assert(!container.innerHTML.includes('skel-block'));
+                assert(container.innerHTML.includes('已合入但仍保留的本地工作树'));
+
+                // 4. Even when retained list becomes empty and forge_syncing=true, show empty-filtered (no skeleton)
+                state.snapshot.repos[0].retained_idle_worktrees = [];
+                renderMain();
+                assert.strictEqual(container.dataset.viewKey, 'empty-filtered');
+                assert(!container.innerHTML.includes('skel-block'));
+
+                console.log('JS_FIRST_LOAD_SKELETON_OK');
+                """,
+            ]
+        )
+        proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        self.assertIn("JS_FIRST_LOAD_SKELETON_OK", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
