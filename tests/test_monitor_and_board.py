@@ -3075,6 +3075,167 @@ class TestMonitorAndBoard(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
         self.assertIn("JS_CLEANUP_UI_MODAL_OK", proc.stdout)
 
+    def test_board_first_load_only_skeleton_and_incremental_reconcile(self) -> None:
+        html_doc = board_ui.BOARD_HTML
+        self.assertIn("initialLoadSettled", html_doc)
+
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to evaluate board_ui.py skeleton helpers")
+
+        script_match = re.search(r"<script>\s*([\s\S]*?)\s*</script>", html_doc)
+        self.assertIsNotNone(script_match)
+        assert script_match is not None
+        js_src = script_match.group(1)
+
+        def _extract_js_fn(name: str) -> str:
+            marker = f"function {name}("
+            start = js_src.index(marker)
+            brace_start = js_src.index("{", start)
+            depth = 0
+            for idx in range(brace_start, len(js_src)):
+                ch = js_src[idx]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return js_src[start : idx + 1]
+            raise AssertionError(f"Unclosed JS function: {name}")
+
+        fn_names = (
+            "isEn",
+            "tr",
+            "escapeHtml",
+            "safeUrl",
+            "icon",
+            "forgeIcon",
+            "forgeLabel",
+            "parseStage",
+            "isItemAlert",
+            "collectItems",
+            "matchesFilters",
+            "getProgressNumbers",
+            "shortWorktreePath",
+            "shortDirSlug",
+            "collectRetainedWorktrees",
+            "getStageQuickCli",
+            "buildHandoffPrompt",
+            "resolveRepoMeta",
+            "renderRepoChip",
+            "renderIdHtml",
+            "renderChangeInline",
+            "localizeAgo",
+            "renderPulseSummary",
+            "renderSegBar",
+            "resolvePrimaryLink",
+            "renderPrimaryLinkBtn",
+            "renderCard",
+            "renderReposView",
+            "skelBar",
+            "renderMainSkeleton",
+            "reconcileMainContent",
+            "renderMain",
+        )
+        harness = "\n".join(
+            [
+                """
+                const container = {
+                  innerHTML: '',
+                  dataset: {},
+                  _lastSimpleHtml: ''
+                };
+                const document = {
+                  getElementById: (id) => (id === 'main-content' ? container : null)
+                };
+                const ICONS = {
+                  github: '<gh/>', gitlab: '<gl/>', terminal: '<tm/>', externalLink: '<ext/>',
+                  copy: '<cp/>', folder: '<fd/>', branch: '<br/>', trash: '<tr/>',
+                  chevronRight: '<cr/>', x: '<x/>', sparkle: '<sp/>', refresh: '<rf/>',
+                  stop: '<st/>', alertTriangle: '<at/>'
+                };
+                const state = {
+                  lang: 'zh',
+                  viewMode: 'repos',
+                  selectedRepo: 'ALL',
+                  search: '',
+                  worktreeOnly: false,
+                  alertsOnly: false,
+                  readyOnly: false,
+                  todoOnly: false,
+                  cleanupOnly: false,
+                  cleanupDrawerOpen: true,
+                  initialLoadSettled: false,
+                  inspectedKey: null,
+                  repoInitRunning: {},
+                  cleanupRun: { active: false },
+                  cleanupRemovedKeys: {},
+                  cleanupResults: {},
+                  snapshot: {
+                    forge_syncing: true,
+                    local_only: false,
+                    repos: [
+                      {
+                        repo_path: '/repos/demo',
+                        repo_name: 'demo',
+                        repo_url: 'https://github.com/o/demo',
+                        forge: 'github',
+                        retained_idle_worktrees: [
+                          {
+                            worktree: '/repos/demo-worktrees/1-one',
+                            name: '1-one',
+                            branch: 'fix/1-one',
+                            issue_number: 1,
+                            last_active_ago: '1 天前',
+                            last_commit_sha: 'aaa1111'
+                          }
+                        ]
+                      }
+                    ],
+                    issues: [],
+                    local_only_items: [],
+                    orphan_changes: []
+                  }
+                };
+                """,
+                *(_extract_js_fn(n) for n in fn_names),
+                """
+                const assert = require('assert');
+
+                // 1. Initial cold load with 0 active items & forge_syncing=true shows skeleton
+                renderMain();
+                assert.strictEqual(container.dataset.viewKey, 'loading-sync');
+                assert(container.innerHTML.includes('skel-block'));
+
+                // 2. First sync settles -> initialLoadSettled becomes true and renders repos view
+                state.snapshot.forge_syncing = false;
+                renderMain();
+                assert.strictEqual(state.initialLoadSettled, true);
+                assert.strictEqual(container.dataset.viewKey, 'repos');
+                assert(!container.innerHTML.includes('skel-block'));
+                assert(container.innerHTML.includes('已合入但仍保留的本地工作树'));
+
+                // 3. Subsequent incremental refresh (forge_syncing=true again) does NOT revert to skeleton
+                state.snapshot.forge_syncing = true;
+                renderMain();
+                assert.strictEqual(container.dataset.viewKey, 'repos');
+                assert(!container.innerHTML.includes('skel-block'));
+                assert(container.innerHTML.includes('已合入但仍保留的本地工作树'));
+
+                // 4. Even when retained list becomes empty and forge_syncing=true, show empty-filtered (no skeleton)
+                state.snapshot.repos[0].retained_idle_worktrees = [];
+                renderMain();
+                assert.strictEqual(container.dataset.viewKey, 'empty-filtered');
+                assert(!container.innerHTML.includes('skel-block'));
+
+                console.log('JS_FIRST_LOAD_SKELETON_OK');
+                """,
+            ]
+        )
+        proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        self.assertIn("JS_FIRST_LOAD_SKELETON_OK", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

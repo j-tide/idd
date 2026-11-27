@@ -3255,6 +3255,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         todoOnly: false,
         cleanupOnly: false,
         cleanupDrawerOpen: false,
+        initialLoadSettled: false,
         paused: false,
         inspectedKey: null,
         didAutoInspect: false,
@@ -5377,6 +5378,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       function reconcileMainContent(container, htmlStr, viewKey) {
         if (typeof window === "undefined" || typeof container.querySelectorAll !== "function") {
           container.innerHTML = htmlStr;
+          if (container.dataset) container.dataset.viewKey = viewKey;
           return;
         }
         const prevViewKey = container.dataset.viewKey || "";
@@ -5445,11 +5447,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
           }
           reconcileCardGrid(curBody, nextBody, poolByKey, oldRects, oldStages);
         } else if (viewKey === "repos") {
+          container._lastSimpleHtml = "";
           const curSections = new Map();
           container.querySelectorAll(".repo-section[data-repo-group]").forEach((s) => {
             curSections.set(s.getAttribute("data-repo-group") || "", s);
           });
           const curDrawer = container.querySelector(".cleanup-drawer");
+          const curEmpty = container.querySelector(":scope > .empty-state");
           const desired = [];
           for (const nextChild of Array.from(tpl.content.children)) {
             if (nextChild.classList.contains("repo-section")) {
@@ -5503,13 +5507,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
               } else {
                 desired.push(nextChild.cloneNode(true));
               }
+            } else if (nextChild.classList.contains("empty-state") && curEmpty) {
+              patchHtmlPreservingCopied(curEmpty, nextChild);
+              desired.push(curEmpty);
             } else {
               desired.push(nextChild.cloneNode(true));
             }
           }
           syncChildrenOrder(container, desired);
         } else {
-          container.innerHTML = htmlStr;
+          if (container._lastSimpleHtml !== htmlStr) {
+            container._lastSimpleHtml = htmlStr;
+            container.innerHTML = htmlStr;
+          }
           return;
         }
 
@@ -5556,7 +5566,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
         const items = state.cleanupOnly ? collectRetainedWorktrees(snap, false) : collectItems(false);
         const hasFilters = Boolean(state.search.trim() || state.worktreeOnly || state.alertsOnly || state.readyOnly || state.todoOnly || state.cleanupOnly);
-        if (items.length === 0 && snap.forge_syncing && !hasFilters) {
+        if (items.length === 0 && snap.forge_syncing && !hasFilters && !state.initialLoadSettled) {
           reconcileMainContent(
             container,
             renderMainSkeleton(
@@ -5566,6 +5576,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
             "loading-sync"
           );
           return;
+        }
+        if (!snap.forge_syncing || snap.local_only || items.length > 0) {
+          state.initialLoadSettled = true;
         }
         if (items.length === 0) {
           if (state.viewMode === "repos" && !state.cleanupOnly && collectRetainedWorktrees(snap, false).length > 0) {
@@ -6843,6 +6856,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           ac: state.authStatus ? state.authStatus.unconfigured_count : -1,
           fc: state.fromCache,
           hl: state.hasLiveSnapshot,
+          ils: Boolean(state.initialLoadSettled),
           w: snap.warnings,
           sr: state.selectedRepo,
           vm: state.viewMode,
@@ -6953,6 +6967,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
           }
           state.hasLiveSnapshot = true;
           state.fromCache = false;
+          if (!nextSnap.forge_syncing || nextSnap.local_only) {
+            state.initialLoadSettled = true;
+          }
           state.initError = "";
           state.slowInit = false;
           setTimeout(() => saveCachedSnapshot(nextSnap), 0);
@@ -7670,6 +7687,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       if (cachedSnap) {
         state.snapshot = cachedSnap;
         state.fromCache = true;
+        state.initialLoadSettled = true;
         state.lastClockStr = formatClock(cachedSnap.generated_at);
       }
       syncHeaderControls();
