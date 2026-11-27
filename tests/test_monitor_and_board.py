@@ -2556,6 +2556,39 @@ class TestMonitorAndBoard(unittest.TestCase):
             self.assertIn("待同步", term_out)
             self.assertIn("开发中", term_out)
 
+    def test_board_motion_tokens_reduced_motion_and_tty_watch_frame(self) -> None:
+        html_doc = board_ui.BOARD_HTML
+        for token in (
+            "--ease-out:",
+            "--ease-spring:",
+            "--ease-pop:",
+            "--ease-in:",
+            "--dur-press:",
+            "--dur-fast:",
+            "--dur-panel:",
+            "--focus-ring:",
+            "prefers-reduced-motion: reduce",
+            ".btn:disabled",
+            "reconcileMainContent",
+            "syncSegmentedIndicator",
+            "max-width: 560px",
+            "已完成",
+            "进行中",
+            "待执行",
+        ):
+            self.assertIn(token, html_doc)
+        self.assertNotIn("transition: all", html_doc)
+        # Verify spin class on busy save/apply buttons
+        self.assertIn('(saving ? " spin" : "")', html_doc)
+        self.assertIn('(busy ? " spin" : "")', html_doc)
+        self.assertIn('(activeBusy ? " spin" : "")', html_doc)
+        # Verify TTY watch formatter avoids full-screen clear and uses synchronized output
+        tty_out = monitor._format_tty_watch_frame("line1\nline2")
+        self.assertNotIn("\x1b[2J", tty_out)
+        self.assertTrue(tty_out.startswith("\x1b[?2026h\x1b[H"))
+        self.assertIn("\x1b[K\n", tty_out)
+        self.assertTrue(tty_out.endswith("\x1b[K\x1b[J\x1b[?2026l"))
+
 
 if __name__ == "__main__":
     unittest.main()

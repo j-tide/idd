@@ -3431,13 +3431,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (!el || !el.isConnected || el.classList.contains("is-leaving")) return;
         el.classList.remove("is-visible");
         el.classList.add("is-leaving");
-        if (!prefersReducedMotion() && typeof el.animate === "function") {
-          const h = el.offsetHeight;
-          el.animate(
-            [{ height: h + "px", marginTop: "0px" }, { height: "0px", marginTop: "-8px" }],
-            { duration: 150, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" }
-          );
-        }
         setTimeout(() => { if (el.isConnected) el.remove(); }, 165);
       }
 
@@ -5142,8 +5135,30 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return repoSections + emptyActiveBlock + cleanupDrawer;
       }
 
+      function syncChildrenOrder(parent, desiredChildren) {
+        const keep = new Set(desiredChildren);
+        for (const child of Array.from(parent.children)) {
+          if (!keep.has(child)) child.remove();
+        }
+        for (let i = 0; i < desiredChildren.length; i++) {
+          const want = desiredChildren[i];
+          const cur = parent.children[i];
+          if (cur !== want) {
+            parent.insertBefore(want, cur || null);
+          }
+        }
+      }
+
       function patchHtmlPreservingCopied(curEl, nextEl) {
         if (!curEl || !nextEl) return;
+        const nextSig = nextEl.innerHTML;
+        if (curEl._lastInnerSig === nextSig) return;
+        if (curEl._lastInnerSig === undefined && !curEl.querySelector("[data-copy-val].copied") && curEl.innerHTML === nextSig) {
+          curEl._lastInnerSig = nextSig;
+          return;
+        }
+        curEl._lastInnerSig = nextSig;
+
         const activeCopy = new Map();
         curEl.querySelectorAll("[data-copy-val]").forEach((btn) => {
           if (btn.dataset.timerId) {
@@ -5173,7 +5188,31 @@ BOARD_HTML = r"""<!DOCTYPE html>
             nextTrack.replaceChild(placeholder, nextFill);
           }
         }
-        curEl.innerHTML = nextEl.innerHTML;
+
+        const curKids = Array.from(curEl.children);
+        const nextKids = Array.from(nextEl.children);
+        const canPatchKids =
+          curKids.length > 0 &&
+          curKids.length === nextKids.length &&
+          curKids.every((c, idx) => c.tagName === nextKids[idx].tagName && c.className === nextKids[idx].className);
+
+        if (canPatchKids) {
+          for (let i = 0; i < curKids.length; i++) {
+            const ck = curKids[i];
+            const nk = nextKids[i];
+            const nkHtml = nk.innerHTML;
+            if (ck._lastChildHtml === nkHtml) continue;
+            if (ck._lastChildHtml === undefined && !ck.querySelector("[data-copy-val].copied,[data-fill-slot]") && ck.innerHTML === nkHtml) {
+              ck._lastChildHtml = nkHtml;
+              continue;
+            }
+            ck._lastChildHtml = nkHtml;
+            ck.innerHTML = nkHtml;
+          }
+        } else {
+          curEl.innerHTML = nextEl.innerHTML;
+        }
+
         if (savedFill && curFill) {
           const slot = curEl.querySelector("[data-fill-slot]");
           if (slot && slot.parentElement) {
@@ -5195,21 +5234,22 @@ BOARD_HTML = r"""<!DOCTYPE html>
       }
 
       function reconcileCardGrid(targetContainer, nextContainer, poolByKey, oldRects, oldStages) {
-        const frag = document.createDocumentFragment();
+        const desired = [];
         const children = Array.from(nextContainer.children);
         for (const nextChild of children) {
           const key = nextChild.getAttribute("data-open-key");
           if (!key) {
-            frag.appendChild(nextChild.cloneNode(true));
+            desired.push(nextChild.cloneNode(true));
             continue;
           }
           const reused = poolByKey.get(key);
           if (reused) {
             poolByKey.delete(key);
-            reused.className = nextChild.className;
-            reused.setAttribute("tabindex", nextChild.getAttribute("tabindex") || "0");
+            if (reused.className !== nextChild.className) reused.className = nextChild.className;
+            const nextTab = nextChild.getAttribute("tabindex") || "0";
+            if (reused.getAttribute("tabindex") !== nextTab) reused.setAttribute("tabindex", nextTab);
             const fgAttr = nextChild.getAttribute("data-forge");
-            if (fgAttr != null) reused.setAttribute("data-forge", fgAttr);
+            if (fgAttr != null && reused.getAttribute("data-forge") !== fgAttr) reused.setAttribute("data-forge", fgAttr);
             patchHtmlPreservingCopied(reused, nextChild);
             const nextBadge = reused.querySelector(".card-top .badge") || reused.querySelector("td .badge");
             if (nextBadge && oldStages.has(key) && oldStages.get(key) !== nextBadge.textContent && !prefersReducedMotion()) {
@@ -5218,18 +5258,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
               nextBadge.classList.add("is-stage-bumped");
               setTimeout(() => nextBadge.classList.remove("is-stage-bumped"), 220);
             }
-            frag.appendChild(reused);
+            desired.push(reused);
           } else {
             const fresh = nextChild.cloneNode(true);
+            fresh._lastInnerSig = nextChild.innerHTML;
             if (!prefersReducedMotion() && oldRects.size > 0) {
               fresh.classList.add("card-enter");
               setTimeout(() => fresh.classList.remove("card-enter"), 240);
             }
-            frag.appendChild(fresh);
+            desired.push(fresh);
           }
         }
-        targetContainer.innerHTML = "";
-        targetContainer.appendChild(frag);
+        syncChildrenOrder(targetContainer, desired);
       }
 
       function reconcileMainContent(container, htmlStr, viewKey) {
@@ -5241,6 +5281,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (prevViewKey !== viewKey) {
           container.innerHTML = htmlStr;
           container.dataset.viewKey = viewKey;
+          container.querySelectorAll("[data-open-key]").forEach((el) => {
+            el._lastInnerSig = el.innerHTML;
+          });
           if (!prefersReducedMotion()) {
             container.classList.remove("view-enter");
             void container.offsetWidth;
@@ -5274,6 +5317,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const nextKanban = tpl.content.querySelector(".kanban");
           if (!curKanban || !nextKanban || curKanban.children.length !== nextKanban.children.length) {
             container.innerHTML = htmlStr;
+            container.querySelectorAll("[data-open-key]").forEach((el) => { el._lastInnerSig = el.innerHTML; });
             return;
           }
           for (let i = 0; i < curKanban.children.length; i++) {
@@ -5304,7 +5348,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             curSections.set(s.getAttribute("data-repo-group") || "", s);
           });
           const curDrawer = container.querySelector(".cleanup-drawer");
-          const frag = document.createDocumentFragment();
+          const desired = [];
           for (const nextChild of Array.from(tpl.content.children)) {
             if (nextChild.classList.contains("repo-section")) {
               const gKey = nextChild.getAttribute("data-repo-group") || "";
@@ -5313,7 +5357,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 curSections.delete(gKey);
                 const curHdr = reusedSec.querySelector(".repo-hdr");
                 const nextHdr = nextChild.querySelector(".repo-hdr");
-                if (curHdr && nextHdr && curHdr.innerHTML !== nextHdr.innerHTML) {
+                if (curHdr && nextHdr) {
                   patchHtmlPreservingCopied(curHdr, nextHdr);
                 }
                 const curGrid = reusedSec.querySelector(".repo-grid");
@@ -5321,22 +5365,22 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 if (curGrid && nextGrid) {
                   reconcileCardGrid(curGrid, nextGrid, poolByKey, oldRects, oldStages);
                 }
-                frag.appendChild(reusedSec);
+                desired.push(reusedSec);
               } else {
                 const clonedSec = nextChild.cloneNode(true);
                 if (!prefersReducedMotion() && oldRects.size > 0) clonedSec.classList.add("view-enter");
-                frag.appendChild(clonedSec);
+                desired.push(clonedSec);
               }
             } else if (nextChild.classList.contains("cleanup-drawer")) {
               if (curDrawer) {
-                curDrawer.className = nextChild.className;
+                if (curDrawer.className !== nextChild.className) curDrawer.className = nextChild.className;
                 const curHdr = curDrawer.querySelector(".cleanup-hdr");
                 const nextHdr = nextChild.querySelector(".cleanup-hdr");
                 if (curHdr && nextHdr) {
                   curHdr.setAttribute("aria-expanded", nextHdr.getAttribute("aria-expanded") || "false");
                   const curBadge = curHdr.querySelector(".badge");
                   const nextBadge = nextHdr.querySelector(".badge");
-                  if (curBadge && nextBadge) curBadge.textContent = nextBadge.textContent;
+                  if (curBadge && nextBadge && curBadge.textContent !== nextBadge.textContent) curBadge.textContent = nextBadge.textContent;
                 }
                 const curBody = curDrawer.querySelector(".cleanup-body");
                 const nextBody = nextChild.querySelector(".cleanup-body");
@@ -5349,16 +5393,15 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 } else if (!nextBody && curBody) {
                   curBody.remove();
                 }
-                frag.appendChild(curDrawer);
+                desired.push(curDrawer);
               } else {
-                frag.appendChild(nextChild.cloneNode(true));
+                desired.push(nextChild.cloneNode(true));
               }
             } else {
-              frag.appendChild(nextChild.cloneNode(true));
+              desired.push(nextChild.cloneNode(true));
             }
           }
-          container.innerHTML = "";
-          container.appendChild(frag);
+          syncChildrenOrder(container, desired);
         } else {
           container.innerHTML = htmlStr;
           return;
@@ -6628,15 +6671,24 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const warnsHtml = warns.length
           ? '<div class="warnings-box">' + icon("alertTriangle", 14) + "<div><strong>" + tr("提示：", "Notice: ") + "</strong>" + warns.map((w) => escapeHtml(w)).join(" ｜ ") + "</div></div>"
           : "";
-        document.getElementById("warnings-wrap").innerHTML = warnsHtml;
+        const warningsWrap = document.getElementById("warnings-wrap");
+        if (warningsWrap && warningsWrap._lastHtml !== warnsHtml) {
+          warningsWrap._lastHtml = warnsHtml;
+          warningsWrap.innerHTML = warnsHtml;
+        }
 
         const retainedCount = (snap.repos || []).reduce((acc, r) => acc + (r.retained_idle_worktrees || []).length, 0);
         const retainedText = retainedCount > 0
           ? tr("已合入保留目录：" + retainedCount + " 个", retainedCount + " retained merged worktree(s)")
           : tr("保留目录均已清理", "No retained merged worktrees");
-        document.getElementById("footer").innerHTML =
+        const footerEl = document.getElementById("footer");
+        const footerHtml =
           "<span>" + tr("仓库索引：", "Repo index: ") + "<code>" + escapeHtml(snap.repos_config_path || "~/.config/idd/repos.json") + "</code></span>" +
           "<span>" + escapeHtml(retainedText) + " · " + tr("快捷键 <code>[</code> 收起侧栏 · <code>/</code> 搜索 · <code>r</code> 同步远端", "Shortcuts: <code>[</code> sidebar · <code>/</code> search · <code>r</code> sync") + "</span>";
+        if (footerEl && footerEl._lastHtml !== footerHtml) {
+          footerEl._lastHtml = footerHtml;
+          footerEl.innerHTML = footerHtml;
+        }
       }
 
       async function fetchSnapshot(forceRefresh) {
@@ -6665,7 +6717,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           state.fromCache = false;
           state.initError = "";
           state.slowInit = false;
-          saveCachedSnapshot(nextSnap);
+          setTimeout(() => saveCachedSnapshot(nextSnap), 0);
           if (!state.didAutoInspect) {
             state.didAutoInspect = true;
             const qInspect = urlParams.get("inspect");
