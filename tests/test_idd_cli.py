@@ -1912,11 +1912,11 @@ class TestIddCli(unittest.TestCase):
             self.assertEqual(single_pr_body, expected_single_pr)
             expected_single_commit = (
                 "Closes #6\n\n"
-                "TASK-01: 扩展独立复核上下文\n\n"
-                "第一段说明包含上下文细节。\n\n"
+                "TASK-01: 扩展独立复核上下文\n"
+                "第一段说明包含上下文细节。\n"
                 "第二段列出关键点：\n"
                 "- 含文件头与扩展窗口\n"
-                "- 零 I/O 关联符号变更\n\n"
+                "- 零 I/O 关联符号变更\n"
                 "Test: tests/review/ — 95 passed\n"
             )
             self.assertEqual(single_commit_body, expected_single_commit)
@@ -1954,10 +1954,20 @@ class TestIddCli(unittest.TestCase):
                 "|  | `pytest tests/b.py` | 3 passed |\n",
                 multi_pr_body,
             )
-            self.assertIn(
-                "TASK-02: 同步文档\nTest:\n- pytest tests/a.py — 10 passed\n- pytest tests/b.py — 3 passed\n",
-                multi_commit_body,
+            expected_multi_commit = (
+                "Closes #6\n\n"
+                "TASK-01: 扩展独立复核上下文\n"
+                "第一段说明包含上下文细节。\n"
+                "第二段列出关键点：\n"
+                "- 含文件头与扩展窗口\n"
+                "- 零 I/O 关联符号变更\n"
+                "Test: tests/review/ — 95 passed\n\n"
+                "TASK-02: 同步文档\n"
+                "Test:\n"
+                "- pytest tests/a.py — 10 passed\n"
+                "- pytest tests/b.py — 3 passed\n"
             )
+            self.assertEqual(multi_commit_body, expected_multi_commit)
 
             # Short unsimplified commands must not produce a redundant <details> block
             (task_dir / "TASK-01-context.md").unlink()
@@ -1979,6 +1989,78 @@ class TestIddCli(unittest.TestCase):
                 short_commit_body,
                 "Closes #6\n\nTASK-02: 精简验证\nTest: pytest tests/b.py — 3 passed\n",
             )
+
+    def test_build_issue_summaries_compact_plain_task_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+            (repo / "README.md").write_text("init\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-m", "chore: init"], check=True, capture_output=True)
+
+            subprocess.run(["git", "-C", str(repo), "checkout", "-b", "docs/71-gate"], check=True, capture_output=True)
+            task_dir = repo / "TASK" / "71-gate"
+            task_dir.mkdir(parents=True)
+
+            (task_dir / "TASK-01-skill.md").write_text(
+                "# TASK-01：强化 SKILL 与直观对齐规范的先确认方案再建单门禁\n\n- Issue: #71\n- Status: done\n- Depends on: none\n- Test: unittest\n",
+                encoding="utf-8",
+            )
+            (repo / "a.txt").write_text("a\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(repo), "commit", "-m",
+                    "docs: 强化 SKILL 与直观对齐规范的先确认方案再建单门禁\n\n"
+                    "在 SKILL.md 新增前置硬门禁并移除单点修复跳过确认旧豁免。\n\n"
+                    "在 visual-alignment.md 明确仅豁免原型不豁免方案确认。\n\n"
+                    "Task: 71-gate/TASK-01\nRefs: #71\n"
+                    "Test: python3 -m unittest tests/test_version_and_release.py — passed (5 tests)",
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+            (task_dir / "TASK-02-readme.md").write_text(
+                "# TASK-02：同步中英文 README 与规则模板的先确认方案再建单约束\n\n- Issue: #71\n- Status: done\n- Depends on: TASK-01\n- Test: unittest\n",
+                encoding="utf-8",
+            )
+            (repo / "b.txt").write_text("b\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(repo), "commit", "-m",
+                    "docs: 同步中英文 README 与规则模板的先确认方案再建单约束\n\n"
+                    "更新工作原理、自然语言场景表及个人全局/项目级规则模板。\n\n"
+                    "Task: 71-gate/TASK-02\nRefs: #71\n"
+                    "Test: python3 -m unittest tests — passed (93 tests)\n"
+                    "Test: python3 scripts/release.py --check — passed",
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+            _, pr_body, commit_body = idd_cli.build_issue_summaries(
+                repo, "71-gate", 71, "main", issue_title="docs(skill): 强化开发前先确认方案再建单门禁"
+            )
+            expected_commit = (
+                "Closes #71\n\n"
+                "TASK-01: 强化 SKILL 与直观对齐规范的先确认方案再建单门禁\n"
+                "在 SKILL.md 新增前置硬门禁并移除单点修复跳过确认旧豁免。\n"
+                "在 visual-alignment.md 明确仅豁免原型不豁免方案确认。\n"
+                "Test: unittest tests/test_version_and_release.py — passed (5 tests)\n\n"
+                "TASK-02: 同步中英文 README 与规则模板的先确认方案再建单约束\n"
+                "更新工作原理、自然语言场景表及个人全局/项目级规则模板。\n"
+                "Test:\n"
+                "- unittest tests — passed (93 tests)\n"
+                "- python3 scripts/release.py --check — passed\n"
+            )
+            self.assertEqual(commit_body, expected_commit)
+            self.assertIn("  在 SKILL.md 新增前置硬门禁", pr_body)
+            self.assertIn("  在 visual-alignment.md 明确仅豁免原型不豁免方案确认。", pr_body)
 
     def test_pr_summary_table_regression_cases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

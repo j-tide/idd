@@ -190,12 +190,16 @@ Closes #<Issue编号>
 |  | `<检查项 B>` | <结果> |
 ```
 
-主线 Squash Commit 正文模板（`idd land` 在合入时自动生成零 Markdown 符号的干净纯文本，确保 GitHub / GitLab Commit 页面与 `git log` 无 `###`、`**` 或反引号外露）：
+主线 Squash Commit 正文模板（`idd land` 在合入时自动生成零 Markdown 符号的干净纯文本，单个 `TASK` 块内紧缩无空行、仅在不同 `TASK` 之间以空行隔离，确保 GitHub / GitLab Commit 页面与 `git log` 无 `###`、`**` 或反引号外露且任务边界清晰）：
 
 ```text
 Closes #<Issue编号>
 
 TASK-01: <本任务的具体变化>
+<可选的详细说明（块内不插空行）>
+Test: <简短命令或命令标签> — <结果>
+
+TASK-02: <下一任务的具体变化>
 Test: <简短命令或命令标签> — <结果>
 ```
 

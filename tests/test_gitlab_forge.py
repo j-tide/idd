@@ -657,8 +657,7 @@ class TestGitLabForge(unittest.TestCase):
                     ["git", "-C", str(repo), "log", "-1", "--format=%B", "main"],
                     text=True,
                 )
-                self.assertIn("TASK-01: 实现 CSV 导出", gl_squash_msg)
-                self.assertIn("Test: pytest test_csv.py — 2 passed", gl_squash_msg)
+                self.assertIn("TASK-01: 实现 CSV 导出\nTest: pytest test_csv.py — 2 passed", gl_squash_msg)
                 self.assertNotIn("### ", gl_squash_msg)
                 self.assertNotIn("**Test:**", gl_squash_msg)
 
