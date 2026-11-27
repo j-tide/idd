@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
+import functools
 import io
 import json
 import os
@@ -3235,6 +3236,355 @@ class TestMonitorAndBoard(unittest.TestCase):
         proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
         self.assertIn("JS_FIRST_LOAD_SKELETON_OK", proc.stdout)
+
+    def test_pulse_porcelain_v2_subprocess_budget_and_idle_cache_invalidation(self) -> None:
+        monitor.invalidate_monitor_caches()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            repo, _, _, env = _create_repo_harness(root / "h", "perf-repo", cfg)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+
+            start_active = json.loads(self._run(env, repo, "start", "42", "--slug", "fast-scan", "--json").stdout)
+            wt_active = Path(start_active["worktree"])
+            active_branch = start_active["branch"]
+            start_idle = json.loads(self._run(env, repo, "start", "43", "--slug", "old-landed", "--json").stdout)
+            wt_idle = Path(start_idle["worktree"])
+            idle_branch = start_idle["branch"]
+            subprocess.run(
+                ["git", "-C", str(wt_idle), "commit", "--allow-empty", "-m", "chore: 清理已汇总的任务记录"],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(["git", "-C", str(wt_idle), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
+
+            # 1) Cold clean worktree pulse uses <= 2 git subprocesses; warm HEAD cache uses <= 1
+            with mock.patch.object(monitor, "_run_git_ro", wraps=monitor._run_git_ro) as spy_git:
+                pulse1 = monitor.inspect_worktree_pulse(
+                    wt_idle,
+                    branch=idle_branch,
+                    has_origin=True,
+                    default_branch="main",
+                )
+                self.assertEqual(pulse1["remote_state"], "synced")
+                self.assertTrue(pulse1["remote_branch_exists"])
+                self.assertEqual(pulse1["dirty_count"], 0)
+                self.assertLessEqual(spy_git.call_count, 2)
+
+            with mock.patch.object(monitor, "_run_git_ro", wraps=monitor._run_git_ro) as spy_git_warm:
+                pulse2 = monitor.inspect_worktree_pulse(
+                    wt_idle,
+                    branch=idle_branch,
+                    has_origin=True,
+                    default_branch="main",
+                )
+                self.assertEqual(pulse2["last_commit_sha"], pulse1["last_commit_sha"])
+                self.assertLessEqual(spy_git_warm.call_count, 1)
+
+            # 2) Porcelain v2 captures modified, untracked, and renamed files accurately
+            (wt_active / "README.md").write_text("# perf-repo\nupdated line\n", encoding="utf-8")
+            (wt_active / "new_untracked.py").write_text("x = 1\n", encoding="utf-8")
+            tdir = wt_active / "TASK" / "42-fast-scan"
+            tdir.mkdir(parents=True, exist_ok=True)
+            (tdir / "TASK-01-scan.md").write_text(
+                "# TASK-01：优化扫描\n\n- Issue: #42\n- Status: in_progress\n- Depends on: none\n- Test: unittest\n",
+                encoding="utf-8",
+            )
+            pulse_dirty = monitor.inspect_worktree_pulse(
+                wt_active,
+                in_progress_count=1,
+                branch=active_branch,
+                has_origin=True,
+                default_branch="main",
+            )
+            self.assertEqual(pulse_dirty["modified_count"], 1)
+            self.assertGreaterEqual(pulse_dirty["untracked_count"], 2)
+            self.assertEqual(pulse_dirty["insertions"], 1)
+
+            # 3) Retained idle worktree is cached across steady-state polls and invalidated on mutation
+            with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
+                snap1 = monitor.collect_repo_snapshot(
+                    repo,
+                    local_only=True,
+                    allow_stale_async=True,
+                    register=False,
+                )
+                self.assertEqual(len(snap1["retained_idle_worktrees"]), 1)
+
+                with mock.patch.object(monitor, "inspect_worktree_pulse", wraps=monitor.inspect_worktree_pulse) as spy_p:
+                    snap2 = monitor.collect_repo_snapshot(
+                        repo,
+                        local_only=True,
+                        allow_stale_async=True,
+                        register=False,
+                    )
+                    self.assertEqual(len(snap2["retained_idle_worktrees"]), 1)
+                    # Only wt_active should invoke inspect_worktree_pulse; wt_idle hits fingerprint cache
+                    probed_paths = [Path(c.args[0]).resolve() for c in spy_p.call_args_list]
+                    self.assertIn(wt_active.resolve(), probed_paths)
+                    self.assertNotIn(wt_idle.resolve(), probed_paths)
+
+                # Mutating wt_idle (creating a top-level file updates wt_path mtime) invalidates immediately
+                (wt_idle / "wake_up.txt").write_text("changed\n", encoding="utf-8")
+                snap3 = monitor.collect_repo_snapshot(
+                    repo,
+                    local_only=True,
+                    allow_stale_async=True,
+                    register=False,
+                )
+                self.assertEqual(len(snap3["retained_idle_worktrees"]), 0)
+
+                # 4) register_repo respects min_touch_interval to avoid rewriting repos.json every poll
+                repos_file = cfg / "repos.json"
+                monitor.register_repo(repo)
+                mtime_before = repos_file.stat().st_mtime_ns
+                time.sleep(0.02)
+                monitor.register_repo(repo, min_touch_interval=60.0)
+                self.assertEqual(repos_file.stat().st_mtime_ns, mtime_before)
+
+    def test_board_snapshot_coalescer_merges_concurrent_requests_and_invalidates(self) -> None:
+        coalescer = board_ui._SnapshotCoalescer(ttl_seconds=1.0)
+        call_count = 0
+        count_lock = threading.Lock()
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_producer() -> dict[str, object]:
+            nonlocal call_count
+            with count_lock:
+                call_count += 1
+                cur = call_count
+            started.set()
+            release.wait(timeout=3.0)
+            return {"seq": cur}
+
+        results: list[dict[str, object]] = []
+        errors: list[BaseException] = []
+
+        def worker() -> None:
+            try:
+                raw = coalescer.get_bytes(slow_producer)
+                results.append(json.loads(raw.decode("utf-8")))
+            except BaseException as exc:  # pragma: no cover
+                errors.append(exc)
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t3 = threading.Thread(target=worker)
+        t1.start()
+        self.assertTrue(started.wait(timeout=2.0))
+        t2.start()
+        t3.start()
+        time.sleep(0.05)
+        release.set()
+        for t in (t1, t2, t3):
+            t.join(timeout=3.0)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(call_count, 1)
+        self.assertEqual(results, [{"seq": 1}, {"seq": 1}, {"seq": 1}])
+
+        # Immediate subsequent call hits short TTL cache
+        cached = json.loads(coalescer.get_bytes(slow_producer).decode("utf-8"))
+        self.assertEqual(cached, {"seq": 1})
+        self.assertEqual(call_count, 1)
+
+        # bypass_cache=True penetrates cache and updates cached snapshot
+        fresh = json.loads(coalescer.get_bytes(slow_producer, bypass_cache=True).decode("utf-8"))
+        self.assertEqual(fresh, {"seq": 2})
+        self.assertEqual(call_count, 2)
+
+        # invalidate() forces next call to recompute
+        coalescer.invalidate()
+        after_inv = json.loads(coalescer.get_bytes(slow_producer).decode("utf-8"))
+        self.assertEqual(after_inv, {"seq": 3})
+        self.assertEqual(call_count, 3)
+
+        # End-to-end HTTP test: /api/snapshot coalesces within TTL, ?refresh=1 and POST config invalidate
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            repo, _, _, _ = _create_repo_harness(root / "h", "coalesce-repo", cfg)
+            with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
+                snap_cache = board_ui._SnapshotCoalescer(ttl_seconds=5.0)
+                handler_cls = functools.partial(
+                    board_ui.BoardRequestHandler,
+                    cache=monitor.ForgeSnapshotCache(ttl_seconds=30.0),
+                    root=repo,
+                    global_mode=False,
+                    local_only=True,
+                    version="0.0.4",
+                    snapshot_cache=snap_cache,
+                )
+                server = board_ui.BoardHTTPServer(("127.0.0.1", 0), handler_cls)
+                port = server.server_address[1]
+                srv_thread = threading.Thread(target=server.serve_forever, daemon=True)
+                srv_thread.start()
+                try:
+                    with mock.patch.object(
+                        monitor, "collect_scope_snapshot", wraps=monitor.collect_scope_snapshot
+                    ) as spy_collect:
+                        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/snapshot", timeout=5) as r1:
+                            b1 = r1.read()
+                        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/snapshot", timeout=5) as r2:
+                            b2 = r2.read()
+                        self.assertEqual(b1, b2)
+                        self.assertEqual(spy_collect.call_count, 1)
+
+                        # Manual refresh=1 bypasses short TTL cache
+                        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/snapshot?refresh=1", timeout=5) as r3:
+                            self.assertEqual(r3.status, 200)
+                        self.assertEqual(spy_collect.call_count, 2)
+
+                        # POST /api/config/auto-merge invalidates cached snapshot immediately
+                        req = urllib.request.Request(
+                            f"http://127.0.0.1:{port}/api/config/auto-merge",
+                            data=json.dumps({"scope": "global", "enabled": True}).encode("utf-8"),
+                            headers={
+                                "Content-Type": "application/json",
+                                "X-IDD-Request": "1",
+                                "Origin": f"http://127.0.0.1:{port}",
+                            },
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(req, timeout=5) as r_cfg:
+                            self.assertEqual(r_cfg.status, 200)
+                        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/snapshot", timeout=5) as r4:
+                            snap4 = json.loads(r4.read().decode("utf-8"))
+                        self.assertEqual(spy_collect.call_count, 3)
+                        self.assertTrue(snap4["config"]["auto_merge"])
+                finally:
+                    server.shutdown()
+                    server.server_close()
+
+    def test_board_frontend_perf_signature_adaptive_polling_and_gpu_css(self) -> None:
+        html_doc = board_ui.BOARD_HTML
+        # 1) GPU / compositor hygiene: top-progress animates only when active; live dot has no infinite pulse;
+        #    inner cards avoid double-nested backdrop-filter; hidden tab pauses all animations.
+        self.assertIn(".top-progress-bar {", html_doc)
+        top_bar_match = re.search(r"\.top-progress-bar\s*\{([^}]*)\}", html_doc)
+        self.assertIsNotNone(top_bar_match)
+        assert top_bar_match is not None
+        self.assertIn("animation: none;", top_bar_match.group(1))
+        self.assertIn(".top-progress.is-active .top-progress-bar", html_doc)
+
+        live_dot_match = re.search(r"\.live-pill\.is-live \.dot-pulse\s*\{([^}]*)\}", html_doc)
+        self.assertIsNotNone(live_dot_match)
+        assert live_dot_match is not None
+        self.assertNotIn("animation:", live_dot_match.group(1))
+
+        card_match = re.search(r"\n    \.card\s*\{([^}]*)\}", html_doc)
+        self.assertIsNotNone(card_match)
+        assert card_match is not None
+        self.assertNotIn("backdrop-filter:", card_match.group(1))
+
+        self.assertIn("html.is-tab-hidden *", html_doc)
+        self.assertIn("animation-play-state: paused !important;", html_doc)
+        self.assertIn('document.addEventListener("visibilitychange"', html_doc)
+        self.assertNotIn("setInterval(", html_doc)
+
+        # 2) Node verification of computeRenderSignature stability and computeNextPollDelayMs tiers
+        node_bin = shutil.which("node")
+        if node_bin:
+            script_match = re.search(r"<script>(.*)</script>", html_doc, re.S)
+            self.assertIsNotNone(script_match)
+            assert script_match is not None
+            script = script_match.group(1)
+
+            js_check = subprocess.run(
+                [node_bin, "--check"],
+                input=script,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(js_check.returncode, 0, js_check.stderr)
+
+            def _extract_js_fn(src: str, name: str) -> str:
+                marker = f"function {name}("
+                start = src.index(marker)
+                brace_start = src.index("{", start)
+                depth = 0
+                for idx in range(brace_start, len(src)):
+                    ch = src[idx]
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            return src[start : idx + 1]
+                raise AssertionError(f"Unclosed JS function: {name}")
+
+            harness = "\n".join(
+                [
+                    "const state = { authStatus: null, fromCache: false, hasLiveSnapshot: true, selectedRepo: 'ALL', viewMode: 'repos', sidebarCollapsed: false, lang: 'zh', search: '', worktreeOnly: false, alertsOnly: false, readyOnly: false, todoOnly: false, cleanupOnly: false, cleanupDrawerOpen: false, inspectedKey: null, inspectorTab: 'tasks', repoInitRunning: {}, repoInitErrors: {}, repoInitBannerDismissed: false, autoMergeSaving: {} };",
+                    _extract_js_fn(script, "stripVolatilePulse"),
+                    _extract_js_fn(script, "stripVolatileItem"),
+                    _extract_js_fn(script, "stripVolatileRepo"),
+                    _extract_js_fn(script, "computeRenderSignature"),
+                    _extract_js_fn(script, "computeNextPollDelayMs"),
+                    r"""
+const baseSnap = {
+  global: true,
+  repos_config_path: "/tmp/repos.json",
+  generated_at: 1000.1,
+  forge_syncing: false,
+  local_only: false,
+  summary: { active_worktrees: 1, coding_now_count: 0, dirty_worktrees: 0 },
+  repos: [{
+    repo_name: "idd",
+    generated_at: 1000.1,
+    last_seen_at: 1000.0,
+    forge_fetched_at: 990.0,
+    issues: [{ issue_number: 66, stage: "🟡 开发中", pulse: { idle_seconds: 12.1, last_active_ts: 988.0, last_active_ago: "12秒前", dirty_count: 0 } }],
+    local_only_items: [],
+    tasks: [],
+  }],
+  issues: [{ issue_number: 66, stage: "🟡 开发中", pulse: { idle_seconds: 12.1, last_active_ts: 988.0, last_active_ago: "12秒前", dirty_count: 0 } }],
+  local_only_items: [],
+  orphan_changes: [],
+  auth_alerts: [],
+  forge_connections: {},
+  warnings: [],
+  config: { auto_merge: false },
+};
+const nextSnapSameUi = JSON.parse(JSON.stringify(baseSnap));
+nextSnapSameUi.generated_at = 1004.5;
+nextSnapSameUi.repos[0].generated_at = 1004.5;
+nextSnapSameUi.repos[0].last_seen_at = 1004.5;
+nextSnapSameUi.repos[0].forge_fetched_at = 1004.0;
+nextSnapSameUi.repos[0].issues[0].pulse.idle_seconds = 16.5;
+nextSnapSameUi.issues[0].pulse.idle_seconds = 16.5;
+
+const nextSnapChangedUi = JSON.parse(JSON.stringify(nextSnapSameUi));
+nextSnapChangedUi.issues[0].pulse.dirty_count = 2;
+
+const sig1 = computeRenderSignature(baseSnap);
+const sig2 = computeRenderSignature(nextSnapSameUi);
+const sig3 = computeRenderSignature(nextSnapChangedUi);
+if (sig1 !== sig2) {
+  console.error("Expected volatile-only snapshot changes to keep identical render signature");
+  process.exit(1);
+}
+if (sig1 === sig3) {
+  console.error("Expected dirty_count change to invalidate render signature");
+  process.exit(1);
+}
+const delays = {
+  syncing: computeNextPollDelayMs({ forge_syncing: true, summary: { active_worktrees: 0 } }),
+  coding: computeNextPollDelayMs({ forge_syncing: false, summary: { active_worktrees: 1, coding_now_count: 1, dirty_worktrees: 0 } }),
+  dirty: computeNextPollDelayMs({ forge_syncing: false, summary: { active_worktrees: 1, coding_now_count: 0, dirty_worktrees: 1 } }),
+  active: computeNextPollDelayMs({ forge_syncing: false, summary: { active_worktrees: 1, coding_now_count: 0, dirty_worktrees: 0 } }),
+  idle: computeNextPollDelayMs({ forge_syncing: false, summary: { active_worktrees: 0, coding_now_count: 0, dirty_worktrees: 0 } }),
+};
+console.log(JSON.stringify(delays));
+""",
+                ]
+            )
+            node_run = subprocess.run([node_bin, "-e", harness], text=True, capture_output=True)
+            self.assertEqual(node_run.returncode, 0, node_run.stderr)
+            delays = json.loads(node_run.stdout.strip())
+            self.assertEqual(delays, {"syncing": 1200, "coding": 4000, "dirty": 4000, "active": 8000, "idle": 15000})
 
 
 if __name__ == "__main__":

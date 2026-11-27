@@ -35,6 +35,24 @@ import task_status
 _REPOS_LOCK = threading.Lock()
 _CONFIG_LOCK = threading.Lock()
 _IGNORED_GIT_ERROR = (OSError, subprocess.SubprocessError)
+_CACHE_LOCK = threading.Lock()
+_PACKED_REFS_CACHE: dict[str, tuple[tuple[int, int, int] | None, dict[str, str]]] = {}
+_COMMIT_INFO_CACHE: dict[tuple[str, str], tuple[str, float, str]] = {}
+_REPO_META_CACHE: dict[str, tuple[tuple[Any, ...], tuple[bool, str, Any, str]]] = {}
+_WORKTREE_PULSE_CACHE: dict[str, dict[str, Any]] = {}
+_TASK_GIT_META_CACHE: dict[tuple[str, str, str, str], set[str]] = {}
+_IDLE_PULSE_CACHE_TTL = 30.0
+_HEX_OID_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
+
+
+def invalidate_monitor_caches() -> None:
+    """Clear in-process git metadata and worktree pulse caches."""
+    with _CACHE_LOCK:
+        _PACKED_REFS_CACHE.clear()
+        _COMMIT_INFO_CACHE.clear()
+        _REPO_META_CACHE.clear()
+        _WORKTREE_PULSE_CACHE.clear()
+        _TASK_GIT_META_CACHE.clear()
 
 
 def get_repos_path() -> Path:
@@ -145,18 +163,129 @@ def list_git_worktrees_ro(repo_root: Path) -> list[dict[str, str]]:
     return worktrees
 
 
-def resolve_main_worktree_ro(path: Path) -> Path | None:
-    """Return canonical main worktree path if `path` resides inside a Git repository, else None."""
+def _stat_sig(path: Path) -> tuple[int, int, int] | None:
+    """Return lightweight `(mtime_ns, size, ino)` signature for cache invalidation."""
+    try:
+        st = path.stat()
+        return (st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        return None
+
+
+def _resolve_git_dirs_fast(wt_path: Path) -> tuple[Path | None, Path | None]:
+    """Resolve `(git_dir, common_dir)` directly from `.git` without spawning git when possible."""
+    dot_git = wt_path / ".git"
+    git_dir: Path | None = None
+    try:
+        if dot_git.is_dir():
+            git_dir = dot_git.resolve()
+        elif dot_git.is_file():
+            raw = dot_git.read_text(encoding="utf-8", errors="replace").splitlines()
+            if raw and raw[0].startswith("gitdir:"):
+                raw_target = raw[0][len("gitdir:"):].strip()
+                if raw_target:
+                    p = Path(raw_target)
+                    git_dir = p.resolve() if p.is_absolute() else (wt_path / p).resolve()
+    except OSError:
+        git_dir = None
+
+    if git_dir is None:
+        proc = _run_git_ro(wt_path, ["rev-parse", "--git-dir", "--git-common-dir"])
+        if proc is None or proc.returncode != 0:
+            return None, None
+        lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+        if not lines:
+            return None, None
+        gd_p = Path(lines[0])
+        git_dir = gd_p.resolve() if gd_p.is_absolute() else (wt_path / gd_p).resolve()
+        if len(lines) >= 2:
+            cd_p = Path(lines[1])
+            common_dir = cd_p.resolve() if cd_p.is_absolute() else (wt_path / cd_p).resolve()
+            return git_dir, common_dir
+        return git_dir, git_dir
+
+    commondir_file = git_dir / "commondir"
+    try:
+        if commondir_file.is_file():
+            rel_common = commondir_file.read_text(encoding="utf-8", errors="replace").strip()
+            if rel_common:
+                cd_p = Path(rel_common)
+                common_dir = cd_p.resolve() if cd_p.is_absolute() else (git_dir / cd_p).resolve()
+                return git_dir, common_dir
+    except OSError:
+        pass
+    return git_dir, git_dir
+
+
+def _load_packed_refs_fast(common_dir: Path) -> dict[str, str]:
+    packed = common_dir / "packed-refs"
+    sig = _stat_sig(packed)
+    if sig is None:
+        return {}
+    key = str(packed)
+    with _CACHE_LOCK:
+        cached = _PACKED_REFS_CACHE.get(key)
+        if cached is not None and cached[0] == sig:
+            return cached[1]
+    refs: dict[str, str] = {}
+    try:
+        for line in packed.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line or line.startswith("#") or line.startswith("^"):
+                continue
+            parts = line.split(" ", 1)
+            if len(parts) == 2 and _HEX_OID_RE.match(parts[0]):
+                refs[parts[1].strip()] = parts[0]
+    except OSError:
+        return {}
+    with _CACHE_LOCK:
+        if len(_PACKED_REFS_CACHE) > 128:
+            _PACKED_REFS_CACHE.clear()
+        _PACKED_REFS_CACHE[key] = (sig, refs)
+    return refs
+
+
+def _read_ref_oid_fast(common_dir: Path | None, ref_name: str, _depth: int = 0) -> tuple[bool | None, str]:
+    """Return `(exists, oid)` for `ref_name` from loose/packed refs, or `(None, '')` if fallback is needed."""
+    if common_dir is None or _depth > 4:
+        return None, ""
+    if (common_dir / "reftable").is_dir():
+        return None, ""
+    loose = common_dir / ref_name
+    try:
+        if loose.is_file():
+            content = loose.read_text(encoding="utf-8", errors="replace").strip()
+            if content.startswith("ref:"):
+                target = content[len("ref:"):].strip()
+                if target:
+                    return _read_ref_oid_fast(common_dir, target, _depth + 1)
+                return True, ""
+            return True, content if _HEX_OID_RE.match(content) else ""
+    except OSError:
+        return None, ""
+    packed_map = _load_packed_refs_fast(common_dir)
+    if ref_name in packed_map:
+        return True, packed_map[ref_name]
+    return False, ""
+
+
+def _resolve_main_worktree_and_list_ro(path: Path) -> tuple[Path | None, list[dict[str, str]]]:
+    """Return `(canonical_main_worktree, all_worktrees)` using a single `git worktree list` call."""
     target = path.expanduser()
     if not target.is_dir():
-        return None
+        return None, []
     try:
         worktrees = list_git_worktrees_ro(target)
     except ValueError:
-        return None
+        return None, []
     if not worktrees:
-        return None
-    return Path(worktrees[0]["path"]).resolve()
+        return None, []
+    return Path(worktrees[0]["path"]).resolve(), worktrees
+
+
+def resolve_main_worktree_ro(path: Path) -> Path | None:
+    """Return canonical main worktree path if `path` resides inside a Git repository, else None."""
+    main_wt, _ = _resolve_main_worktree_and_list_ro(path)
+    return main_wt
 
 
 def _detect_repo_meta_ro(main_worktree: Path) -> tuple[bool, str]:
@@ -177,6 +306,45 @@ def _detect_repo_meta_ro(main_worktree: Path) -> tuple[bool, str]:
             if p2 and p2.returncode == 0:
                 return has_origin, candidate
     return has_origin, "main"
+
+
+def _detect_repo_meta_and_origin_cached(main_worktree: Path) -> tuple[bool, str, Any, str]:
+    """Return `(has_origin, default_branch, remote_spec, inferred_forge)` cached by git config/ref signatures."""
+    _, common_dir = _resolve_git_dirs_fast(main_worktree)
+    hosts_path = get_hosts_path()
+    env_forge = os.environ.get("IDD_FORGE", "").strip().lower()
+    if common_dir is not None:
+        sig: tuple[Any, ...] = (
+            _stat_sig(common_dir / "config"),
+            _stat_sig(common_dir / "refs" / "remotes" / "origin" / "HEAD"),
+            _stat_sig(common_dir / "packed-refs"),
+            _stat_sig(common_dir / "refs" / "heads" / "main"),
+            _stat_sig(common_dir / "refs" / "heads" / "master"),
+            _stat_sig(hosts_path),
+            str(hosts_path),
+            env_forge,
+        )
+        key = str(main_worktree.resolve())
+        with _CACHE_LOCK:
+            cached = _REPO_META_CACHE.get(key)
+            if cached is not None and cached[0] == sig:
+                return cached[1]
+    else:
+        sig = ()
+        key = ""
+
+    has_origin, default_branch = _detect_repo_meta_ro(main_worktree)
+    remote_spec = None
+    inferred_forge = "local"
+    if has_origin:
+        remote_spec, inferred_forge = inspect_remote_origin(main_worktree)
+    val = (has_origin, default_branch, remote_spec, inferred_forge)
+    if key:
+        with _CACHE_LOCK:
+            if len(_REPO_META_CACHE) > 128:
+                _REPO_META_CACHE.clear()
+            _REPO_META_CACHE[key] = (sig, val)
+    return val
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +440,7 @@ def load_registered_repos(*, prune_missing: bool = True) -> list[dict[str, Any]]
         return entries
 
 
-def register_repo(main_worktree: Path) -> dict[str, Any]:
+def register_repo(main_worktree: Path, *, min_touch_interval: float = 0.0) -> dict[str, Any]:
     """Register or touch a repository main worktree in `repos.json`."""
     resolved = main_worktree.expanduser().resolve()
     key = str(resolved)
@@ -282,20 +450,34 @@ def register_repo(main_worktree: Path) -> dict[str, Any]:
     with _REPOS_LOCK:
         raw_items = _read_raw_repos_unlocked()
         by_path: dict[str, dict[str, Any]] = {}
+        needs_cleanup = False
         for item in raw_items:
             try:
                 p = Path(item["path"]).expanduser().resolve()
             except OSError:
+                needs_cleanup = True
                 continue
             if p.is_dir() and (p / ".git").exists():
+                p_str = str(p)
+                if p_str != item["path"] or p_str in by_path:
+                    needs_cleanup = True
                 rec: dict[str, Any] = {
-                    "path": str(p),
+                    "path": p_str,
                     "name": str(item.get("name") or p.name),
                     "last_seen_at": float(item.get("last_seen_at") or 0.0),
                 }
                 _copy_repo_init_fields(item, rec)
-                by_path[str(p)] = rec
+                by_path[p_str] = rec
+            else:
+                needs_cleanup = True
         prev_entry = by_path.get(key)
+        if (
+            prev_entry is not None
+            and not needs_cleanup
+            and min_touch_interval > 0.0
+            and (now - float(prev_entry.get("last_seen_at") or 0.0)) < min_touch_interval
+        ):
+            return dict(prev_entry)
         if prev_entry:
             _copy_repo_init_fields(prev_entry, entry)
         by_path[key] = entry
@@ -702,12 +884,131 @@ def _format_pulse_summary(
     return " · ".join(parts)
 
 
+def _unquote_git_path(raw_path: str) -> str:
+    p = raw_path.strip()
+    if p.startswith('"') and p.endswith('"') and len(p) >= 2:
+        p = p[1:-1]
+    return p
+
+
+def _parse_porcelain_v2_status(
+    stdout: str,
+) -> tuple[str, str, str, tuple[int, int] | None, int, int, list[dict[str, str]]]:
+    """Parse `git status --porcelain=v2 --branch -uall` output in a single pass."""
+    head_oid = ""
+    head_branch = ""
+    upstream = ""
+    ab: tuple[int, int] | None = None
+    modified_count = 0
+    untracked_count = 0
+    changed_files: list[dict[str, str]] = []
+
+    for line in stdout.splitlines():
+        if not line:
+            continue
+        if line.startswith("# "):
+            if line.startswith("# branch.oid "):
+                head_oid = line[len("# branch.oid "):].strip()
+            elif line.startswith("# branch.head "):
+                head_branch = line[len("# branch.head "):].strip()
+            elif line.startswith("# branch.upstream "):
+                upstream = line[len("# branch.upstream "):].strip()
+            elif line.startswith("# branch.ab "):
+                ab_parts = line[len("# branch.ab "):].strip().split()
+                if len(ab_parts) == 2 and ab_parts[0].startswith("+") and ab_parts[1].startswith("-"):
+                    a_str, b_str = ab_parts[0][1:], ab_parts[1][1:]
+                    if a_str.isdigit() and b_str.isdigit():
+                        ab = (int(a_str), int(b_str))
+            continue
+
+        kind = line[0]
+        if kind == "?":
+            untracked_count += 1
+            rel_path = _unquote_git_path(line[2:])
+            if len(changed_files) < 20:
+                changed_files.append({"code": "??", "path": rel_path})
+        elif kind == "1":
+            parts = line.split(" ", 8)
+            if len(parts) < 9:
+                continue
+            modified_count += 1
+            xy = parts[1].replace(".", " ")
+            code = xy.strip() or xy
+            rel_path = _unquote_git_path(parts[8])
+            if len(changed_files) < 20:
+                changed_files.append({"code": code, "path": rel_path})
+        elif kind == "2":
+            parts = line.split(" ", 9)
+            if len(parts) < 10:
+                continue
+            modified_count += 1
+            xy = parts[1].replace(".", " ")
+            code = xy.strip() or xy
+            rel_path = _unquote_git_path(parts[9].split("\t", 1)[0])
+            if len(changed_files) < 20:
+                changed_files.append({"code": code, "path": rel_path})
+        elif kind == "u":
+            parts = line.split(" ", 10)
+            if len(parts) < 11:
+                continue
+            modified_count += 1
+            xy = parts[1].replace(".", " ")
+            code = xy.strip() or xy
+            rel_path = _unquote_git_path(parts[10])
+            if len(changed_files) < 20:
+                changed_files.append({"code": code, "path": rel_path})
+
+    return head_oid, head_branch, upstream, ab, modified_count, untracked_count, changed_files
+
+
+def _get_commit_info_cached(
+    wt_path: Path,
+    common_dir: Path | None,
+    head_oid: str,
+) -> tuple[str, float, str]:
+    """Return `(short_sha, commit_ts, subject)` for HEAD, cached by immutable `(common_dir, head_oid)`."""
+    if head_oid == "(initial)":
+        return "", 0.0, ""
+    cache_key: tuple[str, str] | None = None
+    if common_dir is not None and head_oid and _HEX_OID_RE.match(head_oid):
+        cache_key = (str(common_dir), head_oid)
+        with _CACHE_LOCK:
+            cached = _COMMIT_INFO_CACHE.get(cache_key)
+            if cached is not None:
+                return cached
+
+    last_commit_sha = ""
+    last_commit_ts = 0.0
+    last_commit_subject = ""
+    log_proc = _run_git_ro(wt_path, ["log", "-1", "--format=%h%x1f%ct%x1f%s"])
+    if log_proc and log_proc.returncode == 0 and log_proc.stdout.strip():
+        parts = log_proc.stdout.strip().split("\x1f", 2)
+        if len(parts) >= 2:
+            last_commit_sha = parts[0].strip()
+            try:
+                last_commit_ts = float(parts[1].strip())
+            except ValueError:
+                pass
+        if len(parts) == 3:
+            last_commit_subject = parts[2].strip()
+        if cache_key is not None and last_commit_sha:
+            with _CACHE_LOCK:
+                if len(_COMMIT_INFO_CACHE) > 1024:
+                    _COMMIT_INFO_CACHE.clear()
+                _COMMIT_INFO_CACHE[cache_key] = (last_commit_sha, last_commit_ts, last_commit_subject)
+    return last_commit_sha, last_commit_ts, last_commit_subject
+
+
 def _inspect_remote_sync_ro(
     wt_path: Path,
     *,
     branch: str = "",
     has_origin: bool | None = None,
     default_branch: str = "main",
+    common_dir: Path | None = None,
+    head_oid: str = "",
+    upstream_hint: str | None = None,
+    ab_hint: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """Inspect local-only remote-tracking & unpushed commit status without network calls."""
     result: dict[str, Any] = {
@@ -734,16 +1035,40 @@ def _inspect_remote_sync_ro(
     if not branch or branch == "(detached)":
         return result
 
-    up_proc = _run_git_ro(wt_path, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
-    upstream = up_proc.stdout.strip() if up_proc and up_proc.returncode == 0 else ""
+    if upstream_hint is not None:
+        upstream = upstream_hint
+    else:
+        up_proc = _run_git_ro(wt_path, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+        upstream = up_proc.stdout.strip() if up_proc and up_proc.returncode == 0 else ""
     result["upstream"] = upstream
     if branch != default_branch and upstream == f"origin/{default_branch}":
         result["upstream_misbound"] = True
 
-    rem_ref_proc = _run_git_ro(wt_path, ["show-ref", "--verify", "--quiet", f"refs/remotes/origin/{branch}"])
-    if rem_ref_proc and rem_ref_proc.returncode == 0:
+    expected_upstream = f"origin/{branch}"
+    if upstream == expected_upstream and ab_hint is not None:
         result["remote_branch_exists"] = True
-        lr_proc = _run_git_ro(wt_path, ["rev-list", "--left-right", "--count", f"refs/remotes/origin/{branch}...HEAD"])
+        result["unpushed_commits"] = ab_hint[0]
+        result["behind_commits"] = ab_hint[1]
+        result["remote_state"] = "ahead" if ab_hint[0] > 0 else "synced"
+        return result
+
+    if common_dir is None:
+        _, common_dir = _resolve_git_dirs_fast(wt_path)
+
+    origin_ref = f"refs/remotes/origin/{branch}"
+    rem_exists, rem_oid = _read_ref_oid_fast(common_dir, origin_ref)
+    if rem_exists is None:
+        rem_ref_proc = _run_git_ro(wt_path, ["show-ref", "--verify", "--quiet", origin_ref])
+        rem_exists = bool(rem_ref_proc and rem_ref_proc.returncode == 0)
+
+    if rem_exists:
+        result["remote_branch_exists"] = True
+        if head_oid and rem_oid and head_oid == rem_oid:
+            result["behind_commits"] = 0
+            result["unpushed_commits"] = 0
+            result["remote_state"] = "synced"
+            return result
+        lr_proc = _run_git_ro(wt_path, ["rev-list", "--left-right", "--count", f"{origin_ref}...HEAD"])
         if lr_proc and lr_proc.returncode == 0 and lr_proc.stdout.strip():
             counts = lr_proc.stdout.strip().split()
             if len(counts) == 2 and counts[0].isdigit() and counts[1].isdigit():
@@ -753,13 +1078,88 @@ def _inspect_remote_sync_ro(
     else:
         result["remote_branch_exists"] = False
         result["remote_state"] = "unpushed_branch"
-        base_ref_proc = _run_git_ro(wt_path, ["show-ref", "--verify", "--quiet", f"refs/remotes/origin/{default_branch}"])
-        if base_ref_proc and base_ref_proc.returncode == 0:
-            ahead_proc = _run_git_ro(wt_path, ["rev-list", "--count", f"refs/remotes/origin/{default_branch}..HEAD"])
-            if ahead_proc and ahead_proc.returncode == 0 and ahead_proc.stdout.strip().isdigit():
-                result["unpushed_commits"] = int(ahead_proc.stdout.strip())
+        base_ref = f"refs/remotes/origin/{default_branch}"
+        base_exists, base_oid = _read_ref_oid_fast(common_dir, base_ref)
+        if base_exists is None:
+            base_ref_proc = _run_git_ro(wt_path, ["show-ref", "--verify", "--quiet", base_ref])
+            base_exists = bool(base_ref_proc and base_ref_proc.returncode == 0)
+        if base_exists:
+            if head_oid and base_oid and head_oid == base_oid:
+                result["unpushed_commits"] = 0
+            elif head_oid != "(initial)":
+                ahead_proc = _run_git_ro(wt_path, ["rev-list", "--count", f"{base_ref}..HEAD"])
+                if ahead_proc and ahead_proc.returncode == 0 and ahead_proc.stdout.strip().isdigit():
+                    result["unpushed_commits"] = int(ahead_proc.stdout.strip())
 
     return result
+
+
+def _worktree_fast_fingerprint(
+    wt_path: Path,
+    *,
+    branch: str,
+    default_branch: str,
+    has_origin: bool,
+) -> tuple[Any, ...] | None:
+    """Compute a zero-subprocess filesystem fingerprint for a git worktree."""
+    git_dir, common_dir = _resolve_git_dirs_fast(wt_path)
+    if git_dir is None or common_dir is None:
+        return None
+    head_sig = _stat_sig(git_dir / "HEAD")
+    index_sig = _stat_sig(git_dir / "index")
+    wt_sig = _stat_sig(wt_path)
+    task_sig = _stat_sig(wt_path / "TASK")
+    git_op_flags = (
+        (git_dir / "rebase-merge").exists(),
+        (git_dir / "rebase-apply").exists(),
+        (git_dir / "MERGE_HEAD").exists(),
+    )
+    remote_ref_state: tuple[bool | None, str] = (False, "")
+    base_ref_state: tuple[bool | None, str] = (False, "")
+    if has_origin:
+        if branch and branch != "(detached)":
+            remote_ref_state = _read_ref_oid_fast(common_dir, f"refs/remotes/origin/{branch}")
+        base_ref_state = _read_ref_oid_fast(common_dir, f"refs/remotes/origin/{default_branch}")
+    return (
+        head_sig,
+        index_sig,
+        wt_sig,
+        task_sig,
+        git_op_flags,
+        branch,
+        default_branch,
+        has_origin,
+        remote_ref_state,
+        base_ref_state,
+    )
+
+
+def _refresh_cached_pulse_timestamps(cached_pulse: dict[str, Any], *, in_progress_count: int) -> dict[str, Any]:
+    """Recompute live relative timestamps on a cached pulse dict without running git."""
+    pulse = dict(cached_pulse)
+    last_active_ts = float(pulse.get("last_active_ts") or 0.0)
+    idle_seconds = max(0.0, time.time() - last_active_ts) if last_active_ts > 0 else -1.0
+    last_active_ago = format_relative_time(idle_seconds)
+    has_active_work = bool(
+        int(pulse.get("dirty_count") or 0) > 0
+        or in_progress_count > 0
+        or str(pulse.get("git_op") or "")
+    )
+    activity_state = _classify_activity(idle_seconds, has_active_work)
+    pulse["idle_seconds"] = round(idle_seconds, 1) if idle_seconds >= 0 else -1.0
+    pulse["last_active_ago"] = last_active_ago
+    pulse["activity_state"] = activity_state
+    pulse["pulse_summary"] = _format_pulse_summary(
+        activity_state,
+        last_active_ago,
+        int(pulse.get("dirty_count") or 0),
+        int(pulse.get("insertions") or 0),
+        int(pulse.get("deletions") or 0),
+        str(pulse.get("git_op") or ""),
+        remote_state=str(pulse.get("remote_state") or ""),
+        unpushed_commits=int(pulse.get("unpushed_commits") or 0),
+    )
+    return pulse
 
 
 def inspect_worktree_pulse(
@@ -775,26 +1175,30 @@ def inspect_worktree_pulse(
     changed_files: list[dict[str, str]] = []
     modified_count = 0
     untracked_count = 0
+    head_oid = ""
+    head_branch = ""
+    upstream_hint: str | None = None
+    ab_hint: tuple[int, int] | None = None
+    git_dir: Path | None = None
+    common_dir: Path | None = None
 
     if wt_path.is_dir():
-        st_proc = _run_git_ro(wt_path, ["status", "--porcelain=v1", "-uall"])
+        git_dir, common_dir = _resolve_git_dirs_fast(wt_path)
+        st_proc = _run_git_ro(wt_path, ["status", "--porcelain=v2", "--branch", "-uall"])
         if st_proc and st_proc.returncode == 0:
-            for line in st_proc.stdout.splitlines():
-                if len(line) < 4:
-                    continue
-                code = line[:2]
-                raw_path = line[3:].strip()
-                if raw_path.startswith('"') and raw_path.endswith('"') and len(raw_path) >= 2:
-                    raw_path = raw_path[1:-1]
-                rel_path = raw_path.split(" -> ", 1)[1].strip() if " -> " in raw_path else raw_path
-                if code == "??":
-                    untracked_count += 1
-                else:
-                    modified_count += 1
-                if len(changed_files) < 20:
-                    changed_files.append({"code": code.strip() or code, "path": rel_path})
+            (
+                head_oid,
+                head_branch,
+                upstream_str,
+                ab_hint,
+                modified_count,
+                untracked_count,
+                changed_files,
+            ) = _parse_porcelain_v2_status(st_proc.stdout)
+            upstream_hint = upstream_str
+            for item in changed_files:
                 try:
-                    mtimes.append((wt_path / rel_path).lstat().st_mtime)
+                    mtimes.append((wt_path / item["path"]).lstat().st_mtime)
                 except OSError:
                     pass
 
@@ -819,34 +1223,25 @@ def inspect_worktree_pulse(
     last_commit_ts = 0.0
     last_commit_subject = ""
     if wt_path.is_dir():
-        log_proc = _run_git_ro(wt_path, ["log", "-1", "--format=%h%x1f%ct%x1f%s"])
-        if log_proc and log_proc.returncode == 0 and log_proc.stdout.strip():
-            parts = log_proc.stdout.strip().split("\x1f", 2)
-            if len(parts) >= 2:
-                last_commit_sha = parts[0].strip()
-                try:
-                    last_commit_ts = float(parts[1].strip())
-                    mtimes.append(last_commit_ts)
-                except ValueError:
-                    pass
-            if len(parts) == 3:
-                last_commit_subject = parts[2].strip()
+        last_commit_sha, last_commit_ts, last_commit_subject = _get_commit_info_cached(
+            wt_path,
+            common_dir,
+            head_oid,
+        )
+        if last_commit_ts > 0:
+            mtimes.append(last_commit_ts)
 
     git_op = ""
-    if wt_path.is_dir():
-        gd_proc = _run_git_ro(wt_path, ["rev-parse", "--git-dir"])
-        if gd_proc and gd_proc.returncode == 0 and gd_proc.stdout.strip():
-            raw_gd = Path(gd_proc.stdout.strip())
-            git_dir = raw_gd if raw_gd.is_absolute() else (wt_path / raw_gd).resolve()
-            for fname in ("index", "HEAD"):
-                try:
-                    mtimes.append((git_dir / fname).stat().st_mtime)
-                except OSError:
-                    pass
-            if (git_dir / "rebase-merge").exists() or (git_dir / "rebase-apply").exists():
-                git_op = "rebasing"
-            elif (git_dir / "MERGE_HEAD").exists():
-                git_op = "merging"
+    if wt_path.is_dir() and git_dir is not None:
+        for fname in ("index", "HEAD"):
+            try:
+                mtimes.append((git_dir / fname).stat().st_mtime)
+            except OSError:
+                pass
+        if (git_dir / "rebase-merge").exists() or (git_dir / "rebase-apply").exists():
+            git_op = "rebasing"
+        elif (git_dir / "MERGE_HEAD").exists():
+            git_op = "merging"
 
     task_dir = wt_path / "TASK"
     if task_dir.is_dir():
@@ -864,11 +1259,16 @@ def inspect_worktree_pulse(
     last_active_ago = format_relative_time(idle_seconds)
     has_active_work = bool(dirty_count > 0 or in_progress_count > 0 or git_op)
     activity_state = _classify_activity(idle_seconds, has_active_work)
+    effective_branch = branch or head_branch
     remote_sync = _inspect_remote_sync_ro(
         wt_path,
-        branch=branch,
+        branch=effective_branch,
         has_origin=has_origin,
         default_branch=default_branch,
+        common_dir=common_dir,
+        head_oid=head_oid,
+        upstream_hint=upstream_hint,
+        ab_hint=ab_hint,
     )
     pulse_summary = _format_pulse_summary(
         activity_state,
@@ -905,6 +1305,68 @@ def inspect_worktree_pulse(
         "upstream_misbound": remote_sync["upstream_misbound"],
         "pulse_summary": pulse_summary,
     }
+
+
+def _probe_worktree_pulse_cached(
+    wt_path: Path,
+    *,
+    in_progress_count: int = 0,
+    branch: str = "",
+    has_origin: bool = False,
+    default_branch: str = "main",
+    allow_idle_cache: bool = False,
+    idle_ttl: float = _IDLE_PULSE_CACHE_TTL,
+) -> dict[str, Any]:
+    """Return cached pulse for unchanged clean idle worktrees, or run `inspect_worktree_pulse`."""
+    wt_key = str(wt_path)
+    fp: tuple[Any, ...] | None = None
+    if allow_idle_cache and idle_ttl > 0:
+        fp = _worktree_fast_fingerprint(
+            wt_path,
+            branch=branch,
+            default_branch=default_branch,
+            has_origin=has_origin,
+        )
+        if fp is not None:
+            now_mono = time.monotonic()
+            with _CACHE_LOCK:
+                entry = _WORKTREE_PULSE_CACHE.get(wt_key)
+                if (
+                    entry is not None
+                    and entry.get("fp") == fp
+                    and (now_mono - float(entry.get("checked_at") or 0.0)) < idle_ttl
+                ):
+                    return _refresh_cached_pulse_timestamps(entry["pulse"], in_progress_count=in_progress_count)
+
+    pulse = inspect_worktree_pulse(
+        wt_path,
+        in_progress_count=in_progress_count,
+        branch=branch,
+        has_origin=has_origin,
+        default_branch=default_branch,
+    )
+
+    if allow_idle_cache and idle_ttl > 0:
+        looks_post_land = str(pulse.get("last_commit_subject") or "").startswith("chore: 清理已汇总的任务记录")
+        is_clean_idle = (
+            int(pulse.get("dirty_count") or 0) == 0
+            and not str(pulse.get("git_op") or "")
+            and in_progress_count == 0
+            and (looks_post_land or float(pulse.get("idle_seconds") or 0.0) >= 300.0)
+        )
+        if is_clean_idle and fp is not None:
+            with _CACHE_LOCK:
+                if len(_WORKTREE_PULSE_CACHE) > 512:
+                    _WORKTREE_PULSE_CACHE.clear()
+                _WORKTREE_PULSE_CACHE[wt_key] = {
+                    "fp": fp,
+                    "checked_at": time.monotonic(),
+                    "pulse": dict(pulse),
+                }
+        else:
+            with _CACHE_LOCK:
+                _WORKTREE_PULSE_CACHE.pop(wt_key, None)
+    return pulse
 
 
 # ---------------------------------------------------------------------------
@@ -1330,17 +1792,53 @@ def _get_worktree_dirty_task_dirs(wt_path: Path) -> set[str]:
     return set()
 
 
+def _read_head_and_base_oids_fast(wt_path: Path, default_branch: str) -> tuple[Path | None, str, str]:
+    """Resolve `(common_dir, head_oid, base_oid)` without git subprocesses when possible."""
+    git_dir, common_dir = _resolve_git_dirs_fast(wt_path)
+    if git_dir is None or common_dir is None:
+        return None, "", ""
+    head_oid = ""
+    try:
+        head_txt = (git_dir / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+        if head_txt.startswith("ref:"):
+            _, head_oid = _read_ref_oid_fast(common_dir, head_txt[len("ref:"):].strip())
+        elif _HEX_OID_RE.match(head_txt):
+            head_oid = head_txt
+    except OSError:
+        head_oid = ""
+    base_oid = ""
+    for ref_name in (f"refs/heads/{default_branch}", f"refs/remotes/origin/{default_branch}"):
+        exists, oid = _read_ref_oid_fast(common_dir, ref_name)
+        if exists and oid:
+            base_oid = oid
+            break
+    return common_dir, head_oid, base_oid
+
+
 def _get_worktree_base_task_dirs(wt_path: Path, default_branch: str) -> set[str]:
     """List TASK/<dir> entries present at merge-base(default_branch, HEAD) so older branches ignore cleaned legacy dirs."""
+    common_dir, head_oid, base_oid = _read_head_and_base_oids_fast(wt_path, default_branch)
+    cache_key = ("base", str(common_dir), base_oid, head_oid) if (common_dir and head_oid and base_oid) else None
+    if cache_key is not None:
+        with _CACHE_LOCK:
+            cached = _TASK_GIT_META_CACHE.get(cache_key)
+            if cached is not None:
+                return set(cached)
+    result: set[str] = set()
     for base_ref in (default_branch, f"origin/{default_branch}"):
         mb_proc = _run_git_ro(wt_path, ["merge-base", base_ref, "HEAD"])
         if mb_proc and mb_proc.returncode == 0 and mb_proc.stdout.strip():
             mb_sha = mb_proc.stdout.strip()
             tree_proc = _run_git_ro(wt_path, ["ls-tree", "-d", "--name-only", f"{mb_sha}:TASK"])
             if tree_proc and tree_proc.returncode == 0 and tree_proc.stdout.strip():
-                return {line.strip() for line in tree_proc.stdout.splitlines() if line.strip()}
-            return set()
-    return set()
+                result = {line.strip() for line in tree_proc.stdout.splitlines() if line.strip()}
+            break
+    if cache_key is not None:
+        with _CACHE_LOCK:
+            if len(_TASK_GIT_META_CACHE) > 512:
+                _TASK_GIT_META_CACHE.clear()
+            _TASK_GIT_META_CACHE[cache_key] = set(result)
+    return result
 
 
 def _get_worktree_touched_task_dirs(
@@ -1352,11 +1850,25 @@ def _get_worktree_touched_task_dirs(
 ) -> set[str]:
     touched: set[str] = set(dirty_dirs) if dirty_dirs is not None else _get_worktree_dirty_task_dirs(wt_path)
     if not is_main:
+        common_dir, head_oid, base_oid = _read_head_and_base_oids_fast(wt_path, default_branch)
+        cache_key = ("diff", str(common_dir), base_oid, head_oid) if (common_dir and head_oid and base_oid) else None
+        if cache_key is not None:
+            with _CACHE_LOCK:
+                cached = _TASK_GIT_META_CACHE.get(cache_key)
+                if cached is not None:
+                    return touched | cached
+        committed: set[str] = set()
         for base_ref in (default_branch, f"origin/{default_branch}"):
             diff_proc = _run_git_ro(wt_path, ["diff", "--name-only", f"{base_ref}...HEAD", "--", "TASK"])
             if diff_proc and diff_proc.returncode == 0:
-                touched |= _extract_task_dirs_from_paths(diff_proc.stdout.splitlines(), strip_porcelain=False)
+                committed = _extract_task_dirs_from_paths(diff_proc.stdout.splitlines(), strip_porcelain=False)
                 break
+        if cache_key is not None:
+            with _CACHE_LOCK:
+                if len(_TASK_GIT_META_CACHE) > 512:
+                    _TASK_GIT_META_CACHE.clear()
+                _TASK_GIT_META_CACHE[cache_key] = set(committed)
+        touched |= committed
     return touched
 
 
@@ -1527,20 +2039,22 @@ def collect_repo_snapshot(
     force_refresh: bool = False,
     allow_stale_async: bool = False,
     register: bool = True,
+    _prelisted_worktrees: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Collect unified task + worktree pulse + remote PR/MR/Issue snapshot for a repo or TASK/ dir."""
     resolved = root.expanduser().resolve()
-    main_wt = resolve_main_worktree_ro(resolved)
+    if _prelisted_worktrees:
+        main_wt = Path(_prelisted_worktrees[0]["path"]).resolve()
+        all_worktrees = _prelisted_worktrees
+    else:
+        main_wt, all_worktrees = _resolve_main_worktree_and_list_ro(resolved)
 
     remote_spec = None
     inferred_forge = "local"
     if main_wt is not None:
         if register:
-            register_repo(main_wt)
-        has_origin, default_branch = _detect_repo_meta_ro(main_wt)
-        all_worktrees = list_git_worktrees_ro(main_wt)
-        if has_origin:
-            remote_spec, inferred_forge = inspect_remote_origin(main_wt)
+            register_repo(main_wt, min_touch_interval=60.0 if allow_stale_async else 0.0)
+        has_origin, default_branch, remote_spec, inferred_forge = _detect_repo_meta_and_origin_cached(main_wt)
         wt_data = _collect_all_worktrees_ro(
             main_wt,
             issue_filter,
@@ -1631,13 +2145,23 @@ def collect_repo_snapshot(
         if w.get("path")
     }
 
+    extra_wt_by_str = {wt_str: (wt, wt_p) for wt, wt_p, wt_str in extra_worktrees}
+    use_idle_cache = bool(not force_refresh and (allow_stale_async or forge_cache is not None))
+
     def probe_wt(wt_str: str) -> tuple[str, dict[str, Any]]:
-        return wt_str, inspect_worktree_pulse(
-            Path(wt_str),
+        wt_p = Path(wt_str)
+        br = branch_by_wt.get(wt_str, "")
+        candidate_idle = False
+        if use_idle_cache and wt_str in extra_wt_by_str:
+            inum = _infer_worktree_issue_num(br, wt_p)
+            candidate_idle = not (inum is not None and inum in open_issue_numbers)
+        return wt_str, _probe_worktree_pulse_cached(
+            wt_p,
             in_progress_count=in_progress_by_wt.get(wt_str, 0),
-            branch=branch_by_wt.get(wt_str, ""),
+            branch=br,
             has_origin=has_origin,
             default_branch=default_branch,
+            allow_idle_cache=candidate_idle,
         )
 
     pulse_by_wt: dict[str, dict[str, Any]] = {}
@@ -2177,10 +2701,12 @@ def collect_global_snapshot(
     allow_stale_async: bool = False,
 ) -> dict[str, Any]:
     """Aggregate live status snapshots across all registered repositories on this machine."""
+    prelisted_worktrees: dict[str, list[dict[str, str]]] = {}
     if current_cwd is not None:
-        cur_main = resolve_main_worktree_ro(current_cwd)
+        cur_main, cur_wts = _resolve_main_worktree_and_list_ro(current_cwd)
         if cur_main is not None:
-            register_repo(cur_main)
+            prelisted_worktrees[str(cur_main)] = cur_wts
+            register_repo(cur_main, min_touch_interval=60.0 if allow_stale_async else 0.0)
 
     registered = load_registered_repos(prune_missing=True)
     cache = forge_cache if forge_cache is not None else ForgeSnapshotCache(ttl_seconds=0.0)
@@ -2196,6 +2722,7 @@ def collect_global_snapshot(
                 force_refresh=force_refresh,
                 allow_stale_async=allow_stale_async,
                 register=False,
+                _prelisted_worktrees=prelisted_worktrees.get(str(repo_path.resolve())),
             )
             snap["last_seen_at"] = rec.get("last_seen_at", 0.0)
             return rec, snap, None

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+from typing import Callable
 import urllib.parse
 import webbrowser
 
@@ -93,8 +94,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
       --bar-muted: rgba(255, 255, 255, 0.28);
       --skel-base: rgba(255, 255, 255, 0.06);
       --skel-shine: rgba(255, 255, 255, 0.13);
-      --glass-blur: blur(20px) saturate(150%);
-      --glass-blur-sm: blur(18px) saturate(155%);
+      --glass-blur: blur(14px) saturate(140%);
+      --glass-blur-sm: blur(12px) saturate(140%);
       --shadow-sidebar: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 10px 30px rgba(0, 0, 0, 0.32);
       --shadow-section: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 10px 30px rgba(0, 0, 0, 0.30);
       --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 -1px 0 rgba(0, 0, 0, 0.25), 0 8px 24px rgba(0, 0, 0, 0.32);
@@ -173,8 +174,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
       --bar-muted: rgba(15, 23, 42, 0.24);
       --skel-base: rgba(15, 23, 42, 0.065);
       --skel-shine: rgba(15, 23, 42, 0.13);
-      --glass-blur: blur(20px) saturate(160%);
-      --glass-blur-sm: blur(16px) saturate(165%);
+      --glass-blur: blur(14px) saturate(145%);
+      --glass-blur-sm: blur(12px) saturate(145%);
       --shadow-sidebar: inset 0 1px 0 rgba(255, 255, 255, 0.92), 0 0 0 1px rgba(15, 23, 42, 0.05), 0 8px 28px rgba(15, 23, 42, 0.04);
       --shadow-section: inset 0 1px 0 rgba(255, 255, 255, 0.88), 0 0 0 1px rgba(15, 23, 42, 0.05), 0 8px 26px rgba(15, 23, 42, 0.035);
       --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.96), inset 0 -1px 0 rgba(15, 23, 42, 0.025), 0 0 0 1px rgba(15, 23, 42, 0.055), 0 4px 16px rgba(15, 23, 42, 0.045);
@@ -1154,7 +1155,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: transparent;
       border-radius: 6px;
     }
-    .live-pill.is-live .dot-pulse { background: var(--green); animation: pulse 2s infinite; }
+    .live-pill.is-live .dot-pulse { background: var(--green); box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.22); }
     .live-pill.is-loading .dot-pulse,
     .live-pill.is-syncing .dot-pulse { background: var(--accent); animation: pulse 1.2s infinite; }
     .live-pill.is-loading,
@@ -1189,6 +1190,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
       width: 38%;
       border-radius: 999px;
       background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      animation: none;
+    }
+    .top-progress.is-active .top-progress-bar {
       animation: topProgressSlide 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
     }
     @keyframes topProgressSlide {
@@ -1270,6 +1274,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
       .btn.spin svg {
         animation: none !important;
       }
+    }
+    html.is-tab-hidden *,
+    html.is-tab-hidden *::before,
+    html.is-tab-hidden *::after {
+      animation-play-state: paused !important;
     }
 
     /* Unified Silky Row-2 Overview & Filter Strip */
@@ -1523,8 +1532,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
     }
     .bento-card {
       background: var(--bg-card);
-      backdrop-filter: var(--glass-blur-sm);
-      -webkit-backdrop-filter: var(--glass-blur-sm);
       border: 1px solid var(--border);
       border-radius: 14px;
       padding: 13px 15px 12px;
@@ -1853,8 +1860,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
     .card {
       background: var(--bg-card);
-      backdrop-filter: var(--glass-blur-sm);
-      -webkit-backdrop-filter: var(--glass-blur-sm);
       border: 1px solid var(--border);
       box-shadow: var(--shadow-card);
       border-radius: var(--radius-card);
@@ -6839,15 +6844,43 @@ BOARD_HTML = r"""<!DOCTYPE html>
         topWrap.innerHTML = authHtml + policyHtml;
       }
 
+      function stripVolatilePulse(pulse) {
+        if (!pulse || typeof pulse !== "object") return pulse;
+        const copy = Object.assign({}, pulse);
+        delete copy.idle_seconds;
+        delete copy.last_active_ts;
+        return copy;
+      }
+
+      function stripVolatileItem(item) {
+        if (!item || typeof item !== "object") return item;
+        if (!item.pulse) return item;
+        const copy = Object.assign({}, item);
+        copy.pulse = stripVolatilePulse(item.pulse);
+        return copy;
+      }
+
+      function stripVolatileRepo(repo) {
+        if (!repo || typeof repo !== "object") return repo;
+        const copy = Object.assign({}, repo);
+        delete copy.generated_at;
+        delete copy.last_seen_at;
+        delete copy.forge_fetched_at;
+        if (Array.isArray(copy.issues)) copy.issues = copy.issues.map(stripVolatileItem);
+        if (Array.isArray(copy.local_only_items)) copy.local_only_items = copy.local_only_items.map(stripVolatileItem);
+        if (Array.isArray(copy.tasks)) copy.tasks = copy.tasks.map(stripVolatileItem);
+        return copy;
+      }
+
       function computeRenderSignature(snap) {
         if (!snap) return "";
         return JSON.stringify({
           g: snap.global,
           rc: snap.repos_config_path,
           s: snap.summary,
-          r: snap.repos,
-          i: snap.issues,
-          l: snap.local_only_items,
+          r: Array.isArray(snap.repos) ? snap.repos.map(stripVolatileRepo) : snap.repos,
+          i: Array.isArray(snap.issues) ? snap.issues.map(stripVolatileItem) : snap.issues,
+          l: Array.isArray(snap.local_only_items) ? snap.local_only_items.map(stripVolatileItem) : snap.local_only_items,
           o: snap.orphan_changes,
           aa: snap.auth_alerts,
           fs: snap.forge_syncing,
@@ -6882,22 +6915,60 @@ BOARD_HTML = r"""<!DOCTYPE html>
         });
       }
 
+      function computeNextPollDelayMs(snap) {
+        if (snap && snap.forge_syncing) return 1200;
+        const s = snap && snap.summary;
+        if (!s) return 4000;
+        if (Number(s.coding_now_count || 0) > 0 || Number(s.dirty_worktrees || 0) > 0) {
+          return 4000;
+        }
+        if (Number(s.active_worktrees || 0) > 0) {
+          return 8000;
+        }
+        return 15000;
+      }
+
+      function clearPollTimers() {
+        if (state.timerId) {
+          clearTimeout(state.timerId);
+          state.timerId = null;
+        }
+        if (state.quickSyncTimerId) {
+          clearTimeout(state.quickSyncTimerId);
+          state.quickSyncTimerId = null;
+        }
+      }
+
+      function scheduleNextPoll(delayOverrideMs) {
+        clearPollTimers();
+        if (state.paused || document.hidden) return;
+        const delay = typeof delayOverrideMs === "number" ? delayOverrideMs : computeNextPollDelayMs(state.snapshot);
+        state.timerId = setTimeout(() => {
+          state.timerId = null;
+          if (!state.paused && !document.hidden) {
+            fetchSnapshot(false);
+          }
+        }, delay);
+      }
+
       function renderAll(force) {
         const snap = state.snapshot;
         if (!snap) {
           syncHeaderControls();
           updateConnectionBadge(!state.initError, state.initError);
           renderLoadingState();
-          return;
+          return true;
         }
 
         state.lastClockStr = formatClock(snap.generated_at);
         const updatedTag = document.getElementById("updated-tag");
-        if (updatedTag) updatedTag.textContent = state.lastClockStr;
+        if (updatedTag && updatedTag.textContent !== state.lastClockStr) {
+          updatedTag.textContent = state.lastClockStr;
+        }
 
         const sig = computeRenderSignature(snap);
         if (!force && sig === state.lastSig) {
-          return;
+          return false;
         }
         state.lastSig = sig;
 
@@ -6932,10 +7003,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
           footerEl._lastHtml = footerHtml;
           footerEl.innerHTML = footerHtml;
         }
+        return true;
       }
 
       async function fetchSnapshot(forceRefresh) {
         if (state.fetching && !forceRefresh) return;
+        clearPollTimers();
         state.fetching = true;
         if (forceRefresh) state.manualRefreshing = true;
         if (!state.snapshot && !state.slowInitTimerId) {
@@ -6972,7 +7045,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
           }
           state.initError = "";
           state.slowInit = false;
-          setTimeout(() => saveCachedSnapshot(nextSnap), 0);
           if (!state.didAutoInspect) {
             state.didAutoInspect = true;
             const qInspect = urlParams.get("inspect");
@@ -6985,7 +7057,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
           }
           state.lastClockStr = formatClock(state.snapshot.generated_at);
           updateConnectionBadge(true);
-          renderAll(false);
+          const didRender = renderAll(false);
+          if (didRender) {
+            setTimeout(() => saveCachedSnapshot(nextSnap), 0);
+          }
           if (!state.didCheckOnboarding) {
             const qOnb = urlParams.get("onboarding");
             const forceOnb = qOnb === "1" || qOnb === "guide";
@@ -7002,10 +7077,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 }
               }
             }
-          }
-          clearTimeout(state.quickSyncTimerId);
-          if (state.snapshot && state.snapshot.forge_syncing && !state.paused) {
-            state.quickSyncTimerId = setTimeout(() => fetchSnapshot(false), 800);
           }
           if (forceRefresh) {
             if (state.snapshot && state.snapshot.local_only) {
@@ -7036,6 +7107,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           state.fetching = false;
           if (forceRefresh) state.manualRefreshing = false;
           syncHeaderControls();
+          scheduleNextPoll();
         }
       }
 
@@ -7527,9 +7599,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
       document.getElementById("pause-btn").addEventListener("click", () => {
         state.paused = !state.paused;
+        if (state.paused) {
+          clearPollTimers();
+        }
         syncHeaderControls();
         updateConnectionBadge(true);
-        if (!state.paused) fetchSnapshot(false);
+        if (!state.paused && !document.hidden) fetchSnapshot(false);
       });
 
       document.getElementById("forge-status-group").addEventListener("click", (e) => {
@@ -7690,14 +7765,24 @@ BOARD_HTML = r"""<!DOCTYPE html>
         state.initialLoadSettled = true;
         state.lastClockStr = formatClock(cachedSnap.generated_at);
       }
+      document.addEventListener("visibilitychange", () => {
+        const hidden = Boolean(document.hidden);
+        document.documentElement.classList.toggle("is-tab-hidden", hidden);
+        if (hidden) {
+          clearPollTimers();
+        } else if (!state.paused) {
+          fetchSnapshot(false);
+        }
+      });
+
+      document.documentElement.classList.toggle("is-tab-hidden", Boolean(document.hidden));
       syncHeaderControls();
       updateConnectionBadge(true);
       renderAll(true);
-      fetchSnapshot(false);
       fetchAuthStatus();
-      state.timerId = setInterval(() => {
-        if (!state.paused) fetchSnapshot(false);
-      }, 2000);
+      if (!document.hidden) {
+        fetchSnapshot(false);
+      }
     })();
   </script>
 </body>
@@ -8008,8 +8093,153 @@ class BoardHTTPServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+class _InflightSlot:
+    """Per-flight synchronization slot for `_SnapshotCoalescer`."""
+
+    __slots__ = ("event", "payload", "error")
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.payload: bytes | None = None
+        self.error: BaseException | None = None
+
+
+def _extract_active_worktrees_from_snapshot(snapshot: object) -> tuple[Path, ...]:
+    if not isinstance(snapshot, dict):
+        return ()
+    seen: list[Path] = []
+    seen_str: set[str] = set()
+    for bucket_key in ("issues", "local_only_items"):
+        entries = snapshot.get(bucket_key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            raw_wt = str(entry.get("worktree") or "").strip()
+            if raw_wt and raw_wt not in seen_str:
+                seen_str.add(raw_wt)
+                seen.append(Path(raw_wt))
+    return tuple(seen)
+
+
+def _compute_active_worktrees_fp(paths: tuple[Path, ...]) -> tuple[object, ...]:
+    sigs: list[object] = []
+    for wt in paths:
+        git_dir, _ = monitor._resolve_git_dirs_fast(wt)  # noqa: SLF001
+        sigs.append(
+            (
+                monitor._stat_sig(wt),  # noqa: SLF001
+                monitor._stat_sig(wt / "TASK"),  # noqa: SLF001
+                monitor._stat_sig(git_dir / "index") if git_dir is not None else None,  # noqa: SLF001
+                monitor._stat_sig(git_dir / "HEAD") if git_dir is not None else None,  # noqa: SLF001
+            )
+        )
+    return tuple(sigs)
+
+
+class _SnapshotCoalescer:
+    """Thread-safe short-TTL JSON snapshot cache with singleflight request coalescing."""
+
+    def __init__(self, ttl_seconds: float = 1.5) -> None:
+        self.ttl_seconds = max(0.0, float(ttl_seconds))
+        self._lock = threading.Lock()
+        self._payload: bytes | None = None
+        self._stored_at: float = 0.0
+        self._watched_paths: tuple[Path, ...] = ()
+        self._watched_fp: tuple[object, ...] = ()
+        self._epoch: int = 0
+        self._inflight: _InflightSlot | None = None
+
+    def invalidate(self) -> None:
+        """Clear cached snapshot bytes and bump epoch so stale in-flight runs cannot repopulate."""
+        with self._lock:
+            self._epoch += 1
+            self._payload = None
+            self._stored_at = 0.0
+            self._watched_paths = ()
+            self._watched_fp = ()
+
+    def get_bytes(self, producer: Callable[[], object], *, bypass_cache: bool = False) -> bytes:
+        now = time.monotonic()
+        wait_slot: _InflightSlot | None = None
+        own_slot: _InflightSlot | None = None
+        my_epoch = 0
+
+        with self._lock:
+            if (
+                not bypass_cache
+                and self.ttl_seconds > 0.0
+                and self._payload is not None
+                and (now - self._stored_at) < self.ttl_seconds
+            ):
+                watched = self._watched_paths
+                expected_fp = self._watched_fp
+                cached_payload = self._payload
+            else:
+                watched = ()
+                expected_fp = ()
+                cached_payload = None
+
+        if cached_payload is not None:
+            if not watched or _compute_active_worktrees_fp(watched) == expected_fp:
+                return cached_payload
+
+        with self._lock:
+            if not bypass_cache and self._inflight is not None:
+                wait_slot = self._inflight
+            else:
+                if bypass_cache:
+                    self._epoch += 1
+                    self._payload = None
+                    self._stored_at = 0.0
+                    self._watched_paths = ()
+                    self._watched_fp = ()
+                my_epoch = self._epoch
+                if self._inflight is None:
+                    own_slot = _InflightSlot()
+                    self._inflight = own_slot
+
+        if wait_slot is not None:
+            wait_slot.event.wait(timeout=30.0)
+            if wait_slot.error is not None:
+                raise wait_slot.error
+            if wait_slot.payload is not None:
+                return wait_slot.payload
+            return json.dumps(producer(), ensure_ascii=False).encode("utf-8")
+
+        try:
+            snap_obj = producer()
+            body = json.dumps(snap_obj, ensure_ascii=False).encode("utf-8")
+            watched_paths = _extract_active_worktrees_from_snapshot(snap_obj)
+            watched_fp = _compute_active_worktrees_fp(watched_paths) if watched_paths else ()
+        except BaseException as exc:
+            if own_slot is not None:
+                own_slot.error = exc
+                with self._lock:
+                    if self._inflight is own_slot:
+                        self._inflight = None
+                own_slot.event.set()
+            raise
+
+        with self._lock:
+            if self._epoch == my_epoch and self.ttl_seconds > 0.0:
+                self._payload = body
+                self._stored_at = time.monotonic()
+                self._watched_paths = watched_paths
+                self._watched_fp = watched_fp
+            if own_slot is not None:
+                own_slot.payload = body
+                if self._inflight is own_slot:
+                    self._inflight = None
+                own_slot.event.set()
+        return body
+
+
 class BoardRequestHandler(BaseHTTPRequestHandler):
     """Serve the IDD Web Dashboard HTML and JSON snapshot endpoints."""
+
+    snapshot_cache: _SnapshotCoalescer | None = None
 
     def __init__(
         self,
@@ -8020,6 +8250,7 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
         local_only: bool,
         version: str,
         merged_cache: _MergedChangesCache | None = None,
+        snapshot_cache: _SnapshotCoalescer | None = None,
         **kwargs: object,
     ) -> None:
         self.cache = cache
@@ -8028,6 +8259,7 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
         self.local_only = local_only
         self.version = version
         self.merged_cache = merged_cache
+        self.snapshot_cache = snapshot_cache
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
 
     def log_message(self, format: str, *args: object) -> None:
@@ -8082,8 +8314,14 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
             return [self.root]
         return [Path(r["path"]) for r in monitor.load_registered_repos(prune_missing=True)]
 
+    def _invalidate_snapshot_cache(self) -> None:
+        if self.snapshot_cache is not None:
+            self.snapshot_cache.invalidate()
+
     def _refresh_cached_repos(self, *, timeout: float = 2.0) -> None:
         monitor._GH_CLI_CACHE["checked_at"] = 0.0  # noqa: SLF001
+        monitor.invalidate_monitor_caches()
+        self._invalidate_snapshot_cache()
         if self.local_only:
             self.cache.invalidate_all()
             return
@@ -8123,10 +8361,13 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/snapshot":
             params = urllib.parse.parse_qs(parsed.query)
             force_refresh = params.get("refresh", ["0"])[0] in ("1", "true", "yes")
-            if force_refresh and not self.local_only:
-                self.cache.warm_async(self._target_repos(), force_refresh=True)
-            try:
-                snapshot = monitor.collect_scope_snapshot(
+            if force_refresh:
+                monitor.invalidate_monitor_caches()
+                if not self.local_only:
+                    self.cache.warm_async(self._target_repos(), force_refresh=True)
+
+            def _produce_snapshot() -> dict[str, object]:
+                return monitor.collect_scope_snapshot(
                     root=self.root,
                     global_mode=self.global_mode,
                     open_only=False,
@@ -8135,6 +8376,13 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
                     force_refresh=False,
                     allow_stale_async=True,
                 )
+
+            try:
+                if self.snapshot_cache is not None:
+                    body = self.snapshot_cache.get_bytes(_produce_snapshot, bypass_cache=force_refresh)
+                    self._send_bytes(HTTPStatus.OK, "application/json; charset=utf-8", body)
+                    return
+                snapshot = _produce_snapshot()
             except Exception as exc:
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
                 return
@@ -8315,6 +8563,7 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "enabled 必须为布尔值"})
                 return
             cfg = monitor.set_global_auto_merge(raw_enabled)
+            self._invalidate_snapshot_cache()
             self._send_json(
                 HTTPStatus.OK,
                 {
@@ -8351,6 +8600,9 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
                 wt_path,
                 merged_cache=getattr(self, "merged_cache", None),
             )
+            if result.get("ok"):
+                monitor.invalidate_monitor_caches()
+                self._invalidate_snapshot_cache()
             self._send_json(HTTPStatus.OK, result)
             return
 
@@ -8380,6 +8632,7 @@ def run_board_server(
     """Start the local IDD Web Dashboard server and open the browser unless disabled."""
     resolved_version = version if version is not None else get_version()
     cache = monitor.ForgeSnapshotCache(ttl_seconds=forge_ttl)
+    snapshot_cache = _SnapshotCoalescer(ttl_seconds=1.5)
     if not local_only:
         def _warm_on_boot() -> None:
             if not global_mode and root is not None:
@@ -8397,6 +8650,7 @@ def run_board_server(
         local_only=local_only,
         version=resolved_version,
         merged_cache=merged_cache,
+        snapshot_cache=snapshot_cache,
     )
     server = _bind_server(host, port, handler_cls)  # type: ignore[arg-type]
     actual_host, actual_port = server.server_address[:2]
