@@ -221,6 +221,28 @@ class TestPreviewUI(unittest.TestCase):
         combined = err_proc.stdout + err_proc.stderr
         self.assertIn("找不到预览目标文件或目录", combined)
 
+    def test_preview_motion_tokens_direct_manipulation_and_state_contracts(self) -> None:
+        html_doc = preview_ui.PREVIEW_HTML
+        for token in (
+            "--ease-out:",
+            "--ease-spring:",
+            "--dur-press:",
+            "--dur-fast:",
+            "prefers-reduced-motion: reduce",
+            "body.is-dragging iframe.canvas { pointer-events: none; }",
+            "syncSegmentedIndicator",
+            "acquireIframe",
+            "split-handle",
+            "pane-resizer",
+            "rewrite-overlay",
+            "swapCompareBtn",
+            "langBtn",
+            "已恢复实时连接",
+            "Live connection restored",
+        ):
+            self.assertIn(token, html_doc)
+        self.assertNotIn("transition: all", html_doc)
+
 
 if __name__ == "__main__":
     unittest.main()
