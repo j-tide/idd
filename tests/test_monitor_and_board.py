@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
+import functools
 import io
 import json
 import os
@@ -3341,6 +3342,122 @@ class TestMonitorAndBoard(unittest.TestCase):
                 time.sleep(0.02)
                 monitor.register_repo(repo, min_touch_interval=60.0)
                 self.assertEqual(repos_file.stat().st_mtime_ns, mtime_before)
+
+    def test_board_snapshot_coalescer_merges_concurrent_requests_and_invalidates(self) -> None:
+        coalescer = board_ui._SnapshotCoalescer(ttl_seconds=1.0)
+        call_count = 0
+        count_lock = threading.Lock()
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_producer() -> dict[str, object]:
+            nonlocal call_count
+            with count_lock:
+                call_count += 1
+                cur = call_count
+            started.set()
+            release.wait(timeout=3.0)
+            return {"seq": cur}
+
+        results: list[dict[str, object]] = []
+        errors: list[BaseException] = []
+
+        def worker() -> None:
+            try:
+                raw = coalescer.get_bytes(slow_producer)
+                results.append(json.loads(raw.decode("utf-8")))
+            except BaseException as exc:  # pragma: no cover
+                errors.append(exc)
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t3 = threading.Thread(target=worker)
+        t1.start()
+        self.assertTrue(started.wait(timeout=2.0))
+        t2.start()
+        t3.start()
+        time.sleep(0.05)
+        release.set()
+        for t in (t1, t2, t3):
+            t.join(timeout=3.0)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(call_count, 1)
+        self.assertEqual(results, [{"seq": 1}, {"seq": 1}, {"seq": 1}])
+
+        # Immediate subsequent call hits short TTL cache
+        cached = json.loads(coalescer.get_bytes(slow_producer).decode("utf-8"))
+        self.assertEqual(cached, {"seq": 1})
+        self.assertEqual(call_count, 1)
+
+        # bypass_cache=True penetrates cache and updates cached snapshot
+        fresh = json.loads(coalescer.get_bytes(slow_producer, bypass_cache=True).decode("utf-8"))
+        self.assertEqual(fresh, {"seq": 2})
+        self.assertEqual(call_count, 2)
+
+        # invalidate() forces next call to recompute
+        coalescer.invalidate()
+        after_inv = json.loads(coalescer.get_bytes(slow_producer).decode("utf-8"))
+        self.assertEqual(after_inv, {"seq": 3})
+        self.assertEqual(call_count, 3)
+
+        # End-to-end HTTP test: /api/snapshot coalesces within TTL, ?refresh=1 and POST config invalidate
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            repo, _, _, _ = _create_repo_harness(root / "h", "coalesce-repo", cfg)
+            with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
+                snap_cache = board_ui._SnapshotCoalescer(ttl_seconds=5.0)
+                handler_cls = functools.partial(
+                    board_ui.BoardRequestHandler,
+                    cache=monitor.ForgeSnapshotCache(ttl_seconds=30.0),
+                    root=repo,
+                    global_mode=False,
+                    local_only=True,
+                    version="0.0.4",
+                    snapshot_cache=snap_cache,
+                )
+                server = board_ui.BoardHTTPServer(("127.0.0.1", 0), handler_cls)
+                port = server.server_address[1]
+                srv_thread = threading.Thread(target=server.serve_forever, daemon=True)
+                srv_thread.start()
+                try:
+                    with mock.patch.object(
+                        monitor, "collect_scope_snapshot", wraps=monitor.collect_scope_snapshot
+                    ) as spy_collect:
+                        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/snapshot", timeout=5) as r1:
+                            b1 = r1.read()
+                        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/snapshot", timeout=5) as r2:
+                            b2 = r2.read()
+                        self.assertEqual(b1, b2)
+                        self.assertEqual(spy_collect.call_count, 1)
+
+                        # Manual refresh=1 bypasses short TTL cache
+                        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/snapshot?refresh=1", timeout=5) as r3:
+                            self.assertEqual(r3.status, 200)
+                        self.assertEqual(spy_collect.call_count, 2)
+
+                        # POST /api/config/auto-merge invalidates cached snapshot immediately
+                        req = urllib.request.Request(
+                            f"http://127.0.0.1:{port}/api/config/auto-merge",
+                            data=json.dumps({"scope": "global", "enabled": True}).encode("utf-8"),
+                            headers={
+                                "Content-Type": "application/json",
+                                "X-IDD-Request": "1",
+                                "Origin": f"http://127.0.0.1:{port}",
+                            },
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(req, timeout=5) as r_cfg:
+                            self.assertEqual(r_cfg.status, 200)
+                        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/snapshot", timeout=5) as r4:
+                            snap4 = json.loads(r4.read().decode("utf-8"))
+                        self.assertEqual(spy_collect.call_count, 3)
+                        self.assertTrue(snap4["config"]["auto_merge"])
+                finally:
+                    server.shutdown()
+                    server.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

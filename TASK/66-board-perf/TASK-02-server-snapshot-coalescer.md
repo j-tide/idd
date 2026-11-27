@@ -1,7 +1,7 @@
 # TASK-02：看板服务端短 TTL 快照缓存与并发 singleflight 合并
 
 - Issue: #66
-- Status: in_progress
+- Status: done
 - Depends on: TASK-01
 - Test: tests/test_monitor_and_board.py
 
@@ -14,9 +14,9 @@
 
 ## 验收标准
 
-- [ ] 短时间内并发或多个标签页请求 `GET /api/snapshot` 只触发一次 `collect_scope_snapshot`
-- [ ] `GET /api/snapshot?refresh=1` 与任一配置/鉴权/初始化 POST 写操作后，下次 `/api/snapshot` 立即获取最新数据
-- [ ] 单元测试覆盖并发合并、TTL 过期、手动穿透与写接口失效
+- [x] 短时间内并发或多个标签页请求 `GET /api/snapshot` 只触发一次 `collect_scope_snapshot`
+- [x] `GET /api/snapshot?refresh=1` 与任一配置/鉴权/初始化 POST 写操作后，下次 `/api/snapshot` 立即获取最新数据
+- [x] 单元测试覆盖并发合并、TTL 过期、手动穿透与写接口失效
 
 ## 实现注意事项
 
@@ -29,8 +29,8 @@
 
 ## 执行结果
 
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已在 `scripts/board_ui.py` 实现线程安全的 `_SnapshotCoalescer`（1.5s 短 TTL + 活跃工作树文件签名校验 + singleflight 并发合并），接入 `run_board_server` 与 `BoardRequestHandler`，并在 `?refresh=1` 与全部写接口即时失效缓存。
 
 ### 当前阻塞
 
@@ -38,4 +38,6 @@
 
 ### 验证记录
 
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-27 | `PYTHONPATH=tests python3 -m unittest test_monitor_and_board.TestMonitorAndBoard.test_board_snapshot_coalescer_merges_concurrent_requests_and_invalidates test_monitor_and_board.TestMonitorAndBoard.test_board_web_server_serves_offline_ui_and_live_snapshots -v` | passed (2 passed in 2.64s) | `tests/test_monitor_and_board.py` |

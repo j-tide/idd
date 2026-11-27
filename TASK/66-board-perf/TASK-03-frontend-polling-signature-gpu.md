@@ -1,7 +1,7 @@
 # TASK-03：前端智能轮询、签名缓存修复与 GPU 渲染减负
 
 - Issue: #66
-- Status: planned
+- Status: in_progress
 - Depends on: TASK-02
 - Test: tests/test_monitor_and_board.py
 
