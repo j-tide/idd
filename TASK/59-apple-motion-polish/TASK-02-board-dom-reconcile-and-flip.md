@@ -1,7 +1,7 @@
 # TASK-02：`idd board` 2s 轮询 DOM 保活调和、卡片 FLIP 位移、无损详情抽屉与移动端适配
 
 - Issue: 59-apple-motion-polish
-- Status: planned
+- Status: in_progress
 - Depends on: TASK-01
 - Test: `tests/test_monitor_and_board.py`（看板 JS 调和、无损详情抽屉、键盘无障碍与移动端底部抽屉响应式检查）
 

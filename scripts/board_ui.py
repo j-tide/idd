@@ -103,6 +103,21 @@ BOARD_HTML = r"""<!DOCTYPE html>
       --radius-card: 12px;
       --radius-row: 11px;
       --radius-sm: 7px;
+      --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+      --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+      --ease-pop: cubic-bezier(0.34, 1.45, 0.64, 1);
+      --ease-in: cubic-bezier(0.4, 0, 1, 1);
+      --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+      --dur-press: 80ms;
+      --dur-micro: 120ms;
+      --dur-exit: 150ms;
+      --dur-fast: 180ms;
+      --dur-panel: 220ms;
+      --dur-layout: 240ms;
+      --press-scale-sm: 0.97;
+      --press-scale-btn: 0.98;
+      --press-scale-card: 0.992;
+      --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent-ring);
       --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
       --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     }
@@ -184,6 +199,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
     button { font-family: inherit; }
     .num { font-variant-numeric: tabular-nums; }
     .mono { font-family: var(--mono); }
+    button:focus-visible,
+    a:focus-visible,
+    [tabindex]:focus-visible,
+    input:focus-visible,
+    select:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
 
     /* Desktop Inset App Shell */
     .app-shell {
@@ -210,7 +233,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       gap: 8px;
-      transition: width 0.16s ease, padding 0.16s ease;
+      overflow: hidden;
+      transition: width var(--dur-panel) var(--ease-spring), padding var(--dur-panel) var(--ease-spring);
       position: sticky;
       top: 12px;
       max-height: calc(100vh - 24px);
@@ -262,11 +286,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
       letter-spacing: -0.01em;
       line-height: 1.15;
       color: var(--text);
+      white-space: nowrap;
     }
     .sb-brand-sub {
       font-size: 10.5px;
       color: var(--text-faint);
       line-height: 1.2;
+      white-space: nowrap;
     }
 
     /* Header Search (Moved from Sidebar) */
@@ -332,6 +358,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
     /* Sidebar Navigation & Repositories */
     .sb-nav {
+      position: relative;
       display: flex;
       flex-direction: column;
       gap: 2px;
@@ -340,6 +367,32 @@ BOARD_HTML = r"""<!DOCTYPE html>
     body.sidebar-collapsed .sb-nav {
       align-items: center;
       gap: 4px;
+    }
+    .seg-glider {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+      z-index: 0;
+      border-radius: 7px;
+      opacity: 0;
+      transition:
+        transform var(--dur-fast) var(--ease-spring),
+        width var(--dur-fast) var(--ease-spring),
+        height var(--dur-fast) var(--ease-spring),
+        opacity var(--dur-micro) var(--ease-standard),
+        background-color var(--dur-fast) var(--ease-standard),
+        border-color var(--dur-fast) var(--ease-standard);
+    }
+    .seg-glider.is-ready { opacity: 1; }
+    .sb-nav .seg-glider {
+      border-radius: 9px;
+      background: var(--bg-tile-active);
+      border: 1px solid var(--border-strong);
+    }
+    .sb-nav.has-glider .sb-item.active {
+      background: transparent;
+      border-color: transparent;
     }
     .sb-item {
       appearance: none;
@@ -357,11 +410,17 @@ BOARD_HTML = r"""<!DOCTYPE html>
       justify-content: space-between;
       gap: 8px;
       cursor: pointer;
-      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      transition:
+        background-color var(--dur-micro) var(--ease-standard),
+        color var(--dur-micro) var(--ease-standard),
+        border-color var(--dur-micro) var(--ease-standard),
+        transform var(--dur-press) var(--ease-standard);
       position: relative;
+      z-index: 1;
       text-align: left;
     }
     .sb-item:hover { background: var(--bg-tile); color: var(--text); }
+    .sb-item:active { transform: scale(var(--press-scale-btn)); }
     .sb-item.active {
       background: var(--bg-tile-active);
       border-color: var(--border-strong);
@@ -561,9 +620,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
       cursor: pointer;
       display: grid;
       place-items: center;
-      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      transition:
+        background-color var(--dur-micro) var(--ease-standard),
+        color var(--dur-micro) var(--ease-standard),
+        border-color var(--dur-micro) var(--ease-standard),
+        transform var(--dur-press) var(--ease-standard);
     }
     .icon-btn:hover { background: var(--bg-tile); color: var(--text); border-color: var(--border); }
+    .icon-btn:active:not(:disabled) { transform: scale(var(--press-scale-sm)); }
 
     .ws-logo {
       width: 32px;
@@ -750,9 +814,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
       align-items: center;
       gap: 6px;
       white-space: nowrap;
-      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      transition:
+        background-color var(--dur-micro) var(--ease-standard),
+        color var(--dur-micro) var(--ease-standard),
+        border-color var(--dur-micro) var(--ease-standard),
+        transform var(--dur-press) var(--ease-standard),
+        opacity var(--dur-micro) var(--ease-standard);
     }
-    .btn:hover { background: var(--bg-card-hover); color: var(--text); border-color: var(--border-strong); }
+    .btn:hover:not(:disabled) { background: var(--bg-card-hover); color: var(--text); border-color: var(--border-strong); }
+    .btn:active:not(:disabled) { transform: scale(var(--press-scale-btn)); }
+    .btn:disabled { opacity: 0.52; cursor: not-allowed; pointer-events: none; }
     .btn-sm { height: 26px; padding: 0 9px; font-size: 11.5px; border-radius: 7px; }
     .btn-xs { height: 24px; padding: 0 8px; font-size: 11px; border-radius: 6px; }
     .btn-icon-only { width: 26px; height: 26px; padding: 0; justify-content: center; }
@@ -762,11 +833,27 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--accent);
       font-weight: 580;
     }
-    .btn-primary:hover { background: rgba(96, 165, 250, 0.20); color: var(--accent); }
+    .btn-primary:hover:not(:disabled) { background: rgba(96, 165, 250, 0.20); color: var(--accent); }
     .btn.copied {
       background: var(--green-soft) !important;
       border-color: rgba(74, 222, 128, 0.35) !important;
       color: var(--green) !important;
+      justify-content: center;
+    }
+    .btn.copied svg,
+    .copy-chip.copied svg {
+      animation: checkPop var(--dur-fast) var(--ease-pop);
+    }
+    @keyframes checkPop {
+      0% { transform: scale(0.6); opacity: 0.4; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .theme-ic-swap svg {
+      animation: themeIconIn var(--dur-fast) var(--ease-out);
+    }
+    @keyframes themeIconIn {
+      from { transform: rotate(-28deg) scale(0.82); opacity: 0.4; }
+      to { transform: none; opacity: 1; }
     }
     #sync-btn { min-width: 88px; justify-content: center; }
     .btn.spin svg { animation: spin 0.8s linear infinite; }
@@ -808,9 +895,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
       cursor: pointer;
       display: inline-grid;
       place-items: center;
-      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      transition:
+        background-color var(--dur-micro) var(--ease-standard),
+        color var(--dur-micro) var(--ease-standard),
+        border-color var(--dur-micro) var(--ease-standard),
+        transform var(--dur-press) var(--ease-standard);
     }
     .cluster-icon-btn:hover { background: var(--bg-tile); color: var(--text); }
+    .cluster-icon-btn:active:not(:disabled) { transform: scale(var(--press-scale-sm)); }
     .cluster-icon-btn.is-paused {
       background: var(--amber-soft);
       border-color: rgba(251, 191, 36, 0.32);
@@ -836,10 +928,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
       align-items: center;
       gap: 5px;
       white-space: nowrap;
-      transition: background 0.12s, color 0.12s, border-color 0.12s, opacity 0.12s;
+      transition:
+        background-color var(--dur-micro) var(--ease-standard),
+        color var(--dur-micro) var(--ease-standard),
+        border-color var(--dur-micro) var(--ease-standard),
+        opacity var(--dur-micro) var(--ease-standard),
+        transform var(--dur-press) var(--ease-standard);
     }
     .forge-status-btn:hover,
     .forge-status-btn.is-open { background: var(--bg-tile); color: var(--text); }
+    .forge-status-btn:active:not(:disabled) { transform: scale(var(--press-scale-sm)); }
     .forge-status-btn.is-open { border-color: var(--border-strong); }
     .forge-status-btn.is-gitlab svg { color: #fb923c; }
     html[data-theme="light"] .forge-status-btn.is-gitlab svg { color: #c2410c; }
@@ -895,11 +993,29 @@ BOARD_HTML = r"""<!DOCTYPE html>
       border-radius: 13px;
       box-shadow: var(--shadow-panel);
       padding: 12px;
-      display: none;
+      display: flex;
       flex-direction: column;
       gap: 9px;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform-origin: top right;
+      transform: translateY(-5px) scale(0.97);
+      transition:
+        opacity var(--dur-exit) var(--ease-in),
+        transform var(--dur-exit) var(--ease-in),
+        visibility 0s linear var(--dur-exit);
     }
-    .status-popover.open { display: flex; }
+    .status-popover.open {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0) scale(1);
+      transition:
+        opacity var(--dur-fast) var(--ease-out),
+        transform var(--dur-fast) var(--ease-out),
+        visibility 0s;
+    }
     .status-pop-hdr {
       display: flex;
       align-items: center;
@@ -925,6 +1041,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       gap: 7px;
+      transition: border-color var(--dur-fast) var(--ease-standard), background-color var(--dur-fast) var(--ease-standard);
     }
     .status-pop-card.is-focus { border-color: var(--accent-ring); }
     .status-pop-card-hdr {
@@ -1120,6 +1237,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
       gap: 8px;
     }
     @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+      }
+      :root {
+        --dur-press: 0ms;
+        --dur-layout: 0ms;
+        --card-lift: none;
+      }
       .top-progress-bar,
       .skel-block,
       .seg-pill.skel,
@@ -1163,8 +1290,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--text-dim);
       font-size: 12px;
       font-weight: 500;
+      font-variant-numeric: tabular-nums;
       cursor: pointer;
-      transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, transform 0.14s ease, color 0.14s ease;
+      transition:
+        background-color var(--dur-fast) var(--ease-standard),
+        border-color var(--dur-fast) var(--ease-standard),
+        box-shadow var(--dur-fast) var(--ease-standard),
+        transform var(--dur-press) var(--ease-standard),
+        color var(--dur-micro) var(--ease-standard);
     }
     html[data-theme="light"] .stat-chip {
       background: rgba(255, 255, 255, 0.36);
@@ -1177,11 +1310,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
     html[data-theme="light"] .stat-chip:hover {
       background: rgba(255, 255, 255, 0.66);
     }
-    .stat-chip:active { transform: scale(0.97); }
+    .stat-chip:active { transform: scale(var(--press-scale-sm)); }
     .stat-chip.active {
       transform: translateY(-1px);
       color: var(--text);
     }
+    .stat-chip.active:active { transform: translateY(-1px) scale(var(--press-scale-sm)); }
     .stat-ic {
       width: 14px;
       height: 14px;
@@ -1190,7 +1324,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       flex-shrink: 0;
       position: relative;
       color: var(--text-faint);
-      transition: color 0.16s ease, transform 0.16s ease;
+      transition: color var(--dur-fast) var(--ease-standard), transform var(--dur-fast) var(--ease-out);
     }
     .stat-lbl { white-space: nowrap; }
     .stat-val {
@@ -1201,10 +1335,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
       line-height: 1;
       color: var(--text);
       font-variant-numeric: tabular-nums;
-      transition: color 0.16s ease;
+      transition: color var(--dur-fast) var(--ease-standard);
+    }
+    .num-tick {
+      display: inline-block;
+      animation: numTick var(--dur-fast) var(--ease-out);
+    }
+    @keyframes numTick {
+      0% { transform: translateY(-3px); opacity: 0.45; }
+      100% { transform: none; opacity: 1; }
     }
 
-    /* 1. 全部活跃 — Sky Radar Sweep */
+    /* 1. 全部活跃 — Sky */
     .stat-chip.is-all.active {
       background: rgba(56, 189, 248, 0.16);
       border-color: rgba(56, 189, 248, 0.36);
@@ -1217,21 +1359,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
     }
     .stat-chip.is-all.active .stat-ic,
     .stat-chip.is-all.active .stat-val { color: var(--accent); }
-    .stat-chip.is-all.active .stat-ic svg { animation: radarBreath 2.4s ease-in-out infinite; }
-    .stat-chip.is-all.active::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(110deg, transparent 20%, rgba(255, 255, 255, 0.22) 50%, transparent 80%);
-      transform: translateX(-120%);
-      animation: chipSheen 580ms ease-out forwards;
-      pointer-events: none;
-    }
-    html[data-theme="light"] .stat-chip.is-all.active::after {
-      background: linear-gradient(110deg, transparent 20%, rgba(255, 255, 255, 0.65) 50%, transparent 80%);
-    }
 
-    /* 2. 施工中 — Live Building Indigo */
+    /* 2. 施工中 — Indigo */
     .stat-chip.is-wt.active {
       background: rgba(99, 102, 241, 0.18);
       border-color: rgba(129, 140, 248, 0.38);
@@ -1246,21 +1375,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .stat-chip.is-wt.active .stat-val { color: #818cf8; }
     html[data-theme="light"] .stat-chip.is-wt.active .stat-ic,
     html[data-theme="light"] .stat-chip.is-wt.active .stat-val { color: #4f46e5; }
-    .stat-chip.is-wt.active .stat-ic svg { animation: spinSlow 3.6s linear infinite; }
-    .stat-chip.is-wt.active::before {
-      content: "";
-      position: absolute;
-      left: 0;
-      bottom: 0;
-      height: 2px;
-      width: 42%;
-      border-radius: 999px;
-      background: linear-gradient(90deg, transparent, #818cf8, transparent);
-      animation: workSlide 1.8s ease-in-out infinite;
-    }
-    html[data-theme="light"] .stat-chip.is-wt.active::before {
-      background: linear-gradient(90deg, transparent, #4f46e5, transparent);
-    }
+    .stat-chip.is-wt.just-clicked .stat-ic svg { animation: gearTurn 420ms var(--ease-out); }
 
     /* 3. 需关注 — Alert Beacon Coral */
     .stat-beacon {
@@ -1275,23 +1390,25 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: rgba(244, 63, 94, 0.18);
       border-color: rgba(251, 113, 133, 0.38);
       box-shadow: 0 4px 16px rgba(244, 63, 94, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.14);
-      animation: alertNudge 380ms cubic-bezier(.36, .07, .19, .97);
+    }
+    .stat-chip.is-alerts.just-clicked {
+      animation: alertNudge 320ms var(--ease-out);
     }
     html[data-theme="light"] .stat-chip.is-alerts.active {
       background: linear-gradient(155deg, rgba(255, 255, 255, 0.96), rgba(254, 242, 242, 0.92));
       border-color: var(--red-border);
       box-shadow: 0 4px 14px rgba(220, 38, 38, 0.10), inset 0 1px 0 #ffffff;
     }
-    .stat-chip.is-alerts.active .stat-beacon::after {
+    .stat-chip.is-alerts.has-alerts .stat-beacon::after {
       content: "";
       position: absolute;
       inset: -3px;
       border-radius: 50%;
       border: 1.5px solid var(--red);
-      animation: beaconPing 1.8s ease-out infinite;
+      animation: beaconPing 2.2s ease-out infinite;
     }
 
-    /* 4. 待合入 — Merge-Ready Emerald */
+    /* 4. 待合入 — Emerald */
     .stat-chip.is-ready .stat-ic,
     .stat-chip.is-ready .stat-val { color: #34d399; }
     html[data-theme="light"] .stat-chip.is-ready .stat-ic,
@@ -1300,16 +1417,15 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: rgba(16, 185, 129, 0.18);
       border-color: rgba(52, 211, 153, 0.38);
       box-shadow: 0 4px 16px rgba(16, 185, 129, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.14);
-      animation: readyGlow 2.6s ease-in-out infinite;
     }
     html[data-theme="light"] .stat-chip.is-ready.active {
       background: linear-gradient(155deg, rgba(255, 255, 255, 0.96), rgba(236, 253, 245, 0.92));
       border-color: rgba(16, 185, 129, 0.36);
       box-shadow: 0 4px 14px rgba(16, 185, 129, 0.10), inset 0 1px 0 #ffffff;
     }
-    .stat-chip.is-ready.active .stat-ic { animation: readyPop 420ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+    .stat-chip.is-ready.just-clicked .stat-ic { animation: readyPop 340ms var(--ease-pop); }
 
-    /* 5. 待处理 — Queued Inbox Slate-Violet */
+    /* 5. 待处理 — Queued Slate-Violet */
     .stat-chip.is-todo.active {
       background: rgba(139, 92, 246, 0.16);
       border-color: rgba(167, 139, 250, 0.36);
@@ -1325,7 +1441,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .stat-chip.is-todo.active .stat-val { color: #a78bfa; }
     html[data-theme="light"] .stat-chip.is-todo.active .stat-ic,
     html[data-theme="light"] .stat-chip.is-todo.active .stat-val { color: #6d28d9; }
-    .stat-chip.is-todo.active .stat-ic { animation: queueFloat 2.4s ease-in-out infinite; }
 
     /* 6. 可清理 — Clean Sweep Teal-Sage */
     .stat-chip.is-cleanup.active {
@@ -1342,19 +1457,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .stat-chip.is-cleanup.active .stat-val { color: #2dd4bf; }
     html[data-theme="light"] .stat-chip.is-cleanup.active .stat-ic,
     html[data-theme="light"] .stat-chip.is-cleanup.active .stat-val { color: #0f766e; }
-    .stat-chip.is-cleanup.active .stat-ic { animation: sweepTilt 520ms ease-in-out, sparklePulse 2.2s ease-in-out 520ms infinite; }
+    .stat-chip.is-cleanup.just-clicked .stat-ic { animation: sweepTilt 360ms var(--ease-out); }
 
-    @keyframes chipSheen { from { transform: translateX(-120%); } to { transform: translateX(130%); } }
-    @keyframes radarBreath { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.78; } }
-    @keyframes spinSlow { to { transform: rotate(360deg); } }
-    @keyframes workSlide { 0% { transform: translateX(-110%); } 100% { transform: translateX(260%); } }
+    @keyframes gearTurn { from { transform: rotate(0deg); } to { transform: rotate(90deg); } }
     @keyframes alertNudge { 0%, 100% { transform: translateY(-1px) translateX(0); } 25% { transform: translateY(-1px) translateX(-2px); } 65% { transform: translateY(-1px) translateX(2px); } }
     @keyframes beaconPing { 0% { transform: scale(0.9); opacity: 0.8; } 100% { transform: scale(2.2); opacity: 0; } }
-    @keyframes readyPop { 0% { transform: scale(0.75); } 65% { transform: scale(1.18); } 100% { transform: scale(1); } }
-    @keyframes readyGlow { 0%, 100% { box-shadow: 0 4px 14px rgba(16, 185, 129, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.14); } 50% { box-shadow: 0 5px 18px rgba(16, 185, 129, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.20); } }
-    @keyframes queueFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.5px); } }
-    @keyframes sweepTilt { 0% { transform: rotate(0); } 35% { transform: rotate(-16deg) scale(1.1); } 70% { transform: rotate(10deg); } 100% { transform: rotate(0); } }
-    @keyframes sparklePulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.72; transform: scale(0.92); } }
+    @keyframes readyPop { 0% { transform: scale(0.75); } 65% { transform: scale(1.15); } 100% { transform: scale(1); } }
+    @keyframes sweepTilt { 0% { transform: rotate(0); } 35% { transform: rotate(-14deg) scale(1.08); } 70% { transform: rotate(8deg); } 100% { transform: rotate(0); } }
 
     .glass-filter-hint {
       margin-left: auto;
@@ -1364,6 +1473,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-size: 11.5px;
       color: var(--text-faint);
       white-space: nowrap;
+      transition: opacity var(--dur-micro) var(--ease-standard);
     }
     .glass-filter-reset {
       appearance: none;
@@ -1375,9 +1485,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
       padding: 3px 9px;
       border-radius: 999px;
       cursor: pointer;
-      transition: all 0.16s ease;
+      transition:
+        border-color var(--dur-micro) var(--ease-standard),
+        color var(--dur-micro) var(--ease-standard),
+        background-color var(--dur-micro) var(--ease-standard),
+        transform var(--dur-press) var(--ease-standard);
     }
     .glass-filter-reset:hover { border-color: var(--border-strong); color: var(--text); }
+    .glass-filter-reset:active { transform: scale(var(--press-scale-sm)); }
 
     /* 3-Column Frosted Glass Segmented Overview Cards */
     .bento-kpis {
@@ -1483,7 +1598,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       .stat-chip *, .stat-chip::before, .stat-chip::after, .stat-beacon::after, .bento-slot.prog {
         animation: none !important;
       }
-      .stat-chip.is-alerts.active, .stat-chip.is-ready.active { animation: none !important; }
+      .stat-chip.is-alerts.just-clicked, .stat-chip.is-ready.just-clicked { animation: none !important; }
     }
 
     .seg-bar {
@@ -1530,11 +1645,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-weight: 600;
       cursor: pointer;
       text-align: left;
+      transition: color var(--dur-micro) var(--ease-standard);
     }
     .cleanup-hdr:hover { color: var(--text); }
+    .cleanup-chevron {
+      display: inline-grid;
+      place-items: center;
+      transition: transform var(--dur-fast) var(--ease-out);
+    }
+    .cleanup-drawer.is-open .cleanup-chevron { transform: rotate(90deg); }
     .cleanup-body {
       padding: 12px 16px 16px;
       border-top: 1px solid var(--border-subtle);
+      overflow: hidden;
     }
 
     /* Badges & Inline Chips */
@@ -1546,11 +1669,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
       border-radius: 6px;
       font-size: 11px;
       font-weight: 600;
+      font-variant-numeric: tabular-nums;
       line-height: 1.4;
       border: 1px solid transparent;
       background: var(--bg-inset);
       color: var(--text-dim);
       white-space: nowrap;
+      transition: background-color var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
+    }
+    .badge.is-stage-bumped { animation: stagePop var(--dur-fast) var(--ease-pop); }
+    @keyframes stagePop {
+      0% { transform: scale(0.92); }
+      60% { transform: scale(1.06); }
+      100% { transform: scale(1); }
     }
     .tone-info { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-ring); }
     .tone-success { background: var(--green-soft); color: var(--green); border-color: var(--green-border); }
@@ -1595,9 +1726,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
       min-width: 0;
       cursor: pointer;
       text-align: left;
-      transition: background 0.12s, color 0.12s;
+      transition:
+        background-color var(--dur-micro) var(--ease-standard),
+        color var(--dur-micro) var(--ease-standard),
+        transform var(--dur-press) var(--ease-standard);
     }
     .copy-chip:hover { background: var(--bg-tile-active); color: var(--text); }
+    .copy-chip:active { transform: scale(var(--press-scale-sm)); }
     .copy-chip.copied { background: var(--green-soft); color: var(--green); }
     .copy-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .copy-chip svg { flex-shrink: 0; }
@@ -1635,7 +1770,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--text);
     }
     .col-title { display: inline-flex; align-items: center; gap: 7px; }
-    .col-count { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+    .col-count { font-family: var(--mono); font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
     .card-stack { display: flex; flex-direction: column; gap: 9px; flex: 1; }
     .col-empty { padding: 22px 10px; text-align: center; color: var(--text-faint); font-size: 12px; }
 
@@ -1651,13 +1786,21 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       min-width: 0;
-      transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+      transition:
+        transform var(--dur-fast) var(--ease-out),
+        box-shadow var(--dur-fast) var(--ease-out),
+        border-color var(--dur-micro) var(--ease-standard),
+        background-color var(--dur-micro) var(--ease-standard);
     }
     .card:hover {
       border-color: var(--border-strong);
       background: var(--bg-card-hover);
       box-shadow: var(--shadow-card-hover);
       transform: var(--card-lift);
+    }
+    .card:active:not(:has(button:active, a:active)) {
+      transform: translateY(-0.5px) scale(var(--press-scale-card));
+      transition-duration: var(--dur-press);
     }
     .card.is-selected {
       border-color: var(--accent);
@@ -1694,11 +1837,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .card-task span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .card-prog { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
     .progress-track { flex: 1; height: 4px; border-radius: 999px; background: var(--bar-empty); overflow: hidden; }
-    .progress-fill { height: 100%; background: linear-gradient(90deg, #10b981, #34d399); border-radius: 999px; }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #10b981, #34d399);
+      border-radius: 999px;
+      transition: width var(--dur-layout) var(--ease-out), background var(--dur-fast) var(--ease-standard);
+    }
     .progress-fill.pass { background: linear-gradient(90deg, #10b981, #34d399); }
     .progress-fill.run { background: linear-gradient(90deg, #38bdf8, #0ea5e9); }
     .progress-fill.fail { background: linear-gradient(90deg, #f87171, #fb7185); }
-    .prog-num { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+    .prog-num { font-family: var(--mono); font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
     .card-foot {
       margin-top: auto;
       padding-top: 10px;
@@ -1708,6 +1856,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       justify-content: space-between;
       gap: 8px;
       font-size: 11px;
+      font-variant-numeric: tabular-nums;
       color: var(--text-faint);
     }
     .card-foot > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1817,10 +1966,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
       -webkit-backdrop-filter: blur(3px);
       opacity: 0;
       pointer-events: none;
-      transition: opacity 0.16s ease;
+      transition: opacity var(--dur-exit) var(--ease-in);
     }
     html[data-theme="dark"] .inspector-overlay { background: rgba(0, 0, 0, 0.48); }
-    .inspector-overlay.open { opacity: 1; pointer-events: auto; }
+    .inspector-overlay.open {
+      opacity: 1;
+      pointer-events: auto;
+      transition: opacity var(--dur-panel) var(--ease-out);
+    }
     .inspector-panel {
       position: fixed;
       top: 12px;
@@ -1839,9 +1992,20 @@ BOARD_HTML = r"""<!DOCTYPE html>
       flex-direction: column;
       overflow: hidden;
       transform: translateX(106%);
-      transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+      transition: transform var(--dur-exit) var(--ease-in);
     }
-    .inspector-panel.open { transform: translateX(0); }
+    .inspector-panel.open {
+      transform: translateX(0);
+      transition: transform var(--dur-layout) var(--ease-spring);
+    }
+    .inspector-swap .inspector-hdr,
+    .inspector-swap .inspector-body {
+      animation: panelSwap var(--dur-fast) var(--ease-out);
+    }
+    @keyframes panelSwap {
+      from { opacity: 0.35; transform: translateY(4px); }
+      to { opacity: 1; transform: none; }
+    }
     .inspector-hdr {
       padding: 16px 18px 13px;
       border-bottom: 1px solid var(--border-subtle);
@@ -1879,9 +2043,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .cmd-box-hdr { display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; color: var(--text-faint); margin-bottom: 4px; }
     .cmd-code { font-family: var(--mono); font-size: 11.5px; color: var(--accent); word-break: break-all; }
 
-    .tabs { display: flex; gap: 4px; margin-top: 14px; border-bottom: 1px solid var(--border-subtle); }
+    .tabs { position: relative; display: flex; gap: 4px; margin-top: 14px; border-bottom: 1px solid var(--border-subtle); }
+    .tabs .seg-glider {
+      top: auto;
+      bottom: -1px;
+      height: 2px !important;
+      border-radius: 999px;
+      background: var(--accent);
+    }
     .tab-btn {
       appearance: none;
+      position: relative;
+      z-index: 1;
       border: 0;
       border-bottom: 2px solid transparent;
       background: transparent;
@@ -1889,13 +2062,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
       padding: 8px 12px;
       font-size: 12px;
       font-weight: 550;
+      font-variant-numeric: tabular-nums;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       gap: 6px;
+      transition: color var(--dur-micro) var(--ease-standard), transform var(--dur-press) var(--ease-standard);
     }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn:active { transform: scale(var(--press-scale-sm)); }
     .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tabs.has-glider .tab-btn.active { border-bottom-color: transparent; }
     .tab-pane { margin-top: 12px; }
+    .tab-pane.is-fading { animation: panelSwap var(--dur-fast) var(--ease-out); }
     .task-row { padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border-subtle); background: var(--bg-well); margin-bottom: 7px; }
     .task-row-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 540; }
     .task-row-sub { margin-top: 4px; font-size: 11px; color: var(--text-faint); display: flex; flex-wrap: wrap; gap: 10px; }
@@ -2000,9 +2179,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-family: var(--mono);
       font-size: 12px;
       outline: none;
-      transition: border-color 0.14s;
+      transition: border-color var(--dur-micro) var(--ease-standard), box-shadow var(--dur-micro) var(--ease-standard);
     }
-    .token-input:focus { border-color: var(--accent); }
+    .token-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+    .token-input.is-invalid { border-color: var(--red); box-shadow: 0 0 0 2px var(--red-soft); }
+    .token-input.is-nudged { animation: errorNudge 220ms var(--ease-out); }
+    @keyframes errorNudge {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-3px); }
+      65% { transform: translateX(3px); }
+    }
     .token-input::placeholder { font-family: var(--sans); color: var(--text-faint); }
     .auth-err-msg {
       font-size: 11.5px;
@@ -2138,6 +2324,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--green);
     }
     .am-seg-group {
+      position: relative;
       display: inline-flex;
       padding: 2px;
       gap: 2px;
@@ -2146,8 +2333,17 @@ BOARD_HTML = r"""<!DOCTYPE html>
       border: 1px solid var(--border);
       flex-shrink: 0;
     }
+    .am-seg-group .seg-glider {
+      border-radius: 6px;
+      background: var(--bg-tile-active);
+    }
+    .am-seg-group .seg-glider.is-on { background: var(--green-soft); }
+    .am-seg-group .seg-glider.is-off { background: var(--bg-inset); }
+    .am-seg-group.has-glider .am-seg-btn.active { background: transparent; }
     .am-seg-btn {
       appearance: none;
+      position: relative;
+      z-index: 1;
       border: 0;
       background: transparent;
       color: var(--text-dim);
@@ -2157,12 +2353,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-size: 11px;
       font-weight: 560;
       cursor: pointer;
-      transition: background 0.12s ease, color 0.12s ease;
+      transition:
+        background-color var(--dur-micro) var(--ease-standard),
+        color var(--dur-micro) var(--ease-standard),
+        transform var(--dur-press) var(--ease-standard);
     }
     .am-seg-btn:hover:not(:disabled) {
       color: var(--text);
       background: var(--bg-tile);
     }
+    .am-seg-btn:active:not(:disabled) { transform: scale(var(--press-scale-sm)); }
     .am-seg-btn.active {
       background: var(--bg-tile-active);
       color: var(--text);
@@ -2194,13 +2394,18 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-size: 11.5px;
       font-weight: 560;
       cursor: pointer;
-      transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+      transition:
+        background-color var(--dur-micro) var(--ease-standard),
+        border-color var(--dur-micro) var(--ease-standard),
+        color var(--dur-micro) var(--ease-standard),
+        transform var(--dur-press) var(--ease-standard);
     }
     .am-header-pill:hover:not(:disabled) {
       background: var(--bg-tile-active);
       color: var(--text);
       border-color: var(--border-strong);
     }
+    .am-header-pill:active:not(:disabled) { transform: scale(var(--press-scale-sm)); }
     .am-header-pill.is-on {
       background: var(--green-soft);
       border-color: rgba(74, 222, 128, 0.36);
@@ -2236,11 +2441,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      transform: translateY(8px) scale(0.985);
-      transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+      transform: translateY(6px) scale(0.96);
+      transition: transform var(--dur-exit) var(--ease-in);
     }
     .am-confirm-overlay.open .am-confirm-modal {
       transform: translateY(0) scale(1);
+      transition: transform var(--dur-panel) var(--ease-out);
     }
     .am-confirm-hdr {
       padding: 16px 20px 14px;
@@ -2365,9 +2571,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
       padding: 16px;
       opacity: 0;
       pointer-events: none;
-      transition: opacity 0.16s ease;
+      transition: opacity var(--dur-exit) var(--ease-in);
     }
-    .modal-overlay.open { opacity: 1; pointer-events: auto; }
+    .modal-overlay.open {
+      opacity: 1;
+      pointer-events: auto;
+      transition: opacity var(--dur-panel) var(--ease-out);
+    }
     .setup-modal {
       width: 640px;
       max-width: 100%;
@@ -2379,10 +2589,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      transform: translateY(8px) scale(0.985);
-      transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+      transform: translateY(6px) scale(0.96);
+      transition: transform var(--dur-exit) var(--ease-in);
     }
-    .modal-overlay.open .setup-modal { transform: translateY(0) scale(1); }
+    .modal-overlay.open .setup-modal {
+      transform: translateY(0) scale(1);
+      transition: transform var(--dur-panel) var(--ease-out);
+    }
     .setup-hdr {
       padding: 18px 22px 16px;
       border-bottom: 1px solid var(--border-subtle);
@@ -2397,6 +2610,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       gap: 12px;
     }
     .wizard-nav {
+      position: relative;
       display: inline-flex;
       align-items: center;
       gap: 4px;
@@ -2405,8 +2619,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
       background: var(--bg-well);
       border: 1px solid var(--border-subtle);
     }
+    .wizard-nav .seg-glider {
+      border-radius: 7px;
+      background: var(--bg-card);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
+    }
+    .wizard-nav.has-glider .wizard-nav-btn.active {
+      background: transparent;
+      box-shadow: none;
+    }
     .wizard-nav-btn {
       appearance: none;
+      position: relative;
+      z-index: 1;
       border: 0;
       background: transparent;
       color: var(--text-dim);
@@ -2419,9 +2644,14 @@ BOARD_HTML = r"""<!DOCTYPE html>
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      transition: background 0.14s, color 0.14s, box-shadow 0.14s;
+      transition:
+        background-color var(--dur-micro) var(--ease-standard),
+        color var(--dur-micro) var(--ease-standard),
+        box-shadow var(--dur-micro) var(--ease-standard),
+        transform var(--dur-press) var(--ease-standard);
     }
     .wizard-nav-btn:hover { color: var(--text); }
+    .wizard-nav-btn:active { transform: scale(var(--press-scale-sm)); }
     .wizard-nav-btn.active {
       background: var(--bg-card);
       color: var(--text);
@@ -2451,6 +2681,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       flex-direction: column;
       gap: 12px;
     }
+    .setup-body.is-swapping { animation: panelSwap var(--dur-fast) var(--ease-out); }
     .host-card {
       padding: 16px 18px;
       border-radius: 14px;
@@ -2699,7 +2930,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       gap: 10px;
     }
 
-    .toast-wrap { position: fixed; right: 20px; bottom: 20px; z-index: 80; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+    .toast-wrap { position: fixed; right: 20px; bottom: 20px; z-index: 80; display: flex; flex-direction: column; gap: 8px; pointer-events: none; align-items: flex-end; }
     .toast {
       display: inline-flex;
       align-items: center;
@@ -2712,6 +2943,27 @@ BOARD_HTML = r"""<!DOCTYPE html>
       font-size: 12px;
       font-weight: 500;
       box-shadow: var(--shadow-panel);
+      opacity: 0;
+      transform: translateY(8px) scale(0.96);
+      transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+      overflow: hidden;
+    }
+    .toast.is-visible {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    .toast.is-leaving {
+      opacity: 0;
+      transform: translateY(4px) scale(0.96);
+      transition: opacity var(--dur-exit) var(--ease-in), transform var(--dur-exit) var(--ease-in);
+    }
+    .toast.is-bumped {
+      animation: toastBump var(--dur-micro) var(--ease-out);
+    }
+    @keyframes toastBump {
+      0% { transform: scale(1); }
+      45% { transform: scale(1.035); }
+      100% { transform: scale(1); }
     }
 
     @media (max-width: 780px) {
@@ -2865,6 +3117,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         sparkle: '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3Z"/>',
         circle: '<circle cx="12" cy="12" r="8"/>',
         chevronRight: '<polyline points="9 18 15 12 9 6"/>',
+        chevronLeft: '<polyline points="15 18 9 12 15 6"/>',
         chevronDown: '<polyline points="6 9 12 15 18 9"/>',
         trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>',
         radar: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/>',
@@ -2936,8 +3189,108 @@ BOARD_HTML = r"""<!DOCTYPE html>
         initError: "",
         slowInit: false,
         lastClockStr: initialLang === "en" ? "Scanning..." : "扫描仓库...",
-        lastSig: ""
+        lastSig: "",
+        lastFocusBeforeModal: null,
+        pendingManualSyncToast: false,
+        lastToastSig: "",
+        lastToastTime: 0
       };
+
+      function prefersReducedMotion() {
+        return typeof window !== "undefined" &&
+          typeof window.matchMedia === "function" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      }
+
+      function syncSegmentedIndicator(container, activeSelector, extraCls) {
+        if (typeof window === "undefined" || !container || typeof container.querySelector !== "function") return;
+        const activeEl = container.querySelector(activeSelector);
+        let glider = container.querySelector(":scope > .seg-glider");
+        if (!activeEl) {
+          if (glider) glider.classList.remove("is-ready");
+          container.classList.remove("has-glider");
+          return;
+        }
+        if (!glider) {
+          glider = document.createElement("span");
+          glider.className = "seg-glider";
+          glider.setAttribute("aria-hidden", "true");
+          container.insertBefore(glider, container.firstChild);
+        }
+        container.classList.add("has-glider");
+        const hadReady = glider.classList.contains("is-ready");
+        const left = activeEl.offsetLeft;
+        const top = activeEl.offsetTop;
+        const w = activeEl.offsetWidth;
+        const h = activeEl.offsetHeight;
+        if (!w || !h) return;
+        glider.className = "seg-glider" + (hadReady ? " is-ready" : "") + (extraCls ? " " + extraCls : "");
+        if (!hadReady) {
+          const prevTransition = glider.style.transition;
+          glider.style.transition = "none";
+          glider.style.width = w + "px";
+          glider.style.height = h + "px";
+          glider.style.transform = "translate3d(" + left + "px, " + top + "px, 0)";
+          void glider.offsetWidth;
+          glider.style.transition = prevTransition || "";
+          glider.classList.add("is-ready");
+        } else {
+          glider.style.width = w + "px";
+          glider.style.height = h + "px";
+          glider.style.transform = "translate3d(" + left + "px, " + top + "px, 0)";
+        }
+      }
+
+      function syncAllGliders() {
+        if (typeof window === "undefined") return;
+        syncSegmentedIndicator(document.querySelector(".sb-nav"), ".sb-item.active");
+        const wizNav = document.querySelector("#setup-modal .wizard-nav");
+        if (wizNav) syncSegmentedIndicator(wizNav, ".wizard-nav-btn.active");
+        document.querySelectorAll("#setup-modal .am-seg-group").forEach((grp) => {
+          const act = grp.querySelector(".am-seg-btn.active");
+          const cls = act ? (act.classList.contains("is-on") ? "is-on" : (act.classList.contains("is-off") ? "is-off" : "")) : "";
+          syncSegmentedIndicator(grp, ".am-seg-btn.active", cls);
+        });
+        const inspTabs = document.querySelector("#inspector-panel .tabs");
+        if (inspTabs) syncSegmentedIndicator(inspTabs, ".tab-btn.active");
+      }
+
+      function focusInsideModal(modalEl) {
+        if (typeof window === "undefined" || !modalEl) return;
+        requestAnimationFrame(() => {
+          const target = modalEl.querySelector("input:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex='-1'])");
+          if (target && typeof target.focus === "function") {
+            target.focus({ preventScroll: true });
+          }
+        });
+      }
+
+      function restoreSavedFocus() {
+        const prev = state.lastFocusBeforeModal;
+        state.lastFocusBeforeModal = null;
+        if (prev && prev.isConnected && typeof prev.focus === "function") {
+          try { prev.focus({ preventScroll: true }); } catch (_e) {}
+        }
+      }
+
+      function focusAndNudgeTokenInput(scopeSelector, targetHost, shouldNudge) {
+        if (typeof window === "undefined") return;
+        requestAnimationFrame(() => {
+          const root = document.querySelector(scopeSelector);
+          if (!root) return;
+          const sel = targetHost === "__custom__"
+            ? "#custom-host-token"
+            : ('[data-token-draft="' + CSS.escape(targetHost) + '"]');
+          const inp = root.querySelector(sel);
+          if (!inp) return;
+          inp.focus({ preventScroll: true });
+          if (shouldNudge && !prefersReducedMotion()) {
+            inp.classList.remove("is-nudged");
+            void inp.offsetWidth;
+            inp.classList.add("is-nudged");
+          }
+        });
+      }
 
       const SNAP_CACHE_KEY = "idd_board_last_snap:" + window.location.host;
 
@@ -3001,17 +3354,43 @@ BOARD_HTML = r"""<!DOCTYPE html>
       function showToast(msg, kind) {
         const wrap = document.getElementById("toast-wrap");
         if (!wrap) return;
+        const k = kind || "ok";
+        const sig = k + ":" + msg;
+        const now = Date.now();
+        const existing = wrap.lastElementChild;
+        if (existing && sig === state.lastToastSig && (now - state.lastToastTime) < 1600 && !existing.classList.contains("is-leaving")) {
+          state.lastToastTime = now;
+          clearTimeout(Number(existing.dataset.dismissTimer || 0));
+          existing.classList.remove("is-bumped");
+          void existing.offsetWidth;
+          existing.classList.add("is-bumped");
+          existing.dataset.dismissTimer = String(setTimeout(() => dismissToastEl(existing), 1900));
+          return;
+        }
+        state.lastToastSig = sig;
+        state.lastToastTime = now;
         const el = document.createElement("div");
         el.className = "toast";
-        const ic = kind === "err" ? icon("alertTriangle", 14) : icon("checkCircle", 14);
-        const icColor = kind === "err" ? "var(--red)" : "var(--green)";
-        el.innerHTML = '<span style="color:' + icColor + '">' + ic + "</span><span>" + escapeHtml(msg) + "</span>";
+        const ic = k === "err" ? icon("alertTriangle", 14) : (k === "info" ? icon("refresh", 14) : icon("checkCircle", 14));
+        const icColor = k === "err" ? "var(--red)" : (k === "info" ? "var(--accent)" : "var(--green)");
+        el.innerHTML = '<span style="color:' + icColor + ';display:inline-grid;place-items:center;">' + ic + "</span><span>" + escapeHtml(msg) + "</span>";
         wrap.appendChild(el);
-        setTimeout(() => {
-          el.style.opacity = "0";
-          el.style.transition = "opacity 0.16s";
-          setTimeout(() => el.remove(), 180);
-        }, 1800);
+        requestAnimationFrame(() => el.classList.add("is-visible"));
+        el.dataset.dismissTimer = String(setTimeout(() => dismissToastEl(el), 1900));
+      }
+
+      function dismissToastEl(el) {
+        if (!el || !el.isConnected || el.classList.contains("is-leaving")) return;
+        el.classList.remove("is-visible");
+        el.classList.add("is-leaving");
+        if (!prefersReducedMotion() && typeof el.animate === "function") {
+          const h = el.offsetHeight;
+          el.animate(
+            [{ height: h + "px", marginTop: "0px" }, { height: "0px", marginTop: "-8px" }],
+            { duration: 150, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" }
+          );
+        }
+        setTimeout(() => { if (el.isConnected) el.remove(); }, 165);
       }
 
       async function copyText(text, btnEl, toastMsg) {
@@ -3031,6 +3410,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
           if (btnEl) {
             const prevHtml = btnEl.dataset.prevHtml || btnEl.innerHTML;
             btnEl.dataset.prevHtml = prevHtml;
+            if (!btnEl.classList.contains("copy-chip") && btnEl.offsetWidth > 0 && !btnEl.style.minWidth) {
+              btnEl.style.minWidth = btnEl.offsetWidth + "px";
+            }
             btnEl.classList.add("copied");
             btnEl.innerHTML = btnEl.classList.contains("btn-icon-only")
               ? icon("check", 12)
@@ -3039,6 +3421,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
             const tid = setTimeout(() => {
               btnEl.classList.remove("copied");
               btnEl.innerHTML = prevHtml;
+              btnEl.style.minWidth = "";
+              delete btnEl.dataset.timerId;
             }, 1400);
             btnEl.dataset.timerId = String(tid);
           }
@@ -3092,13 +3476,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (ip) ip.setAttribute("aria-label", tr("任务详情抽屉", "Task details drawer"));
       }
 
-      function applyTheme(theme) {
+      function applyTheme(theme, animateSwap) {
         document.documentElement.setAttribute("data-theme", theme);
         const btn = document.getElementById("theme-btn");
         if (btn) {
           const ic = theme === "dark" ? icon("sun", 14) : icon("moon", 14);
-          const lbl = theme === "dark" ? tr("浅色模式", "Light") : tr("深色模式", "Dark");
+          const lbl = theme === "dark" ? tr("浅色外观", "Light Mode") : tr("深色外观", "Dark Mode");
+          btn.title = theme === "dark" ? tr("切换到浅色外观", "Switch to light appearance") : tr("切换到深色外观", "Switch to dark appearance");
           btn.innerHTML = '<span class="sb-item-left">' + ic + '<span class="hide-collapsed">' + lbl + "</span></span>";
+          if (animateSwap && !prefersReducedMotion()) {
+            btn.classList.remove("theme-ic-swap");
+            void btn.offsetWidth;
+            btn.classList.add("theme-ic-swap");
+          }
         }
       }
 
@@ -3263,7 +3653,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (!state.statusPopoverOpen) {
           popEl.classList.remove("open");
           popEl.setAttribute("aria-hidden", "true");
-          popEl.innerHTML = "";
           return;
         }
 
@@ -3386,7 +3775,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
           syncBtn.title = localOnly
             ? tr("当前为仅本地模式 (快捷键 r 刷新本地)", "Local-only mode (press r to refresh)")
             : tr("同步 GitHub / GitLab 远端 (快捷键 r)", "Sync GitHub / GitLab (shortcut r)");
-          syncBtn.innerHTML = icon("refresh", 12) + "<span>" + (isBusy ? tr("同步中", "Syncing") : tr("同步远端", "Sync Forge")) + "</span>";
+          const syncLabel = localOnly
+            ? (isBusy ? tr("扫描中", "Scanning") : tr("刷新本地", "Refresh"))
+            : (isBusy ? tr("同步中", "Syncing") : tr("同步远端", "Sync Forge"));
+          syncBtn.innerHTML = icon("refresh", 12) + "<span>" + syncLabel + "</span>";
         }
 
         renderForgeStatus(false);
@@ -3406,6 +3798,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             '<span class="sb-item-left">' + icon(m.ic, 14) + '<span class="hide-collapsed">' + escapeHtml(m.label) + "</span></span>" +
             '<span class="tile-dot ' + (m.dot ? "show" : "") + '"></span>';
         }
+        syncAllGliders();
         updateTopProgress();
       }
 
@@ -3641,31 +4034,31 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (!item.worktree) {
           if (!targetArg || !item.repo_path) return null;
           return {
-            label: tr("复制开工命令", "Copy Start Cmd"),
+            label: tr("创建工作树开工", "Start Worktree"),
             cmd: "cd " + item.repo_path + " && idd start " + targetArg
           };
         }
         const stInfo = parseStage(item.stage);
         if (stInfo.key === "修 CI" || (item.change && item.change.checks_overall === "FAIL")) {
           return {
-            label: tr("拉取 CI 失败日志", "CI Logs Cmd"),
+            label: tr("排查 CI 失败日志", "Inspect CI Logs"),
             cmd: "cd " + item.worktree + " && idd ci " + (targetArg ? targetArg + " " : "") + "--logs"
           };
         }
         if (stInfo.key === "待合入") {
           return {
-            label: tr("复制合入命令", "Copy Land Cmd"),
+            label: tr("线性 Squash 合入", "Squash Land"),
             cmd: "cd " + item.worktree + " && idd land" + (targetArg ? " " + targetArg : "")
           };
         }
         if (stInfo.key.startsWith("待提") || stInfo.key === "已完成") {
           return {
-            label: tr("复制提 PR 命令", "Copy PR Cmd"),
+            label: tr("创建 PR / MR", "Open PR / MR"),
             cmd: "cd " + item.worktree + " && idd pr" + (targetArg ? " " + targetArg : "")
           };
         }
         return {
-          label: tr("复制同步命令", "Copy Sync Cmd"),
+          label: tr("推送并同步分支", "Sync Branch"),
           cmd: "cd " + item.worktree + " && idd sync" + (targetArg ? " " + targetArg : "")
         };
       }
@@ -3950,7 +4343,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             : tr("点击一键初始化仓库线性 Squash 策略与提交模板", "Click to initialize linear Squash policy & commit templates");
           const policyBtn = isPolicyPending
             ? '<button class="sb-policy-btn hide-collapsed" type="button" data-stop-repo="1" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" title="' + escapeHtml(policyTitle) + '" ' + (riBusy ? "disabled" : "") + ">" +
-                (riBusy ? tr("执行中", "...") : (ri.error ? tr("重试", "Retry") : tr("待初始化", "Init"))) +
+                (riBusy ? tr("初始化中", "Applying") : (ri.error ? tr("重试", "Retry") : tr("待初始化", "Init"))) +
               "</button>"
             : "";
           const amEnabled = Boolean(r.auto_merge && r.auto_merge.enabled);
@@ -4008,7 +4401,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             const activePending = (activeRepo.forge === "github" || activeRepo.forge === "gitlab") && (ari.state === "pending" || ari.state === "prompted");
             const activeBusy = Boolean(state.repoInitRunning[activeRepo.repo_path]);
             const policyHdrBtn = activePending
-              ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="' + escapeHtml(activeRepo.repo_path) + '" ' + (activeBusy ? "disabled" : "") + ">" +
+              ? '<button class="btn btn-xs btn-warn' + (activeBusy ? " spin" : "") + '" type="button" data-apply-repo-init="' + escapeHtml(activeRepo.repo_path) + '" ' + (activeBusy ? "disabled" : "") + ">" +
                   icon(activeBusy ? "refresh" : "alertTriangle", 11) +
                   "<span>" + (activeBusy ? tr("初始化中...", "Applying...") : (ari.error ? tr("策略初始化失败 · 点击重试", "Policy Init Failed · Retry") : tr("待初始化策略 · 点击执行", "Policy Pending · Apply"))) + "</span>" +
                 "</button>"
@@ -4107,7 +4500,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const statChips = [
           { act: "filter-all", label: tr("全部活跃", "All Active"), cnt: scopedItems.length, active: isAllActive, cls: "is-all", ic: icon("radar", 13) },
           { act: "toggle-wt", label: tr("施工中", "In Worktree"), cnt: activeWt, active: state.worktreeOnly, cls: "is-wt", ic: icon("gear", 13) },
-          { act: "toggle-alerts", label: tr("需关注", "Attention"), cnt: attentionCnt, active: state.alertsOnly, cls: "is-alerts", ic: '<span class="stat-beacon"></span>' },
+          { act: "toggle-alerts", label: tr("需关注", "Attention"), cnt: attentionCnt, active: state.alertsOnly, cls: "is-alerts" + (attentionCnt > 0 ? " has-alerts" : ""), ic: '<span class="stat-beacon"></span>' },
           { act: "toggle-ready", label: tr("待合入", "Ready"), cnt: issueReady, active: Boolean(state.readyOnly), cls: "is-ready", ic: icon("checkCircle", 13) },
           { act: "toggle-todo", label: tr("待处理", "Queued"), cnt: issueQueued, active: state.todoOnly, cls: "is-todo", ic: icon("queue", 13) },
           { act: "toggle-cleanup", label: tr("可清理", "Cleanable"), cnt: retainedCnt, active: state.cleanupOnly, cls: "is-cleanup", ic: icon("sparkle", 13) }
@@ -4510,7 +4903,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const gPending = (grp.forge === "github" || grp.forge === "gitlab") && (gri.state === "pending" || gri.state === "prompted");
           const gBusy = Boolean(state.repoInitRunning && state.repoInitRunning[grp.path]);
           const gPolicyBtn = gPending
-            ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="' + escapeHtml(grp.path) + '" ' + (gBusy ? "disabled" : "") + ">" +
+            ? '<button class="btn btn-xs btn-warn' + (gBusy ? " spin" : "") + '" type="button" data-apply-repo-init="' + escapeHtml(grp.path) + '" ' + (gBusy ? "disabled" : "") + ">" +
                 icon(gBusy ? "refresh" : "alertTriangle", 11) +
                 "<span>" + (gBusy ? tr("初始化中...", "Applying...") : (gri.error ? tr("初始化失败 · 重试", "Init Failed · Retry") : tr("待初始化策略 · 一键执行", "Policy Pending · Apply"))) + "</span>" +
               "</button>"
@@ -4539,10 +4932,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const retainedRows = collectRetainedWorktrees(s, false);
         const showRepoOnRetained = state.selectedRepo === "ALL" && (s.repos || []).length > 1;
         const cleanupDrawer = !state.cleanupOnly && !state.todoOnly && retainedRows.length > 0
-          ? '<section class="cleanup-drawer">' +
-              '<button class="cleanup-hdr" type="button" data-toggle-cleanup-drawer="1">' +
+          ? '<section class="cleanup-drawer' + (state.cleanupDrawerOpen ? " is-open" : "") + '">' +
+              '<button class="cleanup-hdr" type="button" data-toggle-cleanup-drawer="1" aria-expanded="' + (state.cleanupDrawerOpen ? "true" : "false") + '">' +
                 '<span style="display:inline-flex;align-items:center;gap:6px;">' +
-                  icon(state.cleanupDrawerOpen ? "chevronDown" : "chevronRight", 13) +
+                  '<span class="cleanup-chevron">' + icon("chevronRight", 13) + "</span>" +
                   "<span>" + tr("已合入但仍保留的本地工作树", "Merged & Retained Worktrees") + "</span>" +
                   '<span class="badge tone-violet num">' + retainedRows.length + "</span>" +
                 "</span>" +
@@ -4599,10 +4992,32 @@ BOARD_HTML = r"""<!DOCTYPE html>
             container.innerHTML = renderReposView(items, snap);
             return;
           }
+          const qText = state.search.trim();
+          let emptyTitle = tr("当前筛选条件下没有内容", "No matching items");
+          let emptyDesc = tr("可以切换仓库、清空搜索词或重置筛选。", "Try switching repositories, clearing search, or resetting filters.");
+          if (qText) {
+            emptyTitle = tr("未找到匹配「" + qText + "」的任务", 'No items matching "' + qText + '"');
+            emptyDesc = tr("尝试调整关键词、切换仓库或重置全部筛选。", "Try another keyword, switch repositories, or reset filters.");
+          } else if (state.alertsOnly) {
+            emptyTitle = tr("当前一切正常，无异常或卡住任务", "All clear — no failing CI or stalled worktrees");
+            emptyDesc = tr("所有活跃分支运行平稳，可切回「全部活跃」查看整体进度。", 'Everything looks healthy. Switch back to "All Active" for the full view.');
+          } else if (state.readyOnly) {
+            emptyTitle = tr("暂无待合入的 PR / MR", "No PRs or MRs ready to land");
+            emptyDesc = tr("当任务全部完成且 CI 全绿后，卡片会自动归集到这里。", "Items appear here once all TASKs finish and CI turns green.");
+          } else if (state.cleanupOnly) {
+            emptyTitle = tr("暂无可清理的已合入目录", "No merged worktrees waiting for cleanup");
+            emptyDesc = tr("已合入且工作区干净的本地目录会自动汇总在这里。", "Clean post-land worktrees will show up here when ready.");
+          } else if (state.todoOnly) {
+            emptyTitle = tr("暂无待处理的 Issue", "No queued Issues");
+            emptyDesc = tr("当前筛选范围内的 Issue 均已进入工作树或合并流程。", "All Issues in scope already have an active worktree or PR/MR.");
+          } else if (state.worktreeOnly) {
+            emptyTitle = tr("当前无正在施工的工作树", "No active worktrees in progress");
+            emptyDesc = tr("执行 idd start <issue#> 开工后，工作树脉搏会实时出现在这里。", "Run idd start <issue#> to spin up an isolated worktree.");
+          }
           container.innerHTML =
             '<div class="empty-state">' +
-              '<h3 style="margin:0 0 6px;font-size:14.5px;color:var(--text);">' + tr("当前筛选条件下没有内容", "No matching items") + "</h3>" +
-              '<p style="margin:0 0 12px;font-size:12.5px;">' + tr("可以切换仓库、清空搜索词或重置筛选。", "Try switching repositories, clearing search, or resetting filters.") + "</p>" +
+              '<h3 style="margin:0 0 6px;font-size:14.5px;color:var(--text);">' + escapeHtml(emptyTitle) + "</h3>" +
+              '<p style="margin:0 0 12px;font-size:12.5px;">' + escapeHtml(emptyDesc) + "</p>" +
               '<button class="btn" type="button" data-kpi-action="clear-filters">' + icon("refresh", 12) + "<span>" + tr("重置筛选", "Reset Filters") + "</span></button>" +
             "</div>";
           return;
@@ -4650,6 +5065,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
           state.inspectedKey = null;
           overlay.classList.remove("open");
           panel.classList.remove("open");
+          overlay.setAttribute("aria-hidden", "true");
+          panel.setAttribute("aria-hidden", "true");
           return;
         }
 
@@ -4671,10 +5088,22 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 return '<div class="file-row"><span class="file-code ' + cls + '">' + escapeHtml(code) + "</span><span>" + escapeHtml(f.path) + "</span></div>";
               }).join("") + "</div>";
         } else {
+          const taskBadgeMeta = (rawSt) => {
+            const k = String(rawSt || "planned").toLowerCase();
+            if (k === "done") return { cls: "tone-success", text: tr("已完成", "Done") };
+            if (k === "in_progress") return { cls: "tone-info", text: tr("进行中", "In Progress") };
+            if (k === "blocked") return { cls: "tone-danger", text: tr("受阻", "Blocked") };
+            if (k === "deferred") return { cls: "tone-warning", text: tr("已暂缓", "Deferred") };
+            if (k === "cancelled") return { cls: "tone-muted", text: tr("已取消", "Cancelled") };
+            return { cls: "tone-muted", text: tr("待执行", "Planned") };
+          };
           tabBody = tasks.length === 0
             ? '<div class="col-empty">' + (item.worktree ? tr("已建工作目录，尚未拆解任务步骤", "Worktree ready; TASK/ steps pending") : tr("暂无本地任务步骤", "No local TASK steps yet")) + "</div>"
             : '<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--text-faint);margin-bottom:5px;" class="num"><span>' + tr("总体进度", "Progress") + "</span><span>" + done + " / " + total + " (" + pct + '%)</span></div><div class="progress-track"><div class="progress-fill" style="width:' + pct + '%"></div></div></div>' +
-              tasks.map((t) => '<div class="task-row"><div class="task-row-top"><span>' + escapeHtml(t.title || t.id) + '</span><span class="badge">' + escapeHtml(t.status || "planned") + "</span></div></div>").join("");
+              tasks.map((t) => {
+                const tb = taskBadgeMeta(t.status);
+                return '<div class="task-row"><div class="task-row-top"><span>' + escapeHtml(t.title || t.id) + '</span><span class="badge ' + tb.cls + '">' + escapeHtml(tb.text) + "</span></div></div>";
+              }).join("");
         }
 
         panel.innerHTML =
@@ -4706,6 +5135,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
         panel.classList.add("open");
         overlay.setAttribute("aria-hidden", "false");
         panel.setAttribute("aria-hidden", "false");
+        if (typeof window !== "undefined" && typeof panel.querySelector === "function") {
+          const inspTabs = panel.querySelector(".tabs");
+          if (inspTabs) syncSegmentedIndicator(inspTabs, ".tab-btn.active");
+        }
       }
 
       function buildFallbackAuthHosts() {
@@ -4790,6 +5223,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           state.lastTopAlertsSig = "";
           renderTopAlerts(state.snapshot);
           if (state.setupOpen) renderSetupModal();
+          focusAndNudgeTokenInput(state.setupOpen ? "#setup-modal" : "#top-alerts-wrap", targetHost, true);
           return false;
         }
         state.authSavingHost = targetHost;
@@ -4844,6 +5278,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           state.lastTopAlertsSig = "";
           renderTopAlerts(state.snapshot);
           if (state.setupOpen) renderSetupModal();
+          focusAndNudgeTokenInput(state.setupOpen ? "#setup-modal" : "#top-alerts-wrap", targetHost, true);
           return false;
         } finally {
           state.authSavingHost = "";
@@ -4990,12 +5425,22 @@ BOARD_HTML = r"""<!DOCTYPE html>
           globalDefault: globalDefault,
           currentOverride: currentOverride
         };
+        if (typeof document !== "undefined" && document.activeElement) {
+          state.lastFocusBeforeModal = document.activeElement;
+        }
         renderAutoMergeConfirmModal();
+        if (typeof document !== "undefined" && typeof document.getElementById === "function") {
+          const m = document.getElementById("am-confirm-modal");
+          if (m && typeof m.querySelector === "function") focusInsideModal(m);
+        }
       }
 
       function closeAutoMergeConfirm() {
         state.amConfirm = null;
         renderAutoMergeConfirmModal();
+        if (typeof document !== "undefined" && typeof restoreSavedFocus === "function") {
+          restoreSavedFocus();
+        }
       }
 
       function renderAutoMergeConfirmModal() {
@@ -5097,9 +5542,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
       }
 
       function openSetupModal(tab) {
+        if (!state.setupOpen && typeof document !== "undefined" && document.activeElement) {
+          state.lastFocusBeforeModal = document.activeElement;
+        }
         state.setupOpen = true;
         if (tab) state.setupTab = tab;
         renderSetupModal();
+        focusInsideModal(document.getElementById("setup-modal"));
         fetchAuthStatus();
       }
 
@@ -5109,6 +5558,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           sessionStorage.setItem("idd_setup_dismissed", "1");
         }
         renderSetupModal();
+        restoreSavedFocus();
       }
 
       function renderPermissionGuide(forgeType) {
@@ -5288,8 +5738,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
                       '<div class="flow-step">' +
                         '<div class="flow-step-hdr"><span class="flow-step-title"><span class="flow-num">2</span><span>' + tr("粘贴令牌并点击保存（自动验证，无需敲命令）", "Paste Token & Save (Verified Automatically)") + "</span></span></div>" +
                         '<div class="auth-alert-form">' +
-                          '<input class="token-input" type="password" autocomplete="off" data-token-draft="' + escapeHtml(target) + '" value="' + escapeHtml(draftVal) + '" placeholder="' + escapeHtml(isGitLab ? tr("粘贴 GitLab 令牌（如 glpat-...）", "Paste GitLab Token (glpat-...)") : tr("粘贴 GitHub 令牌（如 ghp_... 或 github_pat_...）", "Paste GitHub Token (ghp_...)")) + '" />' +
-                          '<button class="btn btn-primary" style="height:34px;padding:0 14px;" type="button" data-save-host="' + escapeHtml(target) + '" data-save-forge="' + escapeHtml(h.forge) + '" ' + (saving ? "disabled" : "") + ">" +
+                          '<input class="token-input' + (errMsg ? " is-invalid" : "") + '" type="password" autocomplete="off" data-token-draft="' + escapeHtml(target) + '" value="' + escapeHtml(draftVal) + '" placeholder="' + escapeHtml(isGitLab ? tr("粘贴 GitLab 令牌（如 glpat-...）", "Paste GitLab Token (glpat-...)") : tr("粘贴 GitHub 令牌（如 ghp_... 或 github_pat_...）", "Paste GitHub Token (ghp_...)")) + '" />' +
+                          '<button class="btn btn-primary' + (saving ? " spin" : "") + '" style="height:34px;padding:0 14px;" type="button" data-save-host="' + escapeHtml(target) + '" data-save-forge="' + escapeHtml(h.forge) + '" ' + (saving ? "disabled" : "") + ">" +
                             icon(saving ? "refresh" : "check", 12) +
                             "<span>" + (saving ? tr("验证中...", "Verifying...") : tr("保存并连接", "Save & Connect")) + "</span>" +
                           "</button>" +
@@ -5337,7 +5787,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 '<div class="policy-section-hdr">' +
                   '<span style="font-size:12.5px;font-weight:600;color:var(--text);">' + tr("仓库合入策略与模板状态", "Repository Merge Policy & Templates") + "</span>" +
                   (pendingRemoteRepos.length > 1
-                    ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="__all__" ' + (allBusy ? "disabled" : "") + ">" +
+                    ? '<button class="btn btn-xs btn-warn' + (allBusy ? " spin" : "") + '" type="button" data-apply-repo-init="__all__" ' + (allBusy ? "disabled" : "") + ">" +
                         icon(allBusy ? "refresh" : "check", 11) +
                         "<span>" + (allBusy ? tr("全部初始化中...", "Applying All...") : tr("全部一键初始化 (" + pendingRemoteRepos.length + ")", "Apply All (" + pendingRemoteRepos.length + ")")) + "</span>" +
                       "</button>"
@@ -5358,11 +5808,11 @@ BOARD_HTML = r"""<!DOCTYPE html>
                     const badgeHtml = isAligned
                       ? '<span class="badge tone-success">' + icon("check", 11) + "<span>" + tr("已对齐", "Aligned") + "</span></span>"
                       : (isPending
-                          ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
+                          ? '<button class="btn btn-xs btn-warn' + (busy ? " spin" : "") + '" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
                               icon(busy ? "refresh" : "alertTriangle", 11) +
                               "<span>" + (busy ? tr("初始化中...", "Applying...") : (errText ? tr("重试初始化", "Retry Init") : tr("一键初始化", "Apply Now"))) + "</span>" +
                             "</button>"
-                          : '<button class="btn btn-xs" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
+                          : '<button class="btn btn-xs' + (busy ? " spin" : "") + '" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
                               icon("refresh", 11) +
                               "<span>" + (busy ? tr("检测中...", "Checking...") : tr("立即初始化", "Initialize")) + "</span>" +
                             "</button>");
@@ -5450,7 +5900,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
               '<button class="btn" type="button" data-setup-close="1">' + tr("稍后再说", "Later") + "</button>" +
               '<button class="btn btn-primary" type="button" data-setup-tab="guide"><span>' + tr("下一步：了解工作流", "Next: 4-Step Guide") + "</span>" + icon("chevronRight", 13) + "</button>" +
             "</div>"
-          : '<button class="btn" type="button" data-setup-tab="auth"><span>' + tr("← 返回平台配置", "<- Back to Setup") + "</span></button>" +
+          : '<button class="btn" type="button" data-setup-tab="auth">' + icon("chevronLeft", 13) + "<span>" + tr("返回平台配置", "Back to Setup") + "</span></button>" +
             '<button class="btn btn-primary" type="button" id="finish-onboarding-btn">' + icon("check", 13) + "<span>" + tr("开始使用看板", "Finish & Enter Board") + "</span></button>";
 
         modal.innerHTML =
@@ -5469,6 +5919,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
           "</div>" +
           '<div class="setup-body">' + bodyHtml + "</div>" +
           '<div class="setup-ftr">' + ftrHtml + "</div>";
+        if (typeof window !== "undefined" && typeof modal.querySelector === "function") {
+          syncAllGliders();
+        }
       }
 
       function renderTopAlerts(snap) {
@@ -5535,8 +5988,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
               "</div>" +
               '<div class="auth-alert-form">' +
                 (tokenHref ? '<a class="btn btn-sm" href="' + escapeHtml(tokenHref) + '" target="_blank" rel="noopener noreferrer">' + icon("externalLink", 12) + "<span>" + tr("1. 去生成令牌 (勾选 " + scopeName + ")", "1. Create Token (" + scopeName + ")") + "</span></a>" : "") +
-                '<input class="token-input" type="password" autocomplete="off" data-token-draft="' + escapeHtml(target) + '" value="' + escapeHtml(draftVal) + '" placeholder="' + escapeHtml(tr("2. 粘贴生成的令牌，点右侧直接保存（无需执行命令）", "2. Paste token here and click Save")) + '" />' +
-                '<button class="btn btn-sm btn-primary" style="height:34px;padding:0 14px;" type="button" data-save-host="' + escapeHtml(target) + '" data-save-forge="' + escapeHtml(fg) + '" ' + (saving ? "disabled" : "") + ">" +
+                '<input class="token-input' + (errMsg ? " is-invalid" : "") + '" type="password" autocomplete="off" data-token-draft="' + escapeHtml(target) + '" value="' + escapeHtml(draftVal) + '" placeholder="' + escapeHtml(tr("2. 粘贴生成的令牌，点右侧直接保存（无需执行命令）", "2. Paste token here and click Save")) + '" />' +
+                '<button class="btn btn-sm btn-primary' + (saving ? " spin" : "") + '" style="height:34px;padding:0 14px;" type="button" data-save-host="' + escapeHtml(target) + '" data-save-forge="' + escapeHtml(fg) + '" ' + (saving ? "disabled" : "") + ">" +
                   icon(saving ? "refresh" : "check", 12) +
                   "<span>" + (saving ? tr("验证中...", "Verifying...") : tr("保存并连接", "Save & Connect")) + "</span>" +
                 "</button>" +
@@ -5564,7 +6017,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                   "</div>" +
                   '<div style="font-size:11px;color:' + (errMsg ? "var(--red)" : "var(--text-dim)") + ';margin-top:2px;word-break:break-word;">' + escapeHtml(detail) + "</div>" +
                 "</div>" +
-                '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
+                '<button class="btn btn-xs btn-warn' + (busy ? " spin" : "") + '" type="button" data-apply-repo-init="' + escapeHtml(r.repo_path) + '" ' + (busy ? "disabled" : "") + ">" +
                   icon(busy ? "refresh" : "check", 11) +
                   "<span>" + (busy ? tr("初始化中...", "Applying...") : (errMsg ? tr("重试初始化", "Retry") : tr("立即初始化", "Apply Now"))) + "</span>" +
                 "</button>" +
@@ -5582,7 +6035,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 "</div>" +
                 '<div style="display:inline-flex;align-items:center;gap:6px;">' +
                   (pendingPolicyRepos.length > 1
-                    ? '<button class="btn btn-xs btn-warn" type="button" data-apply-repo-init="__all__" ' + (allBusy ? "disabled" : "") + ">" +
+                    ? '<button class="btn btn-xs btn-warn' + (allBusy ? " spin" : "") + '" type="button" data-apply-repo-init="__all__" ' + (allBusy ? "disabled" : "") + ">" +
                         icon(allBusy ? "refresh" : "check", 11) +
                         "<span>" + (allBusy ? tr("全部初始化中...", "Applying...") : tr("全部一键初始化", "Apply All")) + "</span>" +
                       "</button>"
@@ -5741,7 +6194,19 @@ BOARD_HTML = r"""<!DOCTYPE html>
             state.quickSyncTimerId = setTimeout(() => fetchSnapshot(false), 800);
           }
           if (forceRefresh) {
-            showToast(tr("已触发远端同步，正在更新...", "Triggered remote sync..."));
+            if (state.snapshot && state.snapshot.local_only) {
+              state.pendingManualSyncToast = false;
+              showToast(tr("已刷新本地工作树", "Local worktrees refreshed"));
+            } else if (state.snapshot && state.snapshot.forge_syncing) {
+              state.pendingManualSyncToast = true;
+              showToast(tr("正在同步远端状态…", "Syncing remote status…"), "info");
+            } else {
+              state.pendingManualSyncToast = false;
+              showToast(tr("远端同步已完成", "Remote sync complete"));
+            }
+          } else if (state.pendingManualSyncToast && state.snapshot && !state.snapshot.forge_syncing) {
+            state.pendingManualSyncToast = false;
+            showToast(tr("远端同步已完成", "Remote sync complete"));
           }
         } catch (err) {
           if (!state.snapshot) {
@@ -5831,6 +6296,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
             document.getElementById("search-wrap").classList.remove("has-value");
           }
           renderAll(true);
+          const nextChip = document.querySelector('#kpis [data-kpi-action="' + CSS.escape(act) + '"]');
+          if (nextChip && !prefersReducedMotion()) {
+            nextChip.classList.remove("just-clicked");
+            void nextChip.offsetWidth;
+            nextChip.classList.add("just-clicked");
+            setTimeout(() => nextChip.classList.remove("just-clicked"), 420);
+          }
           return true;
         }
         return false;
@@ -5865,9 +6337,27 @@ BOARD_HTML = r"""<!DOCTYPE html>
       document.getElementById("top-alerts-wrap").addEventListener("click", (e) => {
         const dismissBanner = e.target.closest("[data-dismiss-repo-init-banner]");
         if (dismissBanner) {
-          state.repoInitBannerDismissed = true;
-          state.lastTopAlertsSig = "";
-          renderTopAlerts(state.snapshot);
+          const box = dismissBanner.closest(".auth-alert-box");
+          if (box && !prefersReducedMotion() && typeof box.animate === "function") {
+            const h = box.offsetHeight;
+            const anim = box.animate(
+              [
+                { opacity: 1, height: h + "px", paddingTop: "13px", paddingBottom: "13px", marginBottom: "0px" },
+                { opacity: 0, height: "0px", paddingTop: "0px", paddingBottom: "0px", marginBottom: "-10px" }
+              ],
+              { duration: 170, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "forwards" }
+            );
+            box.style.overflow = "hidden";
+            anim.onfinish = () => {
+              state.repoInitBannerDismissed = true;
+              state.lastTopAlertsSig = "";
+              renderTopAlerts(state.snapshot);
+            };
+          } else {
+            state.repoInitBannerDismissed = true;
+            state.lastTopAlertsSig = "";
+            renderTopAlerts(state.snapshot);
+          }
           return;
         }
         const applyBtn = e.target.closest("[data-apply-repo-init]");
@@ -5946,8 +6436,21 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
         const tabBtn = e.target.closest("[data-setup-tab]");
         if (tabBtn) {
+          const modalEl = document.getElementById("setup-modal");
+          const prevH = modalEl ? modalEl.offsetHeight : 0;
           state.setupTab = tabBtn.getAttribute("data-setup-tab") || "auth";
           renderSetupModal();
+          if (modalEl && !prefersReducedMotion() && typeof modalEl.animate === "function") {
+            const nextH = modalEl.offsetHeight;
+            if (prevH > 0 && nextH > 0 && Math.abs(nextH - prevH) > 4) {
+              modalEl.animate(
+                [{ height: prevH + "px" }, { height: nextH + "px" }],
+                { duration: 200, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }
+              );
+            }
+            const bodyEl = modalEl.querySelector(".setup-body");
+            if (bodyEl) bodyEl.classList.add("is-swapping");
+          }
           return;
         }
         if (e.target.closest("#finish-onboarding-btn")) {
@@ -5967,6 +6470,15 @@ BOARD_HTML = r"""<!DOCTYPE html>
           const h = editBtn.getAttribute("data-toggle-edit-host") || "";
           state.editingHosts[h] = !state.editingHosts[h];
           renderSetupModal();
+          if (state.editingHosts[h]) {
+            requestAnimationFrame(() => {
+              const inp = document.querySelector('#setup-modal [data-token-draft="' + CSS.escape(h) + '"]');
+              if (inp) {
+                inp.focus({ preventScroll: true });
+                inp.scrollIntoView({ block: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+              }
+            });
+          }
           return;
         }
         const rmBtn = e.target.closest("[data-remove-host]");
@@ -5978,6 +6490,15 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (customToggle) {
           state.showCustomHostForm = customToggle.getAttribute("data-toggle-custom-host") === "1";
           renderSetupModal();
+          if (state.showCustomHostForm) {
+            requestAnimationFrame(() => {
+              const urlInp = document.getElementById("custom-host-url");
+              if (urlInp) {
+                urlInp.focus({ preventScroll: true });
+                urlInp.scrollIntoView({ block: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+              }
+            });
+          }
           return;
         }
         const cfBtn = e.target.closest("[data-custom-forge]");
@@ -5992,6 +6513,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           if (!rawUrl || !rawTok) {
             state.authErrors.__custom__ = tr("请填写主机地址并粘贴访问令牌", "Please enter both host URL and token");
             renderSetupModal();
+            focusAndNudgeTokenInput("#setup-modal", "__custom__", true);
             return;
           }
           delete state.authErrors.__custom__;
@@ -6000,6 +6522,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           if (!ok && state.authErrors[rawUrl]) {
             state.authErrors.__custom__ = state.authErrors[rawUrl];
             renderSetupModal();
+            focusAndNudgeTokenInput("#setup-modal", "__custom__", true);
           }
         }
       });
@@ -6025,6 +6548,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (submitBtn && state.amConfirm) {
           const pending = state.amConfirm;
           submitBtn.disabled = true;
+          submitBtn.classList.add("spin");
+          submitBtn.innerHTML = icon("refresh", 13) + "<span>" + tr("保存中...", "Saving...") + "</span>";
           await setAutoMergeSetting(pending.scope, pending.repoPath, pending.nextValue);
           closeAutoMergeConfirm();
         }
@@ -6068,8 +6593,34 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (handleActionClick(e)) return;
         const toggleDrawer = e.target.closest("[data-toggle-cleanup-drawer]");
         if (toggleDrawer) {
-          state.cleanupDrawerOpen = !state.cleanupDrawerOpen;
-          renderAll(true);
+          const drawerEl = toggleDrawer.closest(".cleanup-drawer");
+          const bodyEl = drawerEl ? drawerEl.querySelector(".cleanup-body") : null;
+          if (state.cleanupDrawerOpen && bodyEl && !prefersReducedMotion() && typeof bodyEl.animate === "function") {
+            drawerEl.classList.remove("is-open");
+            toggleDrawer.setAttribute("aria-expanded", "false");
+            const h = bodyEl.offsetHeight;
+            const anim = bodyEl.animate(
+              [{ height: h + "px", opacity: 1, paddingTop: "12px", paddingBottom: "16px" }, { height: "0px", opacity: 0, paddingTop: "0px", paddingBottom: "0px" }],
+              { duration: 190, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "forwards" }
+            );
+            anim.onfinish = () => {
+              state.cleanupDrawerOpen = false;
+              renderAll(true);
+            };
+          } else {
+            state.cleanupDrawerOpen = !state.cleanupDrawerOpen;
+            renderAll(true);
+            if (state.cleanupDrawerOpen && !prefersReducedMotion()) {
+              const nextBody = document.querySelector(".cleanup-drawer .cleanup-body");
+              if (nextBody && typeof nextBody.animate === "function") {
+                const h = nextBody.offsetHeight;
+                nextBody.animate(
+                  [{ height: "0px", opacity: 0, paddingTop: "0px", paddingBottom: "0px" }, { height: h + "px", opacity: 1, paddingTop: "12px", paddingBottom: "16px" }],
+                  { duration: 210, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }
+                );
+              }
+            }
+          }
           return;
         }
         const applyBtn = e.target.closest("[data-apply-repo-init]");
@@ -6114,7 +6665,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
         state.sidebarCollapsed = !state.sidebarCollapsed;
         localStorage.setItem("idd_sidebar_collapsed", state.sidebarCollapsed ? "1" : "0");
         applySidebarState();
-        renderAll(true);
+        requestAnimationFrame(() => syncAllGliders());
+        setTimeout(() => syncAllGliders(), 230);
       });
 
       document.getElementById("pause-btn").addEventListener("click", () => {
@@ -6186,7 +6738,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const cur = document.documentElement.getAttribute("data-theme") || "dark";
         const next = cur === "dark" ? "light" : "dark";
         localStorage.setItem("idd_board_theme", next);
-        applyTheme(next);
+        applyTheme(next, true);
       });
 
       document.getElementById("lang-btn").addEventListener("click", () => {
@@ -6257,7 +6809,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
           state.sidebarCollapsed = !state.sidebarCollapsed;
           localStorage.setItem("idd_sidebar_collapsed", state.sidebarCollapsed ? "1" : "0");
           applySidebarState();
-          renderAll(true);
+          requestAnimationFrame(() => syncAllGliders());
+          setTimeout(() => syncAllGliders(), 230);
         } else if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
           e.preventDefault();
           searchInput.focus();
