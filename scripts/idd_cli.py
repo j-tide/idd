@@ -545,12 +545,82 @@ def _wrap_inline_code(text: str) -> str:
 def _unwrap_inline_code(text: str) -> str:
     """Strip matching outer CommonMark inline code backticks if present."""
     cleaned = text.strip()
-    match = re.fullmatch(r"(`+)(.+?)\1", cleaned, flags=re.DOTALL)
-    if match:
-        inner = match.group(2).strip()
-        if inner:
-            return inner
+    if not cleaned.startswith("`"):
+        return cleaned
+    open_match = re.match(r"^(`+)", cleaned)
+    if not open_match:
+        return cleaned
+    fence = open_match.group(1)
+    fence_len = len(fence)
+    for m in re.finditer(r"`+", cleaned[fence_len:]):
+        if len(m.group(0)) == fence_len:
+            end_pos = fence_len + m.end()
+            if end_pos == len(cleaned):
+                inner = cleaned[fence_len : fence_len + m.start()].strip()
+                if inner:
+                    return inner
+            break
     return cleaned
+
+
+def _extract_single_paren_note(rem: str) -> str | None:
+    """Return inner text when rem is one balanced parenthetical note without backticks."""
+    if not rem or "`" in rem:
+        return None
+    if not ((rem.startswith("(") and rem.endswith(")")) or (rem.startswith("（") and rem.endswith("）"))):
+        return None
+    depth = 0
+    for idx, ch in enumerate(rem):
+        if ch in ("(", "（"):
+            depth += 1
+        elif ch in (")", "）"):
+            depth -= 1
+            if depth < 0:
+                return None
+            if depth == 0 and idx != len(rem) - 1:
+                return None
+    if depth != 0:
+        return None
+    return rem[1:-1].strip()
+
+
+def _unwrap_inline_code_with_note(text: str) -> tuple[str, str]:
+    """Unwrap outer inline code ticks and peel a trailing parenthetical annotation if present."""
+    cleaned = text.strip()
+    if cleaned.startswith("`"):
+        open_match = re.match(r"^(`+)", cleaned)
+        if open_match:
+            fence_len = len(open_match.group(1))
+            for m in re.finditer(r"`+", cleaned[fence_len:]):
+                if len(m.group(0)) == fence_len:
+                    inner = cleaned[fence_len : fence_len + m.start()].strip()
+                    rem = cleaned[fence_len + m.end() :].strip()
+                    if inner:
+                        if not rem:
+                            return inner, ""
+                        note = _extract_single_paren_note(rem)
+                        if note is not None:
+                            return inner, note
+                    break
+
+    paren_match = re.match(r"^(.*?)\s+([（(][^()（）]+[）)])$", cleaned)
+    if paren_match:
+        cmd_part = paren_match.group(1).strip()
+        raw_note = paren_match.group(2).strip()
+        note = raw_note[1:-1].strip()
+        if (
+            cmd_part
+            and note
+            and not cmd_part.endswith("$")
+            and (
+                (raw_note.startswith("（") and raw_note.endswith("）"))
+                or bool(re.search(r"[\u4e00-\u9fff]", note))
+                or bool(re.match(r"^(?:ci|all|full|local|smoke)\b", note, re.IGNORECASE))
+            )
+        ):
+            return _unwrap_inline_code(cmd_part), note
+
+    return cleaned, ""
 
 
 _COMPLETED_CHECK_END_RE = re.compile(
@@ -667,9 +737,54 @@ def _looks_like_completed_check(text: str) -> bool:
     return bool(_COMPLETED_CHECK_END_RE.search(text.strip()))
 
 
+def _split_top_level_semicolons(cleaned: str) -> list[str]:
+    """Split on `; ` only outside parentheses and inline backtick spans."""
+    parts: list[str] = []
+    buf: list[str] = []
+    in_ticks = 0
+    paren_depth = 0
+    i = 0
+    n = len(cleaned)
+    while i < n:
+        ch = cleaned[i]
+        if ch == "`":
+            j = i
+            while j < n and cleaned[j] == "`":
+                j += 1
+            run = cleaned[i:j]
+            run_len = j - i
+            if in_ticks == 0:
+                in_ticks = run_len
+            elif run_len == in_ticks:
+                in_ticks = 0
+            buf.append(run)
+            i = j
+            continue
+        if in_ticks == 0:
+            if ch in ("(", "（"):
+                paren_depth += 1
+            elif ch in (")", "）"):
+                paren_depth = max(0, paren_depth - 1)
+            elif ch == ";" and paren_depth == 0 and i + 1 < n and cleaned[i + 1].isspace():
+                seg = "".join(buf).strip()
+                if seg:
+                    parts.append(seg)
+                buf.clear()
+                i += 1
+                while i < n and cleaned[i].isspace():
+                    i += 1
+                continue
+        buf.append(ch)
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
 def _split_test_segments(cleaned: str) -> list[str]:
     """Split multi-check Test strings on `; ` while preserving compound shell commands."""
-    parts = [p.strip() for p in re.split(r";\s+", cleaned) if p.strip()]
+    parts = _split_top_level_semicolons(cleaned)
     if len(parts) <= 1:
         return parts
 
@@ -702,17 +817,26 @@ def _is_file_target(target: str) -> bool:
     return "." in base and not target.endswith("/")
 
 
-def _format_targets_label(prefix: str, targets: list[str]) -> str:
+def _format_targets_struct(prefix: str, targets: list[str], *, raw_cmd: str) -> dict[str, Any]:
     if not targets:
-        return prefix
+        return {"code": prefix, "target_code": "", "meta": "", "simplified": prefix != raw_cmd}
     if len(targets) == 1:
-        return f"{prefix} {targets[0]}"
+        target = targets[0]
+        joined = f"{prefix} {target}"
+        if _is_file_target(target) and (len(joined) > 48 or target.count("/") >= 3):
+            base = target.rstrip("/").rsplit("/", 1)[-1]
+            return {"code": prefix, "target_code": base, "meta": "", "simplified": True}
+        if not _is_file_target(target) and len(joined) > 55 and target.count("/") >= 3:
+            segs = [s for s in target.split("/") if s]
+            short_dir = ".../" + "/".join(segs[-2:]) + ("/" if target.endswith("/") else "")
+            return {"code": prefix, "target_code": short_dir, "meta": "", "simplified": True}
+        return {"code": joined, "target_code": "", "meta": "", "simplified": joined != raw_cmd}
     if len(targets) == 2:
         joined = f"{prefix} {targets[0]} {targets[1]}"
-        if len(joined) <= 65:
-            return joined
+        if len(joined) <= 55:
+            return {"code": joined, "target_code": "", "meta": "", "simplified": joined != raw_cmd}
     unit = "测试文件" if all(_is_file_target(t) for t in targets) else "测试目标"
-    return f"{prefix} ({len(targets)} 个{unit})"
+    return {"code": prefix, "target_code": "", "meta": f"{len(targets)} 个{unit}", "simplified": True}
 
 
 def _collect_positional_targets(
@@ -743,17 +867,17 @@ def _collect_positional_targets(
     return targets
 
 
-def _summarize_single_part(raw_cmd: str) -> str:
-    """Shorten a single shell command (no `&&`) into a concise runner label."""
-    cleaned = raw_cmd.strip()
+def _summarize_single_part_struct(raw_cmd: str) -> dict[str, Any]:
+    """Shorten a single shell command (no `&&`) into structured code + optional meta."""
+    cleaned = _unwrap_inline_code(raw_cmd)
     if not cleaned:
-        return ""
+        return {"code": "", "target_code": "", "meta": "", "simplified": False}
     try:
         tokens = shlex.split(cleaned)
     except ValueError:
         tokens = cleaned.split()
     if not tokens:
-        return cleaned
+        return {"code": cleaned, "target_code": "", "meta": "", "simplified": False}
 
     while tokens and _ENV_ASSIGN_RE.match(tokens[0]):
         tokens.pop(0)
@@ -785,7 +909,7 @@ def _summarize_single_part(raw_cmd: str) -> str:
             changed = True
 
     if not tokens:
-        return cleaned
+        return {"code": cleaned, "target_code": "", "meta": "", "simplified": False}
 
     cmd = Path(tokens[0]).name
     rest = tokens[1:]
@@ -797,7 +921,7 @@ def _summarize_single_part(raw_cmd: str) -> str:
             bool_flags=_PYTEST_BOOL_FLAGS,
             skip_r_prefix=True,
         )
-        return _format_targets_label("pytest", targets)
+        return _format_targets_struct("pytest", targets, raw_cmd=cleaned)
 
     if cmd == "unittest":
         if rest and rest[0] == "discover":
@@ -815,13 +939,14 @@ def _summarize_single_part(raw_cmd: str) -> str:
                     i += 2
                 else:
                     i += 1
-            return f"unittest {start_dir}" if start_dir else "unittest discover"
+            code = f"unittest {start_dir}" if start_dir else "unittest discover"
+            return {"code": code, "target_code": "", "meta": "", "simplified": code != cleaned}
         targets = _collect_positional_targets(
             rest,
             value_flags={"-k"},
             bool_flags={"-v", "--verbose", "-q", "--quiet", "-f", "--failfast", "-b", "--buffer", "-c", "--catch"},
         )
-        return _format_targets_label("unittest", targets)
+        return _format_targets_struct("unittest", targets, raw_cmd=cleaned)
 
     if cmd in ("pnpm", "npm", "yarn", "bun"):
         idx = 0
@@ -844,7 +969,7 @@ def _summarize_single_part(raw_cmd: str) -> str:
                 value_flags=_JS_VALUE_FLAGS,
                 bool_flags=_JS_BOOL_FLAGS,
             )
-            return _format_targets_label(f"{cmd} {script}", targets)
+            return _format_targets_struct(f"{cmd} {script}", targets, raw_cmd=cleaned)
 
     if cmd in ("vitest", "jest", "mocha"):
         args = rest[1:] if (cmd == "vitest" and rest and rest[0] == "run") else rest
@@ -853,7 +978,7 @@ def _summarize_single_part(raw_cmd: str) -> str:
             value_flags=_JS_VALUE_FLAGS,
             bool_flags=_JS_BOOL_FLAGS,
         )
-        return _format_targets_label(cmd, targets)
+        return _format_targets_struct(cmd, targets, raw_cmd=cleaned)
 
     if cmd == "go" and rest and rest[0] == "test":
         targets = _collect_positional_targets(
@@ -861,7 +986,7 @@ def _summarize_single_part(raw_cmd: str) -> str:
             value_flags={"-run", "-skip", "-count", "-timeout", "-tags", "-coverprofile"},
             bool_flags={"-v", "-race", "-cover", "-short", "-json"},
         )
-        return _format_targets_label("go test", targets)
+        return _format_targets_struct("go test", targets, raw_cmd=cleaned)
 
     if cmd == "cargo" and rest and rest[0] == "test":
         targets = _collect_positional_targets(
@@ -869,10 +994,10 @@ def _summarize_single_part(raw_cmd: str) -> str:
             value_flags={"-p", "--package", "--test", "--bin", "--features"},
             bool_flags={"--workspace", "--all-targets", "--lib", "--quiet", "-q", "--nocapture", "--"},
         )
-        return _format_targets_label("cargo test", targets)
+        return _format_targets_struct("cargo test", targets, raw_cmd=cleaned)
 
     if tokens != cleaned.split() and len(tokens) == 1:
-        return tokens[0]
+        return {"code": tokens[0], "target_code": "", "meta": "", "simplified": tokens[0] != cleaned}
     if len(cleaned) > 80 and len(tokens) >= 4:
         trailing_files: list[str] = []
         for tok in reversed(tokens):
@@ -882,48 +1007,97 @@ def _summarize_single_part(raw_cmd: str) -> str:
                 break
         if len(trailing_files) >= 3:
             prefix_tokens = tokens[: len(tokens) - len(trailing_files)]
-            return f"{' '.join(prefix_tokens)} ({len(trailing_files)} 个文件)"
-    return cleaned
+            return {
+                "code": " ".join(prefix_tokens),
+                "target_code": "",
+                "meta": f"{len(trailing_files)} 个文件",
+                "simplified": True,
+            }
+    return {"code": cleaned, "target_code": "", "meta": "", "simplified": False}
 
 
-def _summarize_single_command(raw_cmd: str) -> str:
-    """Produce a concise display label for a validation command."""
+def _format_part_markdown(part: dict[str, Any]) -> str:
+    code = _wrap_inline_code(str(part.get("code", "")))
+    target_code = str(part.get("target_code", ""))
+    meta = str(part.get("meta", ""))
+    if target_code:
+        return f"{code}（{_wrap_inline_code(target_code)}）"
+    if meta:
+        return f"{code}（{meta}）"
+    return code
+
+
+def _format_part_plain(part: dict[str, Any]) -> str:
+    code = str(part.get("code", ""))
+    target_code = str(part.get("target_code", ""))
+    meta = str(part.get("meta", ""))
+    if target_code:
+        return f"{code} ({target_code})"
+    if meta:
+        return f"{code} ({meta})"
+    return code
+
+
+def _summarize_command_struct(raw_cmd: str, note: str = "") -> dict[str, Any]:
+    """Produce structured Markdown and plain-text labels for a validation command."""
     cleaned = raw_cmd.strip()
     if not cleaned:
-        return ""
+        return {"raw_cmd": "", "md_label": "", "label": "", "simplified": False}
     if " && " in cleaned:
-        parts = [p.strip() for p in cleaned.split(" && ") if p.strip()]
-        if len(parts) > 1:
-            return " && ".join(_summarize_single_part(p) for p in parts)
-    return _summarize_single_part(cleaned)
+        raw_parts = [_unwrap_inline_code(p) for p in cleaned.split(" && ") if p.strip()]
+    else:
+        raw_parts = [_unwrap_inline_code(cleaned)]
+    raw_parts = [p for p in raw_parts if p]
+    if not raw_parts:
+        return {"raw_cmd": "", "md_label": "", "label": "", "simplified": False}
+
+    parts_struct = [_summarize_single_part_struct(p) for p in raw_parts]
+    md_label = "、".join(_format_part_markdown(p) for p in parts_struct)
+    plain_label = " && ".join(_format_part_plain(p) for p in parts_struct)
+    if note:
+        md_label = f"{md_label}（{note}）"
+        plain_label = f"{plain_label} ({note})"
+    clean_raw = " && ".join(raw_parts)
+    simplified = any(bool(p.get("simplified")) for p in parts_struct)
+    return {
+        "raw_cmd": clean_raw,
+        "md_label": md_label,
+        "label": plain_label,
+        "simplified": simplified,
+    }
 
 
 def _parse_test_entries(test_text: str) -> list[dict[str, Any]]:
     """Parse Test summary text into structured entries with optional simplified labels."""
     cleaned = test_text.strip()
     if not cleaned or cleaned in ("未记录", "未在提交中记录"):
-        return [{"raw_cmd": "", "label": "", "result": cleaned or "未记录", "simplified": False}]
+        return [{"raw_cmd": "", "md_label": "", "label": "", "result": cleaned or "未记录", "simplified": False}]
 
     entries: list[dict[str, Any]] = []
     for seg in _split_test_segments(cleaned):
         if " — " in seg:
             raw_cmd_part, res_part = seg.split(" — ", 1)
-            raw_cmd = _unwrap_inline_code(raw_cmd_part)
-            label = _summarize_single_command(raw_cmd) if raw_cmd else ""
-            simplified = bool(raw_cmd and label and label != raw_cmd)
+            raw_cmd, note = _unwrap_inline_code_with_note(raw_cmd_part)
+            summary = _summarize_command_struct(raw_cmd, note) if raw_cmd else {
+                "raw_cmd": "",
+                "md_label": "",
+                "label": "",
+                "simplified": False,
+            }
             entries.append(
                 {
-                    "raw_cmd": raw_cmd,
-                    "label": label,
+                    "raw_cmd": summary["raw_cmd"],
+                    "md_label": summary["md_label"],
+                    "label": summary["label"],
                     "result": res_part.strip(),
-                    "simplified": simplified,
+                    "simplified": summary["simplified"],
                 }
             )
             continue
 
         trailing = _TRAILING_STATUS_RE.match(seg)
         if trailing:
-            prefix = _unwrap_inline_code(trailing.group(1))
+            prefix, note = _unwrap_inline_code_with_note(trailing.group(1))
             status = trailing.group(2)
             if (
                 prefix
@@ -931,30 +1105,30 @@ def _parse_test_entries(test_text: str) -> list[dict[str, Any]]:
                 and prefix.lower() not in {"all", "tests", "all tests"}
                 and not re.fullmatch(r"\d+(?:\s+\w+)?", prefix)
             ):
-                label = _summarize_single_command(prefix)
-                simplified = bool(label and label != prefix)
+                summary = _summarize_command_struct(prefix, note)
                 entries.append(
                     {
-                        "raw_cmd": prefix if simplified else "",
-                        "label": label,
+                        "raw_cmd": summary["raw_cmd"] if summary["simplified"] else "",
+                        "md_label": summary["md_label"],
+                        "label": summary["label"],
                         "result": status,
-                        "simplified": simplified,
+                        "simplified": summary["simplified"],
                     }
                 )
                 continue
 
-        entries.append({"raw_cmd": "", "label": "", "result": seg, "simplified": False})
+        entries.append({"raw_cmd": "", "md_label": "", "label": "", "result": seg, "simplified": False})
     return entries
 
 
 def _format_entry_markdown(entry: dict[str, Any]) -> str:
-    label = str(entry.get("label", ""))
+    md_label = str(entry.get("md_label") or "")
+    if not md_label and entry.get("label"):
+        md_label = _wrap_inline_code(str(entry["label"]))
     result = str(entry.get("result", ""))
-    if label and result:
-        return f"{_wrap_inline_code(label)} — {result}"
-    if label:
-        return _wrap_inline_code(label)
-    return result
+    if md_label and result:
+        return f"{md_label} — {result}"
+    return md_label or result
 
 
 def _format_entry_plain(entry: dict[str, Any]) -> str:
@@ -986,6 +1160,21 @@ def _format_test_summary_plain(test_text: str) -> str:
     for entry in entries:
         lines.append(f"- {_format_entry_plain(entry)}")
     return "\n".join(lines)
+
+
+def _escape_md_table_cell(text: str) -> str:
+    """Normalize newlines and escape pipe characters for GFM/GitLab Markdown table cells."""
+    collapsed = re.sub(r"\s*\r?\n\s*", " ", text.strip())
+    return collapsed.replace("|", "\\|")
+
+
+def _format_change_item(tid: str, change: str, extra: str) -> str:
+    """Format a compact task bullet with optional indented commit body notes."""
+    head = f"- **{tid}** {change}"
+    if not extra:
+        return head
+    indented = "\n".join(f"  {line}" if line else "" for line in extra.splitlines())
+    return f"{head}\n\n{indented}"
 
 
 def _format_conventional_title(default_type: str, raw_title: str) -> str:
@@ -1029,31 +1218,37 @@ def build_issue_summaries(
     dominant_type = commit_types[0] if commit_types else "feat"
 
     first_change = ""
-    md_blocks: list[str] = []
+    change_items: list[str] = []
+    has_extra_details = False
+    verification_rows: list[str] = []
     plain_blocks: list[str] = []
     detailed_commands: list[tuple[str, str]] = []
     seen_commands: set[tuple[str, str]] = set()
 
     def _append_task_block(tid: str, change: str, extra: str, test_text: str) -> None:
-        md_parts = [f"### {tid} {change}"]
+        nonlocal has_extra_details
+        change_items.append(_format_change_item(tid, change, extra))
         if extra:
-            md_parts.append(extra)
-        md_parts.append(_format_test_summary_line(test_text))
-        md_blocks.append("\n\n".join(md_parts))
+            has_extra_details = True
 
-        plain_test = _format_test_summary_plain(test_text)
-        if extra:
-            plain_blocks.append(f"{tid}: {change}\n\n{extra}\n\n{plain_test}")
-        else:
-            plain_blocks.append(f"{tid}: {change}\n{plain_test}")
-
-        for entry in _parse_test_entries(test_text):
+        entries = _parse_test_entries(test_text)
+        for idx, entry in enumerate(entries):
+            task_cell = tid if idx == 0 else ""
+            check_cell = _escape_md_table_cell(str(entry.get("md_label") or "")) or "—"
+            result_cell = _escape_md_table_cell(str(entry.get("result") or "")) or "—"
+            verification_rows.append(f"| {task_cell} | {check_cell} | {result_cell} |")
             raw_cmd = str(entry.get("raw_cmd", ""))
             if entry.get("simplified") and raw_cmd:
                 pair = (tid, raw_cmd)
                 if pair not in seen_commands:
                     seen_commands.add(pair)
                     detailed_commands.append(pair)
+
+        plain_test = _format_test_summary_plain(test_text)
+        if extra:
+            plain_blocks.append(f"{tid}: {change}\n\n{extra}\n\n{plain_test}")
+        else:
+            plain_blocks.append(f"{tid}: {change}\n{plain_test}")
 
     if tasks:
         for task in tasks:
@@ -1068,7 +1263,11 @@ def build_issue_summaries(
                 commit_rec.get("test")
                 or details.get("latest_result")
                 or (f"{details['command']} — {details['outcome']}" if details.get("command") else "")
-                or (f"{task['test']} — {details['outcome'] or task['status']}" if task.get("test") else "未记录")
+                or (
+                    f"{task['test']} — {details['outcome'] or task['status']}"
+                    if task.get("test") and task["test"] not in ("未记录", "未在提交中记录")
+                    else "未记录"
+                )
             )
             _append_task_block(tid, change, str(commit_rec.get("extra", "")), test_text)
     elif commits:
@@ -1098,8 +1297,12 @@ def build_issue_summaries(
     header = "\n".join(header_lines)
 
     pr_parts = [header]
-    if md_blocks:
-        pr_parts.extend(md_blocks)
+    if change_items:
+        joiner = "\n\n" if has_extra_details else "\n"
+        pr_parts.append("## 变更内容\n\n" + joiner.join(change_items))
+    if verification_rows:
+        table_lines = ["| 任务 | 验证项 | 结果 |", "| --- | --- | --- |", *verification_rows]
+        pr_parts.append("## 验证记录\n\n" + "\n".join(table_lines))
     if detailed_commands:
         detail_lines = ["<details>", "<summary>完整验证命令</summary>", ""]
         for tid, raw_cmd in detailed_commands:
