@@ -92,12 +92,12 @@ def save_global_config(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_global_auto_merge() -> bool:
-    """Return the global default `auto_merge` switch (default False)."""
+    """Return the global `auto_merge` switch (default False)."""
     return bool(load_global_config().get("auto_merge", False))
 
 
 def set_global_auto_merge(enabled: bool) -> dict[str, Any]:
-    """Update and persist the global default `auto_merge` switch."""
+    """Update and persist the global `auto_merge` switch."""
     with _CONFIG_LOCK:
         cfg = _read_raw_config_unlocked()
         cfg["auto_merge"] = bool(enabled)
@@ -217,7 +217,7 @@ def _read_raw_repos_unlocked() -> list[dict[str, Any]]:
 
 
 def _copy_repo_init_fields(src: dict[str, Any], dst: dict[str, Any]) -> None:
-    """Copy persisted `repo_init_*` and `auto_merge` metadata fields from `src` to `dst` when present."""
+    """Copy persisted `repo_init_*` metadata fields from `src` to `dst` when present."""
     existing_state = src.get("repo_init_state")
     if isinstance(existing_state, str) and existing_state:
         dst["repo_init_state"] = existing_state
@@ -229,9 +229,6 @@ def _copy_repo_init_fields(src: dict[str, Any], dst: dict[str, Any]) -> None:
     err = src.get("repo_init_error")
     if isinstance(err, str) and err:
         dst["repo_init_error"] = err
-    auto_merge = src.get("auto_merge")
-    if isinstance(auto_merge, bool):
-        dst["auto_merge"] = auto_merge
 
 
 def load_registered_repos(*, prune_missing: bool = True) -> list[dict[str, Any]]:
@@ -394,65 +391,13 @@ def set_repo_init_state(main_worktree: Path, state: str) -> None:
     set_repo_init_meta(main_worktree, state)
 
 
-def get_repo_auto_merge_override(main_worktree: Path) -> bool | None:
-    """Return explicit per-repository `auto_merge` override (True/False) or None when inheriting global."""
-    key = str(main_worktree.expanduser().resolve())
-    with _REPOS_LOCK:
-        for item in _read_raw_repos_unlocked():
-            try:
-                p = str(Path(item["path"]).expanduser().resolve())
-            except OSError:
-                continue
-            if p == key:
-                val = item.get("auto_merge")
-                return val if isinstance(val, bool) else None
-    return None
-
-
-def resolve_auto_merge(main_worktree: Path | None) -> dict[str, Any]:
-    """Resolve effective `auto_merge` setting (`repo` override > `global` default)."""
-    global_default = get_global_auto_merge()
-    repo_override = get_repo_auto_merge_override(main_worktree) if main_worktree is not None else None
-    enabled = repo_override if repo_override is not None else global_default
-    source = "repo" if repo_override is not None else "global"
+def resolve_auto_merge(main_worktree: Path | None = None) -> dict[str, Any]:
+    """Resolve effective global `auto_merge` setting from `~/.config/idd/config.json`."""
+    del main_worktree  # Auto-merge is strictly global; keep optional param for caller compatibility.
     return {
-        "enabled": bool(enabled),
-        "source": source,
-        "global_default": bool(global_default),
-        "repo_override": repo_override,
+        "enabled": bool(get_global_auto_merge()),
+        "source": "global",
     }
-
-
-def set_repo_auto_merge_override(main_worktree: Path, value: bool | None) -> dict[str, Any]:
-    """Persist or clear (`value=None`) per-repository `auto_merge` override in `repos.json`."""
-    resolved = main_worktree.expanduser().resolve()
-    key = str(resolved)
-    now = time.time()
-    with _REPOS_LOCK:
-        raw_items = _read_raw_repos_unlocked()
-        by_path: dict[str, dict[str, Any]] = {}
-        for item in raw_items:
-            try:
-                p = Path(item["path"]).expanduser().resolve()
-            except OSError:
-                continue
-            if p.is_dir() and (p / ".git").exists():
-                rec: dict[str, Any] = {
-                    "path": str(p),
-                    "name": str(item.get("name") or p.name),
-                    "last_seen_at": float(item.get("last_seen_at") or 0.0),
-                }
-                _copy_repo_init_fields(item, rec)
-                by_path[str(p)] = rec
-        target = by_path.get(key) or {"path": key, "name": resolved.name, "last_seen_at": now}
-        if value is None:
-            target.pop("auto_merge", None)
-        else:
-            target["auto_merge"] = bool(value)
-        by_path[key] = target
-        entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
-        _save_repos_unlocked(entries)
-    return resolve_auto_merge(resolved)
 
 
 def unregister_repo(target: Path) -> bool:

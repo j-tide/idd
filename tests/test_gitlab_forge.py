@@ -1008,7 +1008,7 @@ class TestGitLabForge(unittest.TestCase):
                 state.cleanup_pipeline_polls = 2
                 before = state.origin_sha("main")
                 mr_res = run_idd("mr", "1")
-                self.assertIn("已开启自动准入合入（来源：仓库配置）", mr_res.stdout)
+                self.assertIn("已开启自动准入合入（来源：全局配置）", mr_res.stdout)
                 self.assertIn("已通过 Squash Merge 直线合入 MR !10", mr_res.stdout)
                 self.assertIn("已自动勾选 Issue #1 验收标准（1 项）", mr_res.stdout)
                 after = state.origin_sha("main")
