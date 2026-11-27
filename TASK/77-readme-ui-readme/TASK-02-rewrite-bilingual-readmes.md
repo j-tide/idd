@@ -1,7 +1,7 @@
 # TASK-02：根据最新功能与新版看板 UI 重写中英文 README
 
 - Issue: 77-readme-ui-readme
-- Status: planned
+- Status: done
 - Depends on: TASK-01
 - Test: `python3 scripts/release.py --check && python3 -m unittest discover -s tests -v`
 
@@ -14,9 +14,9 @@
 
 ## 验收标准
 
-- [ ] `README.md` 与 `README.en.md` 内容完整、准确反映最新功能与新版看板交互
-- [ ] 所有引用图片路径存在，文内目录锚点与标题匹配，中英文结构对称
-- [ ] `python3 scripts/release.py --check` 与 `python3 -m unittest discover -s tests -v` 全量通过
+- [x] `README.md` 与 `README.en.md` 内容完整、准确反映最新功能与新版看板交互
+- [x] 所有引用图片路径存在，文内目录锚点与标题匹配，中英文结构对称
+- [x] `python3 scripts/release.py --check` 与 `python3 -m unittest discover -s tests -v` 全量通过
 
 ## 实现注意事项
 
@@ -29,8 +29,8 @@
 
 ## 执行结果
 
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已完成中英文 README 重写并同步全部最新功能、磨砂玻璃新版看板 UI 交互与 CLI 命令速查，版本一致性、资源链接/锚点检查与全量 101 项单元测试全部通过。
 
 ### 当前阻塞
 
@@ -38,4 +38,8 @@
 
 ### 验证记录
 
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-27 | `python3 scripts/release.py --check` | passed：`v0.0.4 (SKILL.md == README.md == README.en.md == idd --version)` | `README.md` / `README.en.md` |
+| 2026-11-27 | README 本地图片路径与文内 `#anchor` 锚点校验脚本 | passed：全部配图存在且锚点无失效 | `README.md` / `README.en.md` |
+| 2026-11-27 | `python3 -m unittest discover -s tests -v` | passed：101 passed in 272.050s | `tests/` |
