@@ -1,7 +1,7 @@
 # TASK-02：同步 `README.md` 与 `README.en.md` 工作流说明及规则模板
 
 - Issue: #71
-- Status: planned
+- Status: done
 - Depends on: TASK-01
 - Test: 运行全量单元测试 `python3 -m unittest discover -s tests` 并排查中英文文档与模板一致性
 
@@ -11,9 +11,9 @@
 
 ## 验收标准
 
-- [ ] `README.md` 与 `README.en.md` 的工作原理、自然语言场景及两套规则模板全面同步「先确认方案再建单」约定
-- [ ] 全量单元测试 `python3 -m unittest discover -s tests` 全部通过
-- [ ] `git diff origin/main...HEAD` 仅包含预期文档与 `TASK/` 变更
+- [x] `README.md` 与 `README.en.md` 的工作原理、自然语言场景及两套规则模板全面同步「先确认方案再建单」约定
+- [x] 全量单元测试 `python3 -m unittest discover -s tests` 全部通过
+- [x] `git diff origin/main...HEAD` 仅包含预期文档与 `TASK/` 变更
 
 ## 实现注意事项
 
@@ -26,8 +26,8 @@
 
 ## 执行结果
 
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已完成 `README.md` 与 `README.en.md` 的工作流说明及两套规则模板同步，中英文一致且旧文案已清零，全量单元测试全部通过。
 
 ### 当前阻塞
 
@@ -35,4 +35,7 @@
 
 ### 验证记录
 
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-27 | `python3 -m unittest discover -s tests` | passed（Ran 93 tests in 370.014s, OK） | `README.md` / `README.en.md` |
+| 2026-11-27 | 正则排查旧文案与 `git diff --stat origin/main...` 核对 | passed（0 matches；仅含预期 6 个文档/TASK 文件） | `TASK/71-skill/TASK-02-readme-and-templates.md` |

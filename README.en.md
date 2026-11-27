@@ -102,7 +102,7 @@ IDD connects three lightweight pieces into a single loop that you drive with nat
   </picture>
 </p>
 
-1. **Align visually, then anchor an Issue**: Discuss scope in any agent window—reviewing an interactive HTML prototype (`idd preview`) or Before/After sample first when UI or output changes—then say *"Create an Issue with idd"*. Your working tree stays untouched.
+1. **Confirm the plan first, then anchor an Issue**: Discuss scope in any agent window, align on a concise implementation/fix plan (reviewing an interactive HTML prototype via `idd preview` or Before/After sample when UI or output changes), and **only after explicit user confirmation** say *"Create an Issue with idd"*. Neither the Issue nor the working tree is touched before sign-off.
 2. **Run multiple agents in isolated worktrees**: Tell **Claude Code** *"Start #115"* while **Codex** runs *"Start #51"*. Each task enters its own physical worktree, gets `.env` synced, and maintains its own `TASK/<issue>/` ledger.
 3. **Monitor on `idd board` & hand off in one click**: Watch live diff pulses, task bars, and CI checks without burning tokens. Need to switch tools? Click **Copy Handoff** and paste it into **Antigravity** or any other agent to continue right from `TASK/`.
 4. **Land a single linear commit onto `main`**: Tell the final agent *"Land #115"* (or enable `idd config auto-merge on` / the board top-bar switch so green PRs/MRs land automatically). IDD cleans `TASK/`, checks off Issue acceptance boxes, and Squash-merges cleanly.
@@ -144,7 +144,7 @@ idd board
 
 | Stage | Say to your Agent | Under-the-hood Action |
 | :--- | :--- | :--- |
-| **Align & open Issue** | *"Preview a prototype first, then open an IDD Issue"* | `idd preview` → `idd issue create` |
+| **Align & open Issue** | *"Propose a plan/prototype first, then open an IDD Issue after sign-off"* | Plan / `idd preview` → confirm → `idd issue create` |
 | **Parallel execution** | *"Start #115"* (and *"Start #51"* in another window) | `idd start` creates worktree & pushes branch |
 | **Switch agents anytime** | Click **Copy Handoff** in `idd board` and paste into another agent | `idd start` reuses worktree & resumes `TASK/` |
 | **Review & land** | *"Open a PR"* / *"Land #115"* | `idd pr` → `idd ci --watch` → `idd land` |
@@ -173,7 +173,7 @@ Add this snippet to your agent's user-level global instructions:
 
 Default to the global `idd` skill (`~/.agents/skills/idd/SKILL.md`) for all non-read-only code, config, and documentation tasks.
 
-- **Issue first, then isolated worktree**: When a repo has a GitHub / GitLab remote and no linked Issue yet, run `idd issue create`, then `idd start <issue#>` to create or reuse an isolated worktree and `<type>/<id>-<slug>` branch pushed to `origin` (never edit directly on `main`).
+- **Confirm plan first, then Issue & worktree**: Unless continuing an existing Issue with clear acceptance criteria or explicitly authorized to skip confirmation this turn, all new requests and changes (including bug fixes, refactors, config, and docs) must first inspect read-only and present a concise plan (plus a prototype or Before/After sample for UI/UX/output changes). **Wait for explicit user confirmation** before running `idd issue create` (never auto-create an Issue or edit code in the same turn) and then `idd start <issue#>` to create or reuse an isolated worktree and `<type>/<id>-<slug>` branch pushed to `origin` (never edit directly on `main`).
 - **Per-TASK verification & immediate push**: Break work down under `TASK/<issue>/TASK-XX-*.md` with test mappings, verify with real tests, commit per task, and push right away via `idd sync` (or `git push -u origin HEAD`).
 - **PR/MR, CI & linear merge**: Run `idd pr` / `idd mr` and `idd ci --watch`; once approved (or when `auto_merge` is enabled), run `idd land` to clean `TASK/<issue>/` and Squash-merge linearly onto `main`.
 - **Safety boundaries**: Use the unnumbered `<slug>` flow only in local-only repos without remotes; protect uncommitted edits and never force-push or merge into `main`, deploy, or touch production without authorization.
@@ -187,7 +187,7 @@ To enforce IDD across all contributors in a repository, add the snippet below to
 # Repository Workflow (IDD)
 
 This repository uses the `idd` skill (Issue-Driven Development) for all changes:
-- Create an Issue with `idd issue create`, then develop in an isolated worktree and `<type>/<id>-<slug>` branch via `idd start <issue#>`—never commit directly to `main`.
+- Unless continuing an existing Issue with clear acceptance criteria or explicitly authorized to skip confirmation, present a concise plan (including bug fixes) and **wait for explicit user confirmation** before creating an Issue with `idd issue create`, then develop in an isolated worktree and `<type>/<id>-<slug>` branch via `idd start <issue#>`—never commit directly to `main`.
 - Track steps and real test results under `TASK/<issue>/`; commit per task and push with `idd sync`.
 - Open a PR/MR via `idd pr` / `idd mr`, wait for green CI, and land with `idd land` to remove temporary `TASK/` files and Squash-merge onto `main`.
 ```
@@ -222,7 +222,7 @@ This repository uses the `idd` skill (Issue-Driven Development) for all changes:
 | `idd watch [--current-only]` | Live terminal monitor for global or single-repo worktrees, tasks, and CI |
 | `idd status [-g\|--global]` | One-shot terminal summary of Open Issues, `TASK` progress, pulse, and PR/MR CI |
 | `idd repos [list\|add\|remove\|prune]` | Inspect or manage the global monitored repository index (`~/.config/idd/repos.json`) |
-| `idd issue create --title "..." [--type ...] [--scope ...]` | Create a GitHub or GitLab Issue with validated title |
+| `idd issue create --title "..." [--type ...] [--scope ...]` | Create a GitHub or GitLab Issue with validated title after plan confirmation |
 | `idd start <issue# \| slug>` | Create or idempotently reuse an isolated worktree, create `--no-track` branch & push to `origin`, and sync `.worktreeinclude` |
 | `idd sync [issue#]` | Sync local `TASK` checklist progress back to the Issue body and auto-push branch commits |
 | `idd pr` / `idd mr` | Summarize `TASK` and test records (`Closes #id`) to create or update a PR / MR (auto-waits CI & lands when `auto_merge` is enabled; `--auto-merge` / `--no-auto-merge`) |
