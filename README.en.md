@@ -7,7 +7,7 @@
 **Issue-Driven Development · Isolated Parallel Workflow & 1-Click Handoff for AI Coding Agents**
 
 Run **Claude Code**, **Codex**, and **Antigravity** natively in parallel without stepping on each other's files—<br />
-track every worktree on a zero-token local board and hand off context to any agent in one click.
+track every worktree on a zero-token frosted-glass radar and hand off context to any agent in one click.
 
 [简体中文](README.md) · **English**
 
@@ -26,10 +26,10 @@ track every worktree on a zero-token local board and hand off context to any age
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/board-en-dark.png" />
     <source media="(prefers-color-scheme: light)" srcset="assets/board-en-light.png" />
-    <img src="assets/board-en-dark.png" width="100%" alt="IDD live worktree radar and one-click cross-agent handoff console" />
+    <img src="assets/board-en-dark.png" width="100%" alt="IDD frosted-glass live worktree radar and one-click cross-agent handoff console" />
   </picture>
   <br />
-  <sub><em><code>idd board</code> local Web radar: zero-token visibility into every repo's worktree pulse, <code>TASK</code> progress, and CI status—with 1-click cross-agent handoff and EN / 中文 switching.</em></sub>
+  <sub><em><code>idd board</code> local frosted-glass Web radar: By-Repo / Kanban / List views, 3-column Bento progress KPIs, 6 semantic filter chips, adaptive low-overhead pulse & CI checks—plus 1-click cross-agent handoff, safe per-card cleanup, and EN / 中文 switching.</em></sub>
 </p>
 
 ---
@@ -42,16 +42,16 @@ When you run multiple AI coding tools at once, two bottlenecks hit immediately: 
 | :--- | :--- | :--- | :--- |
 | **Native Experience** | Native windows, no extra lock-in | Forces a custom UI or wrapper | **Keep Claude Code, Codex, and Antigravity native** |
 | **Parallel Isolation** | Shared directory, frequent conflicts | Proprietary sandboxes or containers | **Dedicated physical Git Worktree per Issue** |
-| **Cross-Agent Handoff** | Manual copy-paste of chat history | Restricted to built-in model swaps | **On-disk `TASK/` ledger + 1-click Copy Handoff** |
-| **Global Visibility** | Check chat tabs one by one | Extra daemon & token overhead | **Zero-token local Web board (2s pulse) & terminal watch** |
+| **Cross-Agent Handoff** | Manual copy-paste of chat history | Restricted to built-in model swaps | **On-disk `TASK/` ledger + 1-click Handoff prompt** |
+| **Global Visibility** | Check chat tabs one by one | Extra daemon & token overhead | **Zero-token frosted-glass Web radar (adaptive polling) & terminal watch** |
 | **Git & Merge Hygiene** | Messy merge commits or `main` edits | Local-only or platform-locked state | **GitHub & GitLab native, CI self-healing, linear Squash to `main`** |
 | **Dependencies & Footprint** | None | Heavy runtime & configuration | **0 dependencies (Python 3 stdlib + sh), zero Git hooks** |
 
 IDD connects three lightweight pieces into a single loop that you drive with natural language:
 
-- **Shared Agent Skill (`SKILL.md`)**: Teaches Claude Code, Codex, and Antigravity the same workflow—align visually first, anchor scope to a GitHub / GitLab **Issue**, develop inside an isolated **Git Worktree**, and track steps in `TASK/<issue>/`.
-- **Zero-Token Radar & Handoff Launchpad (`idd board`)**: Aggregates active worktree diffs, `TASK` steps, and PR/MR CI status across all local repos; click **Copy Handoff** anytime to resume seamlessly in another agent window.
-- **Deterministic Under-the-Hood CLI (`idd`)**: Invoked automatically by agents to handle worktree creation, `.env` (`.worktreeinclude`) syncing, 8-prefix branch validation, PR/MR summaries, CI log inspection, and linear **Squash merges**.
+- **Shared Agent Skill (`SKILL.md`)**: Teaches Claude Code, Codex, and Antigravity the same plan-first gate and delivery discipline—inspect read-only and confirm a plan first (with visual prototypes for UI/output changes), anchor scope to a GitHub / GitLab **Issue**, develop inside an isolated **Git Worktree**, and track steps in `TASK/<issue>/`.
+- **Zero-Token Frosted-Glass Radar & Handoff Console (`idd board`)**: Defaults to a repo-grouped view across all local projects with 3-column Bento progress KPIs, PR/MR CI checks, and cleanable directories; click any card to open the inspector drawer, or click **Handoff** anytime to resume seamlessly in another agent window.
+- **Deterministic Under-the-Hood CLI (`idd`)**: Invoked automatically by agents to handle worktree creation, `.env` (`.worktreeinclude`) syncing, 8-prefix branch validation, structured PR/MR summaries, CI log inspection, and plain-text linear **Squash merges**.
 
 ---
 
@@ -60,32 +60,32 @@ IDD connects three lightweight pieces into a single loop that you drive with nat
 <table>
   <tr>
     <td width="50%" valign="top">
-      <h3>Issue-Anchored · Physical Worktree Parallelism</h3>
-      Every Issue gets an isolated directory at <code>../&lt;repo&gt;-worktrees/&lt;id&gt;-&lt;slug&gt;</code> and a validated <code>&lt;type&gt;/&lt;id&gt;-&lt;slug&gt;</code> branch (<code>--no-track</code> + immediate push to <code>origin</code>), automatically copying <code>.env</code> files listed in <code>.worktreeinclude</code>.
+      <h3>Plan-First Gate · Physical Worktree Parallelism</h3>
+      Enforces a strict plan-confirmation gate before creating Issues or editing code. For UI/UX changes, preview interactive HTML prototypes via <code>idd preview</code> (hot reload, side-by-side A/B comparison, desktop/tablet/mobile viewports) without polluting your repo. Each Issue gets an isolated directory at <code>../&lt;repo&gt;-worktrees/&lt;id&gt;-&lt;slug&gt;</code>, a <code>--no-track</code> branch pushed immediately to <code>origin</code>, and auto-synced <code>.env</code> files via <code>.worktreeinclude</code>.
     </td>
     <td width="50%" valign="top">
-      <h3>Visual Alignment · Local Preview Workbench (<code>idd preview</code>)</h3>
-      Show before you code. Preview interactive HTML prototypes with hot reload, side-by-side A/B comparison, and desktop / tablet / mobile viewports—kept outside your project repo so your working tree stays clean.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <h3>Zero-Token Radar · 1-Click Cross-Agent Handoff</h3>
-      <code>idd board</code> (2s local pulse, 30s remote cache) and <code>idd watch</code> display changed files, <code>+insertions/-deletions</code>, <code>TASK</code> progress, and CI status—complete with a browser token setup wizard, EN / 中文 toggle, and 1-click Copy Handoff / path / branch.
-    </td>
-    <td width="50%" valign="top">
-      <h3>CI Self-Healing · Opt-In Auto-Merge (<code>auto-merge</code>)</h3>
-      <code>idd pr</code> / <code>idd mr</code> summarizes <code>TASK</code> and test records with <code>Closes #id</code>; failing CI triggers log inspection capped at 2 targeted fix rounds. Toggle global <code>auto-merge</code> via CLI or the board top bar (auto-pauses on Drafts, conflicts, or evidence files).
+      <h3>Frosted-Glass Radar · Multi-View & 1-Click Handoff</h3>
+      <code>idd board</code> features a collapsible frosted-glass sidebar and unified 2-row topbar: switch between <strong>By Repo (default) / Kanban / Compact List</strong> views, track <strong>3-column segmented Bento KPIs</strong>, and filter via <strong>6 semantic chips</strong> (All Active / In Worktree / Attention / Ready / Queued / Cleanable). Click any card for a slide-over inspector drawer, configure tokens in-browser, toggle EN / 中文 & Dark / Light, and copy handoff prompts, paths, or branches in one click.
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <h3>Linear Squash History · Zero Leftover Clutter</h3>
-      <code>idd land</code> rebases onto <code>main</code>, writes the full <code>TASK</code> summary into the PR/MR and Squash commit body, cleans up temporary <code>TASK/&lt;issue&gt;/</code> files, Squash-merges linearly, and checks off Issue acceptance boxes—keeping branches/worktrees safe until <code>idd cleanup</code>.
+      <h3>Low-Overhead Engine · Zero-Flicker Motion</h3>
+      Shows layout skeletons only on initial load and updates via <strong>in-place DOM reconciliation & FLIP card motion</strong>, consolidating sync status into the topbar with zero layout jump. Automatically pauses polling in background tabs, backs off serially between <code>1.2s–15s</code>, and pairs <code>porcelain v2</code> scanning with a 30s idle signature cache and server-side singleflight coalescing.
     </td>
     <td width="50%" valign="top">
-      <h3>Dual-Forge Native · Zero Dependencies · Zero Hooks</h3>
-      Built purely with Python 3 stdlib + POSIX <code>sh</code> for GitHub, GitHub Enterprise, and Self-Hosted GitLab (<code>ff</code> + <code>squash</code>). Rejects noisy branch prefixes without writing Git hooks into your repos, and safely fast-forwards every 6 hours.
+      <h3>Global Auto-Merge · 2-Round CI Self-Healing</h3>
+      Unifies <code>auto_merge</code> into a single global switch read live by <code>idd pr</code> / <code>idd mr</code>—toggleable via CLI (<code>idd config auto-merge on|off</code>) or the board topbar with a confirmation dialog. Guards against premature ready-to-land status when tasks or local edits remain unfinished, caps CI log fixes at 2 targeted rounds, and auto-pauses safely on Drafts, conflicts, or <code>evidence/</code> attachments.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>Dual-Format Delivery · Linear Squash History</h3>
+      <code>idd pr</code> / <code>idd mr</code> generates structured Markdown (<code>## 变更内容</code> bullets + <code>## 验证记录</code> table with compact command labels and collapsible full commands). <code>idd land</code> rebases onto <code>main</code>, removes <code>TASK/&lt;issue&gt;/</code>, writes a <strong>zero-Markdown compact plain-text</strong> body into the Squash commit (no blank lines inside a <code>TASK</code> block), merges linearly, and checks off Issue acceptance boxes.
+    </td>
+    <td width="50%" valign="top">
+      <h3>1-Click Safe Cleanup · Dual-Forge, Zero Deps</h3>
+      Clean up merged worktrees one card at a time with confirmation streaming right inside the <code>idd board</code> bottom drawer (or via <code>idd cleanup</code>), strictly verifying a clean tree and <code>HEAD == headRefOid</code> while <strong>never deleting branches</strong>. Pure Python 3 stdlib + POSIX <code>sh</code>, native GitHub / GHE / Self-Hosted GitLab support, zero Git hooks, and safe 6-hour background upgrades.
     </td>
   </tr>
 </table>
@@ -102,10 +102,10 @@ IDD connects three lightweight pieces into a single loop that you drive with nat
   </picture>
 </p>
 
-1. **Confirm the plan first, then anchor an Issue**: Discuss scope in any agent window, align on a concise implementation/fix plan (reviewing an interactive HTML prototype via `idd preview` or Before/After sample when UI or output changes), and **only after explicit user confirmation** say *"Create an Issue with idd"*. Neither the Issue nor the working tree is touched before sign-off.
-2. **Run multiple agents in isolated worktrees**: Tell **Claude Code** *"Start #115"* while **Codex** runs *"Start #51"*. Each task enters its own physical worktree, gets `.env` synced, and maintains its own `TASK/<issue>/` ledger.
-3. **Monitor on `idd board` & hand off in one click**: Watch live diff pulses, task bars, and CI checks without burning tokens. Need to switch tools? Click **Copy Handoff** and paste it into **Antigravity** or any other agent to continue right from `TASK/`.
-4. **Land a single linear commit onto `main`**: Tell the final agent *"Land #115"* (or enable `idd config auto-merge on` / the board top-bar switch so green PRs/MRs land automatically). IDD cleans `TASK/`, checks off Issue acceptance boxes, and Squash-merges cleanly.
+1. **Confirm the plan first, then anchor an Issue**: Discuss scope in any agent window, inspect read-only, and align on a concise plan (reviewing an interactive HTML prototype via `idd preview` / Artifact or Before-After sample when UI or output changes). **Only after explicit user confirmation** does the agent run `idd issue create`—neither the Issue nor the working tree is touched beforehand.
+2. **Run multiple agents in isolated worktrees**: Tell **Claude Code** *"Start #115"* while **Codex** runs *"Start #51"*. Each task enters its own physical worktree, gets `.env` synced, pushes its branch immediately, and maintains its own `TASK/<issue>/` ledger.
+3. **Monitor on `idd board` & hand off in one click**: Track live pulses, 3-column Bento KPIs, and CI checks across repos (press `[` to collapse sidebar, `/` to search, `r` to sync, or click any card for the inspector drawer). Need to switch tools? Click **Handoff** and paste into **Antigravity** or any other agent to continue straight from `TASK/`.
+4. **Land a single linear commit onto `main` & clean up safely**: Say *"Land #115"* (or enable global **PR Auto-Approve** so green PRs/MRs land automatically). `idd land` removes `TASK/`, writes a clean plain-text Squash commit, and checks off acceptance criteria; clean up retained worktrees anytime from the board drawer or `idd cleanup`.
 
 ```text
 ~/code/
@@ -138,7 +138,7 @@ curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh
 idd board
 ```
 
-> On first launch, `idd board` opens a browser setup wizard where you can generate and paste a GitHub or self-hosted GitLab token directly—no CLI login command required.
+> On first launch, `idd board` opens a browser setup wizard where you can generate and paste a GitHub or self-hosted GitLab token directly—no CLI login command required—and optionally enable automatic linear merge policy initialization.
 
 ### 3. Drive everything with natural language in any agent
 
@@ -146,11 +146,11 @@ idd board
 | :--- | :--- | :--- |
 | **Align & open Issue** | *"Propose a plan/prototype first, then open an IDD Issue after sign-off"* | Plan / `idd preview` → confirm → `idd issue create` |
 | **Parallel execution** | *"Start #115"* (and *"Start #51"* in another window) | `idd start` creates worktree & pushes branch |
-| **Switch agents anytime** | Click **Copy Handoff** in `idd board` and paste into another agent | `idd start` reuses worktree & resumes `TASK/` |
+| **Switch agents anytime** | Click **Handoff** in `idd board` and paste into another agent | `idd start` reuses worktree & resumes `TASK/` |
 | **Review & land** | *"Open a PR"* / *"Land #115"* | `idd pr` → `idd ci --watch` → `idd land` |
 
 > [!TIP]
-> Run `idd repo-init --apply` once per repository (also auto-detected on first `idd start` / `idd issue create`) to enforce Squash-only linear merges on GitHub or `ff` + `squash` on GitLab while preserving branches. Want CI-green PRs/MRs to merge automatically? Run `idd config auto-merge on` or toggle it in the `idd board` top bar.
+> On first contact with a repository, `idd start` / `idd issue create` / `idd repos add` automatically probes and applies `idd repo-init --apply` (Squash-only with `PR_TITLE`/`PR_BODY` on GitHub, or `ff` + `always` squash on GitLab while preserving branches); if skipped or lacking permissions, click retry directly in `idd board`. Want CI-green PRs/MRs to merge automatically? Run `idd config auto-merge on` or toggle it in the `idd board` top bar.
 
 > [!NOTE]
 > `idd` safely checks `origin/main` in the background every 6 hours and fast-forwards only when your local skill clone is on a clean `main` branch (or run `idd upgrade [--check]` anytime). To uninstall cleanly without touching any project repository, run `idd uninstall` (or `curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh -s -- --uninstall -y`).
@@ -203,8 +203,8 @@ This repository uses the `idd` skill (Issue-Driven Development) for all changes:
 | **AI Agents** | **Claude Code** | Symlinked to `~/.claude/skills/idd` |
 | **AI Agents** | **Codex** | Symlinked to `~/.codex/skills/idd` |
 | **AI Agents** | **Antigravity** | Symlinked to `~/.gemini/config/skills/idd` |
-| **Git Forges** | **GitHub / GitHub Enterprise** | Native Issue progress bars, PR summaries, Actions CI logs, linear `Squash` merges |
-| **Git Forges** | **Self-Hosted GitLab** | Native Issue progress bars, MR summaries, Pipeline logs, `ff` + `squash` linear merges |
+| **Git Forges** | **GitHub / GitHub Enterprise** | Native Issue progress bars, structured PR summaries, Actions CI logs, linear `Squash` merges |
+| **Git Forges** | **Self-Hosted GitLab** | Native Issue progress bars, structured MR summaries, Pipeline logs, `ff` + `squash` linear merges |
 
 ---
 
@@ -217,20 +217,20 @@ This repository uses the `idd` skill (Issue-Driven Development) for all changes:
 
 | Command | Description |
 | :--- | :--- |
-| `idd board` / `idd ui` | Start the offline Web radar & 1-click handoff board (2s live worktree pulse, bilingual 中文 / EN) |
-| `idd preview <target>... [--compare]` | Launch the local prototype preview workbench (hot reload, side-by-side A/B compare, and responsive viewports) |
-| `idd watch [--current-only]` | Live terminal monitor for global or single-repo worktrees, tasks, and CI |
-| `idd status [-g\|--global]` | One-shot terminal summary of Open Issues, `TASK` progress, pulse, and PR/MR CI |
-| `idd repos [list\|add\|remove\|prune]` | Inspect or manage the global monitored repository index (`~/.config/idd/repos.json`) |
-| `idd issue create --title "..." [--type ...] [--scope ...]` | Create a GitHub or GitLab Issue with validated title after plan confirmation |
-| `idd start <issue# \| slug>` | Create or idempotently reuse an isolated worktree, create `--no-track` branch & push to `origin`, and sync `.worktreeinclude` |
-| `idd sync [issue#]` | Sync local `TASK` checklist progress back to the Issue body and auto-push branch commits |
-| `idd pr` / `idd mr` | Summarize `TASK` and test records (`Closes #id`) to create or update a PR / MR (auto-waits CI & lands when `auto_merge` is enabled; `--auto-merge` / `--no-auto-merge`) |
-| `idd ci [issue# \| pr# \| !mr#] [--logs]` | Check PR / MR CI status and fetch failing job logs |
-| `idd land [issue# \| slug]` | Rebase, clean `TASK/<issue>/`, Squash-merge onto `main`, and auto-check Issue acceptance boxes (keeps branches & worktrees by default; optional `--wait-ci` / `--no-check-acceptance` / `--rm-worktree`) |
+| `idd board` / `idd ui [--current-only] [--local-only] [--port ...]` | Start the frosted-glass Web radar & 1-click handoff board (multi-view, adaptive polling, per-card cleanup, bilingual 中文 / EN) |
+| `idd preview <target>... [--compare] [--title "..."] [--port ...]` | Launch the local prototype preview workbench (hot reload, side-by-side A/B compare, and responsive viewports) |
+| `idd watch [--current-only] [--open-only] [--once]` | Live terminal monitor for global or single-repo worktrees, tasks, and CI |
+| `idd status [-g\|--global] [--open-only] [--local-only] [--json]` | One-shot terminal summary of Open Issues, `TASK` progress, pulse, and PR/MR CI |
+| `idd repos [list\|add\|remove\|prune] [--json]` | Inspect or manage the global monitored repository index (`~/.config/idd/repos.json`) |
+| `idd issue create --title "..." [--type ...] [--scope ...] [--raw]` | Create a GitHub or GitLab Issue with validated title after plan confirmation |
+| `idd start <issue# \| slug> [--slug ...] [--prefix ...] [--base ...]` | Create or idempotently reuse an isolated worktree, create `--no-track` branch & push to `origin`, and sync `.worktreeinclude` |
+| `idd sync [issue#] [--no-push] [--dry-run]` | Sync local `TASK` checklist progress back to the Issue body and auto-push branch commits |
+| `idd pr` / `idd mr [target] [--draft] [--auto-merge \| --no-auto-merge]` | Generate structured change list & verification table (`Closes #id`) to create or update a PR / MR; reads live global `auto_merge` |
+| `idd ci [issue# \| pr# \| !mr#] [--watch] [--logs] [--json]` | Check PR / MR CI status and fetch failing job logs |
+| `idd land [issue# \| slug] [--wait-ci] [--rm-worktree] [--no-check-acceptance]` | Rebase, write zero-Markdown plain-text Squash body, clean `TASK/<issue>/`, Squash-merge onto `main`, and auto-check Issue acceptance boxes (keeps branches & worktrees by default) |
 | `idd cleanup [--dry-run]` | Safely remove merged worktree directories when clean and `HEAD == headRefOid` (**never deletes branches**) |
 | `idd repo-init [--apply]` | Check or apply linear Squash merge rules with branch retention on GitHub / GitLab |
-| `idd config [auto-merge on\|off\|status]` | View or toggle the global PR/MR auto-merge switch (off by default) |
+| `idd config [show \| auto-merge on\|off\|status] [--json]` | View or toggle the global PR/MR auto-merge switch (off by default) |
 | `idd auth login / status / logout` | Manage credentials for self-hosted GitLab or GitHub Enterprise hosts |
 | `idd upgrade [--check]` | Check for updates or fast-forward `idd` (`idd --version` prints current version) |
 | `idd uninstall [--dry-run] [--keep-config] [-y]` | Completely remove `idd` symlinks, skill clone, config, and cache |

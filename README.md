@@ -7,7 +7,7 @@
 **Issue-Driven Development · 多 AI 编程 Agent 隔离并行与一键接力工作流**
 
 让 **Claude Code**、**Codex** 与 **Antigravity** 各自在原生窗口中独立并行、互不踩文件；<br />
-在零 Token 本地看板实时盯盘，随时一键复制上下文换任意 Agent 接着做。
+在零 Token 磨砂玻璃看板实时盯盘，随时一键复制上下文换任意 Agent 接着做。
 
 **简体中文** · [English](README.en.md)
 
@@ -26,10 +26,10 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/board-zh-dark.png" />
     <source media="(prefers-color-scheme: light)" srcset="assets/board-zh-light.png" />
-    <img src="assets/board-zh-dark.png" width="100%" alt="IDD 实时 Worktree 雷达看板与一键跨 Agent 接力台" />
+    <img src="assets/board-zh-dark.png" width="100%" alt="IDD 磨砂玻璃实时 Worktree 雷达看板与一键跨 Agent 接力台" />
   </picture>
   <br />
-  <sub><em><code>idd board</code> 本地 Web 雷达看板：零 Token 监控所有仓库的 Worktree 脉搏、<code>TASK</code> 进度、CI 状态，并支持一键跨 Agent 接力与中/英切换。</em></sub>
+  <sub><em><code>idd board</code> 本地 Web 磨砂玻璃雷达看板：按仓库分组 / 流程看板 / 紧凑列表三视图、3 栏分段进度卡与 6 项语义筛选、自适应低耗脉搏与 CI 状态，并支持一键跨 Agent 接力、逐卡安全清理工作树与中/英切换。</em></sub>
 </p>
 
 ---
@@ -42,16 +42,16 @@
 | :--- | :--- | :--- | :--- |
 | **原生工具体验** | 原生窗口，无额外学习成本 | 强制绑定特定客户端或调度 UI | **保留 Claude Code / Codex / Antigravity 原生窗口** |
 | **并行开发隔离** | 共享同一目录，极易互相覆盖 | 依赖私有沙箱或容器快照 | **每个 Issue 自动分配独立物理 Git Worktree** |
-| **跨 Agent 接力** | 换工具需手动总结全部上下文 | 仅限平台内部模型切换 | **磁盘 `TASK/` 账本 + 看板一键「复制接力词」无缝续写** |
-| **全局进度监控** | 逐个窗口翻聊天记录 | 需运行常驻后台与额外 Token | **零 Token 本地 Web 看板（2s 脉搏）与终端实时盯盘** |
+| **跨 Agent 接力** | 换工具需手动总结全部上下文 | 仅限平台内部模型切换 | **磁盘 `TASK/` 账本 + 看板一键「接力词」无缝续写** |
+| **全局进度监控** | 逐个窗口翻聊天记录 | 需运行常驻后台与额外 Token | **零 Token 磨砂玻璃看板（自适应低耗轮询）与终端盯盘** |
 | **平台与合入历史** | 容易直接提交主干或混入脏节点 | 多为本地分支或平台私有状态 | **原生联动 GitHub / GitLab，CI 自愈后 Squash 直线合入 `main`** |
 | **依赖与侵入性** | 无 | 重依赖、配置复杂 | **0 外部依赖（Python 3 标准库 + sh），零 Git Hooks 侵入** |
 
 IDD 用三层轻量组件把整套研发闭环串起来，平时只需要对 Agent 说自然语言即可驱动：
 
-- **统一研发规范（`SKILL.md`）**：让 Claude Code、Codex 与 Antigravity 共享同一套流程——聊清需求先看样、GitHub / GitLab **Issue** 锚定范围、独立 **Git Worktree** 隔离开发、工作树内 `TASK/<issue>/` 持久化进度。
-- **零 Token 进度雷达与接力台（`idd board`）**：一屏聚合本机所有仓库的活跃 Worktree 改动行数、步骤进度与 PR/MR CI 状态；需要换工具时，点一下 **「复制接力词」** 贴进任意另一个 Agent 即可接管现场。
-- **确定性底层引擎（`idd` CLI）**：主要由 Agent 自动调用，把 Worktree 创建、`.env`（`.worktreeinclude`）同步、8 类分支规范校验、PR/MR 汇总、CI 日志拉取与 **Squash 直线合入** 封装成幂等命令。
+- **统一研发规范（`SKILL.md`）**：让 Claude Code、Codex 与 Antigravity 共享同一套前置确认门禁与交付纪律——先只读排查并确认方案（UI/输出先看样）、GitHub / GitLab **Issue** 锚定范围、独立 **Git Worktree** 隔离开发、工作树内 `TASK/<issue>/` 持久化进度。
+- **零 Token 磨砂玻璃雷达与接力台（`idd board`）**：默认按仓库聚合全部本地项目的活跃 Worktree 脉搏、3 栏分段进度卡、PR/MR 与 CI 状态及可清理目录；点击卡片打开详情抽屉，需要换工具时点一下 **「接力词」** 贴进任意另一个 Agent 即可接管现场。
+- **确定性底层引擎（`idd` CLI）**：主要由 Agent 自动调用，把 Worktree 创建、`.env`（`.worktreeinclude`）同步、8 类分支规范校验、结构化 PR/MR 汇总、CI 失败日志拉取与 **纯文本 Squash 直线合入** 封装成幂等命令。
 
 ---
 
@@ -60,32 +60,32 @@ IDD 用三层轻量组件把整套研发闭环串起来，平时只需要对 Age
 <table>
   <tr>
     <td width="50%" valign="top">
-      <h3>Issue 驱动 · 物理 Worktree 并行</h3>
-      一个需求绑定一个 Issue，自动在同级 <code>../&lt;repo&gt;-worktrees/&lt;id&gt;-&lt;slug&gt;</code> 开出独立工作树与 <code>&lt;type&gt;/&lt;id&gt;-&lt;slug&gt;</code> 分支（<code>--no-track</code> 创建并立即推送远端），自动同步 <code>.worktreeinclude</code> 里的 <code>.env</code> 文件。
+      <h3>先对齐方案 · 物理 Worktree 并行</h3>
+      严格执行「先只读排查、确认方案/看样再建 Issue」前置门禁；UI 改动内置 <code>idd preview</code> 热更新本地预览工作台（支持多方案 A/B 并排对比与桌面/平板/手机视口切换），临时原型绝不污染仓库。每个 Issue 在同级 <code>../&lt;repo&gt;-worktrees/&lt;id&gt;-&lt;slug&gt;</code> 开出独立工作树与 <code>--no-track</code> 分支并立即推远端，自动同步 <code>.worktreeinclude</code> 中的 <code>.env</code> 文件。
     </td>
     <td width="50%" valign="top">
-      <h3>直观原型对齐 · 本地预览台 (<code>idd preview</code>)</h3>
-      涉及 UI、交互或终端输出改动时，先看样再建单。内置热更新本地预览工作台，支持多方案 A/B 并排对比与桌面 / 平板 / 手机响应式视口切换，临时原型绝不污染业务仓库。
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <h3>零 Token 雷达 · 一键跨 Agent 接力</h3>
-      <code>idd board</code>（2s 刷新本地脉搏、30s 缓存远端）与 <code>idd watch</code> 实时展示改动文件、<code>+insertions/-deletions</code>、<code>TASK</code> 进度与 CI；自带浏览器令牌向导、中/英切换，一键复制接力词、目录或分支。
-    </td>
-    <td width="50%" valign="top">
-      <h3>CI 日志自愈 · 可控自动合入 (<code>auto-merge</code>)</h3>
-      <code>idd pr</code> / <code>idd mr</code> 自动汇总 <code>TASK</code> 与测试记录并关联 <code>Closes #id</code>；CI 失败自动拉取日志并严格限制最多 2 轮定位修复；支持全局开启 <code>auto-merge</code>（默认关闭，Draft/冲突/证据附件自动安全暂停）。
+      <h3>磨砂玻璃雷达 · 多视图与一键接力</h3>
+      新版 <code>idd board</code> 采用可收起磨砂玻璃侧栏与统一两行顶栏：支持<strong>按仓库分组（默认）/ 流程看板 / 紧凑列表</strong>三视图、<strong>3 栏分段 Bento 进度卡</strong>与 <strong>6 项语义筛选胶囊</strong>（全部活跃 / 施工中 / 需关注 / 待合入 / 待处理 / 可清理）；点击任意卡片打开右侧详情抽屉，内置浏览器令牌向导、中/英与深/浅色切换，一键复制接力词、路径或分支。
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <h3>直线 Squash 主干 · 零残留档案</h3>
-      <code>idd land</code> 自动 Rebase 到最新 <code>main</code>、将完整任务汇总写入 PR/MR 与提交正文、清理临时 <code>TASK/&lt;issue&gt;/</code> 目录、以单条 Squash 提交直线合入并自动勾选 Issue 验收框；默认保留工作树，空间不足时 <code>idd cleanup</code> 安全清理。
+      <h3>极致低耗引擎 · 零闪烁丝滑动效</h3>
+      首屏仅在首次加载展示布局骨架屏，后续刷新全部采用<strong>原地 DOM 调和与卡片 FLIP 动效</strong>，同步状态收口至顶栏避免布局跳动；标签页切到后台自动暂停轮询，前台按 <code>1.2s–15s</code> 串行自适应退避，配合服务端 <code>porcelain v2</code> 扫描、30s 闲置签名缓存与 singleflight 请求合并，大幅降低 CPU 与 Git 子进程开销。
     </td>
     <td width="50%" valign="top">
-      <h3>双平台原生 · 零外部依赖 · 零 Hook 侵入</h3>
-      纯 Python 3 标准库 + POSIX <code>sh</code> 实现，开箱支持 GitHub、GitHub Enterprise 与自建 GitLab（<code>ff</code> + <code>squash</code>）；内置 8 类前缀分支拦截（不向项目写入任何 Git Hook），并支持每 6 小时安全快进更新。
+      <h3>全局自动准入 · CI 两轮自愈</h3>
+      <code>auto_merge</code> 统一收口为全局开关，由 <code>idd pr</code> / <code>idd mr</code> 实时读取最新状态，支持 CLI（<code>idd config auto-merge on|off</code>）或看板顶栏带二次确认弹窗一键切换；未完成任务或未推送本地改动自动拦截误标待合入，CI 失败拉取日志并严格限制最多 2 轮定位修复，遇 Draft / 冲突 / <code>evidence/</code> 附件自动安全暂停。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>双格式交付汇总 · 直线 Squash 主干</h3>
+      <code>idd pr</code> / <code>idd mr</code> 生成结构化 Markdown（<code>## 变更内容</code> 列表 + <code>## 验证记录</code> 表格，自动精简冗长命令并在文末折叠保留原命令）；<code>idd land</code> 自动 Rebase 到最新 <code>main</code>、清理 <code>TASK/&lt;issue&gt;/</code>、将<strong>零 Markdown 符号的紧凑纯文本</strong>写入 Squash 提交正文（<code>TASK</code> 块内无空行、仅块间空行隔离），直线合入并自动勾选 Issue 验收复选框。
+    </td>
+    <td width="50%" valign="top">
+      <h3>看板逐卡安全清理 · 双平台零依赖</h3>
+      已合入的保留工作树支持在 <code>idd board</code> 底部抽屉或「可清理」筛选中<strong>二次确认逐卡流式清理</strong>（也可终端执行 <code>idd cleanup</code>），严格核验工作区干净且 <code>HEAD == headRefOid</code> 后才删目录，<strong>绝不删除分支</strong>；纯 Python 3 标准库 + POSIX <code>sh</code>，原生支持 GitHub / GHE / 自建 GitLab，零 Git Hook 侵入，每 6 小时安全快进更新。
     </td>
   </tr>
 </table>
@@ -102,10 +102,10 @@ IDD 用三层轻量组件把整套研发闭环串起来，平时只需要对 Age
   </picture>
 </p>
 
-1. **先确认方案，再立 Issue 锚点**：在任意 Agent 窗口聊清范围并只读排查后先对齐方案（界面或输出改动先用可交互原型 / `idd preview` / Before-After 样例看样），**用户明确确认方案后**再说 *「按 idd 建个 Issue」*，确认前不建单也不改动当前代码工作区。
-2. **多 Agent 各进各的工作树并行开干**：让 **Claude Code** *「开工 #115」*，同时让 **Codex** *「开工 #51」*。各自进入独立 Worktree 目录、自动复制 `.env` 并推进 `TASK/<issue>/`。
-3. **打开 `idd board` 实时盯盘，随时一键换手**：通过看板直观查看活跃脉搏、进度条与 CI 状态。需要切换工具时，点击 **「复制接力词」** 贴进 **Antigravity** 等任意 Agent，立即衔接上一手进度。
-4. **验收通过，干净 Squash 合入 `main`**：在最后一个 Agent 里说 *「合入 #115」*（或开启 `idd config auto-merge on` / 看板顶栏自动合入开关，CI 全绿后自动准入），自动清理 `TASK/` 并生成一条干净的直线提交。
+1. **先确认方案，再立 Issue 锚点**：在任意 Agent 窗口聊清范围并只读排查后先对齐方案（涉及界面、交互或输出改动时先看 `idd preview` / Artifact 可交互原型或 Before-After 样例），**用户明确确认方案后**再让 Agent 调用 `idd issue create` 建单；确认前不建单也不改动工作区。
+2. **多 Agent 各进各的工作树并行开干**：让 **Claude Code** *「开工 #115」*，同时让 **Codex** *「开工 #51」*。各自进入独立 Worktree 目录、自动复制 `.env`、立即推送分支并推进 `TASK/<issue>/`。
+3. **打开 `idd board` 实时盯盘，随时一键换手**：通过按仓库视图、3 栏分段进度卡与 6 项语义胶囊一眼看清活跃脉搏与 CI（快捷键 `[` 收起侧栏、`/` 搜索、`r` 强制同步，点击卡片打开详情抽屉）。需要切换工具时，点一下 **「接力词」** 贴进 **Antigravity** 等任意 Agent，立即衔接上一手进度。
+4. **验收通过，干净 Squash 合入 `main` 并安全清理**：确认后说 *「合入 #115」*（或开启全局 `PR 自动准入` 开关，CI 全绿后自动准入），`idd land` 自动清理 `TASK/` 并生成零 Markdown 纯文本直线提交；后续可在看板底部抽屉或 `idd cleanup` 一键清理已合入工作树目录。
 
 ```text
 ~/code/
@@ -138,7 +138,7 @@ curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh
 idd board
 ```
 
-> 首次打开 `idd board` 会弹出引导向导：点击跳转生成 GitHub 或自建 GitLab 令牌后直接在网页粘贴保存即可，无需手动敲登录命令。
+> 首次打开 `idd board` 会弹出引导向导：点击跳转生成 GitHub 或自建 GitLab 令牌后直接在网页粘贴保存即可，无需手动敲登录命令；支持在向导中一并启用首次接管仓库线性合入策略初始化。
 
 ### 3. 直接在任意 Agent 窗口用自然语言驱动
 
@@ -146,11 +146,11 @@ idd board
 | :--- | :--- | :--- |
 | **确认方案并立项** | *「先给方案/原型看看，确认后再按 idd 建 Issue」* | 方案对齐 / `idd preview` → 确认后 `idd issue create` |
 | **多窗口并行开工** | *「开工 #115」*（另一个窗口同时 *「开工 #51」*） | `idd start` 建独立 Worktree 并推远端 |
-| **中途切换 Agent** | 在 `idd board` 点击 **「复制接力词」** 后粘贴到新窗口 | `idd start` 幂等复用现场并读取 `TASK/` |
+| **中途切换 Agent** | 在 `idd board` 点击 **「接力词」** 后粘贴到新窗口 | `idd start` 幂等复用现场并读取 `TASK/` |
 | **提交验收与合入** | *「提 PR」* / *「合入 #115」* | `idd pr` → `idd ci --watch` → `idd land` |
 
 > [!TIP]
-> 首次接管仓库建议执行一次 `idd repo-init --apply`（在 `idd start` / `idd issue create` 时也会自动探测提醒），将 GitHub 锁定为仅 Squash 合入或将 GitLab 设为 `ff` + `squash` 且保留分支；若希望 CI 全绿后自动完成合入，可执行 `idd config auto-merge on` 或在 `idd board` 顶栏打开开关。
+> 首次接管仓库时 `idd start` / `idd issue create` / `idd repos add` 会自动探测并尝试执行一次 `idd repo-init --apply`（锁定 GitHub 仅 Squash、`PR_TITLE`/`PR_BODY` 模板，或 GitLab `ff` + `always` squash，且保留分支）；若当时跳过或无权限，可在 `idd board` 仓库分组头一键重试。若希望 CI 全绿后自动完成合入，可执行 `idd config auto-merge on` 或在 `idd board` 顶栏切换全局开关。
 
 > [!NOTE]
 > `idd` 每 6 小时会在后台安全检查 `origin/main`，仅当本地技能仓库位于干净的 `main` 分支时自动快进同步（也可随时手动运行 `idd upgrade [--check]`）。需要卸载时执行 `idd uninstall`（或兜底命令 `curl -fsSL https://raw.githubusercontent.com/j-tide/idd/main/install.sh | sh -s -- --uninstall -y`），绝不影响你的任何业务仓库。
@@ -203,8 +203,8 @@ idd board
 | **AI 编程 Agent** | **Claude Code** | 自动软链至 `~/.claude/skills/idd` |
 | **AI 编程 Agent** | **Codex** | 自动软链至 `~/.codex/skills/idd` |
 | **AI 编程 Agent** | **Antigravity** | 自动软链至 `~/.gemini/config/skills/idd` |
-| **代码托管平台** | **GitHub / GitHub Enterprise** | Issue 进度条、PR 自动汇总、Actions CI 日志、`Squash` 直线合入 |
-| **代码托管平台** | **自建 GitLab** | Issue 进度条、MR 自动汇总、Pipeline 日志、`ff` + `squash` 直线合入 |
+| **代码托管平台** | **GitHub / GitHub Enterprise** | Issue 进度条、结构化 PR 汇总、Actions CI 日志、`Squash` 直线合入 |
+| **代码托管平台** | **自建 GitLab** | Issue 进度条、结构化 MR 汇总、Pipeline 日志、`ff` + `squash` 直线合入 |
 
 ---
 
@@ -217,20 +217,20 @@ idd board
 
 | 命令 | 说明 |
 | :--- | :--- |
-| `idd board` / `idd ui` | 启动本地离线 Web 进度雷达与一键接力看板（每 2 秒刷新脉搏，支持中/英切换） |
-| `idd preview <target>... [--compare]` | 启动本地交互原型预览工作台（支持热更新、A/B 并排对比与桌面/平板/手机视口切换） |
-| `idd watch [--current-only]` | 在终端按 2 秒频率实时刷新全局（或当前仓库）Worktree 脉搏、当前 TASK 与 CI |
-| `idd status [-g\|--global]` | 终端一次性输出 Open Issues、Worktree `TASK` 进度、脉搏与 PR/MR CI |
-| `idd repos [list\|add\|remove\|prune]` | 查看或管理全局自动监控的仓库索引（`~/.config/idd/repos.json`） |
-| `idd issue create --title "..." [--type ...] [--scope ...]` | 确认方案后按规范标题创建 GitHub / GitLab Issue |
-| `idd start <issue# \| slug>` | 创建或幂等复用独立 Worktree，`--no-track` 建分支并立即推远端 `origin`，同步 `.worktreeinclude` |
-| `idd sync [issue#]` | 将本地 `TASK` 勾选进度同步回 Issue 正文并自动推送当前开发分支 |
-| `idd pr` / `idd mr` | 汇总 `TASK` 与测试记录（附 `Closes #id`）创建或更新 PR / MR（开启 `auto_merge` 时自动等待 CI 并合入，支持 `--auto-merge` / `--no-auto-merge`） |
-| `idd ci [issue# \| pr# \| !mr#] [--logs]` | 检查 PR / MR 的 CI 状态并拉取失败日志 |
-| `idd land [issue# \| slug]` | Rebase、清理 `TASK/<issue>/`、Squash 直线合入并自动勾选 Issue 验收标准（默认保留分支与工作树，可选 `--wait-ci` / `--no-check-acceptance` / `--rm-worktree`） |
-| `idd cleanup [--dry-run]` | 按需清理工作区干净且 `HEAD == headRefOid` 的已合入工作树目录（**不删分支**） |
+| `idd board` / `idd ui [--current-only] [--local-only] [--port ...]` | 启动本地磨砂玻璃 Web 雷达与接力看板（三视图、自适应低耗轮询、逐卡安全清理、中/英切换） |
+| `idd preview <target>... [--compare] [--title "..."] [--port ...]` | 启动本地交互原型预览工作台（热更新、A/B 并排对比与桌面/平板/手机视口切换） |
+| `idd watch [--current-only] [--open-only] [--once]` | 在终端按 2 秒频率实时刷新全局（或当前仓库）Worktree 脉搏、当前 TASK 与 CI |
+| `idd status [-g\|--global] [--open-only] [--local-only] [--json]` | 终端一次性输出 Open Issues、Worktree `TASK` 进度、脉搏与 PR/MR CI |
+| `idd repos [list\|add\|remove\|prune] [--json]` | 查看或管理全局自动监控的仓库索引（`~/.config/idd/repos.json`） |
+| `idd issue create --title "..." [--type ...] [--scope ...] [--raw]` | 确认方案后按规范标题创建 GitHub / GitLab Issue |
+| `idd start <issue# \| slug> [--slug ...] [--prefix ...] [--base ...]` | 创建或幂等复用独立 Worktree，`--no-track` 建分支并立即推远端 `origin`，同步 `.worktreeinclude` |
+| `idd sync [issue#] [--no-push] [--dry-run]` | 将本地 `TASK` 勾选进度同步回 Issue 正文并自动推送当前开发分支 |
+| `idd pr` / `idd mr [target] [--draft] [--auto-merge \| --no-auto-merge]` | 生成结构化变更列表与验证表格（附 `Closes #id`）创建或更新 PR / MR；实时读取全局 `auto_merge` 开关 |
+| `idd ci [issue# \| pr# \| !mr#] [--watch] [--logs] [--json]` | 检查 PR / MR 的 CI 状态并拉取失败 Job/Run 日志 |
+| `idd land [issue# \| slug] [--wait-ci] [--rm-worktree] [--no-check-acceptance]` | Rebase、写入零 Markdown 纯文本 Squash 正文、清理 `TASK/<issue>/`、直线合入并自动勾选 Issue 验收框（默认保留分支与工作树） |
+| `idd cleanup [--dry-run]` | 按需清理工作区干净且 `HEAD == headRefOid` 的已合入工作树目录（**绝不删分支**） |
 | `idd repo-init [--apply]` | 检查或配置 GitHub / GitLab 为线性 Squash 合入策略且保留分支 |
-| `idd config [auto-merge on\|off\|status]` | 查看或切换全局 PR/MR 自动准入及自动合入开关（默认关闭） |
+| `idd config [show \| auto-merge on\|off\|status] [--json]` | 查看或切换全局 PR/MR 自动准入及自动合入开关（默认关闭） |
 | `idd auth login / status / logout` | 管理自建 GitLab / GitHub 企业版主机凭据 |
 | `idd upgrade [--check]` | 检查或立即快进更新本地 `idd`（`idd --version` 查看当前版本） |
 | `idd uninstall [--dry-run] [--keep-config] [-y]` | 安全完全卸载 `idd`（移除软链、技能仓库、配置与缓存） |
