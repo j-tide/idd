@@ -102,7 +102,7 @@ IDD 用三层轻量组件把整套研发闭环串起来，平时只需要对 Age
   </picture>
 </p>
 
-1. **聊想法，先看样再立 Issue 锚点**：在任意 Agent 窗口聊清范围，界面或输出改动先用可交互原型 / `idd preview` / Before-After 样例对齐，确认后说 *「按 idd 建个 Issue」*，不改动当前代码工作区。
+1. **先确认方案，再立 Issue 锚点**：在任意 Agent 窗口聊清范围并只读排查后先对齐方案（界面或输出改动先用可交互原型 / `idd preview` / Before-After 样例看样），**用户明确确认方案后**再说 *「按 idd 建个 Issue」*，确认前不建单也不改动当前代码工作区。
 2. **多 Agent 各进各的工作树并行开干**：让 **Claude Code** *「开工 #115」*，同时让 **Codex** *「开工 #51」*。各自进入独立 Worktree 目录、自动复制 `.env` 并推进 `TASK/<issue>/`。
 3. **打开 `idd board` 实时盯盘，随时一键换手**：通过看板直观查看活跃脉搏、进度条与 CI 状态。需要切换工具时，点击 **「复制接力词」** 贴进 **Antigravity** 等任意 Agent，立即衔接上一手进度。
 4. **验收通过，干净 Squash 合入 `main`**：在最后一个 Agent 里说 *「合入 #115」*（或开启 `idd config auto-merge on` / 看板顶栏自动合入开关，CI 全绿后自动准入），自动清理 `TASK/` 并生成一条干净的直线提交。
@@ -144,7 +144,7 @@ idd board
 
 | 场景 | 对 Agent 说 | 底层触发动作 |
 | :--- | :--- | :--- |
-| **聊完需求立项** | *「先出个原型看看，没问题按 idd 建个 Issue」* | `idd preview` → `idd issue create` |
+| **确认方案并立项** | *「先给方案/原型看看，确认后再按 idd 建 Issue」* | 方案对齐 / `idd preview` → 确认后 `idd issue create` |
 | **多窗口并行开工** | *「开工 #115」*（另一个窗口同时 *「开工 #51」*） | `idd start` 建独立 Worktree 并推远端 |
 | **中途切换 Agent** | 在 `idd board` 点击 **「复制接力词」** 后粘贴到新窗口 | `idd start` 幂等复用现场并读取 `TASK/` |
 | **提交验收与合入** | *「提 PR」* / *「合入 #115」* | `idd pr` → `idd ci --watch` → `idd land` |
@@ -173,7 +173,7 @@ idd board
 
 所有非只读代码、配置与文档开发任务默认使用全局 `idd` 技能（`~/.agents/skills/idd/SKILL.md`）。
 
-- **先建 Issue 再建 Worktree**：仓库已配置 GitHub / GitLab 远端且未关联 Issue 时，先运行 `idd issue create` 建单，再运行 `idd start <issue#>` 创建或复用独立 Worktree 与 `<type>/<id>-<slug>` 分支并立即推送 `origin`（禁止在 `main` 上直接修改）。
+- **先确认方案，再建 Issue 与 Worktree**：除用户明确指定推进已有清晰验收标准的 Issue（如“开工 #42”）或本轮显式授权跳过确认外，所有新需求与修改（含 Bug 修复、重构、配置与文档）必须先只读排查并给出简明开发/修改方案（涉及 UI/交互/输出时按需附原型或 Before/After 样例），**等待用户明确确认后**再运行 `idd issue create` 建单（严禁未确认顺手建单或改代码），再运行 `idd start <issue#>` 创建或复用独立 Worktree 与 `<type>/<id>-<slug>` 分支并立即推送 `origin`（禁止在 `main` 上直接修改）。
 - **逐 TASK 验证与立即推送**：在 `TASK/<issue>/TASK-XX-*.md` 中拆解范围与测试映射，逐项实现、运行真实测试并提交；每次提交后立即执行 `idd sync`（或 `git push -u origin HEAD`）推送到远端开发分支。
 - **PR/MR、CI 与直线合入**：完成后运行 `idd pr` / `idd mr` 与 `idd ci --watch`；验收通过（或已开启 `auto_merge` 开关）后运行 `idd land` 清理 `TASK/<issue>/` 并 Squash 直线合入 `main`。
 - **安全边界**：仅纯本地无远端仓库使用无编号 `<slug>` 流程；保护未提交修改，未经授权不强推 `main`、不擅自合入主线、不执行部署或生产变更。
@@ -187,7 +187,7 @@ idd board
 # 协作开发规范（IDD）
 
 本仓库统一使用 `idd` 技能（Issue-Driven Development）进行开发交付：
-- 有 GitHub / GitLab 远端时，新需求先通过 `idd issue create` 建单，再通过 `idd start <issue#>` 在独立 Worktree 与 `<type>/<id>-<slug>` 分支中开发，禁止直接提交 `main`。
+- 有 GitHub / GitLab 远端时，除指定推进已有清晰验收标准的 Issue 或本轮显式授权免确认外，所有新需求与修改（含 Bug 修复）须先给出简明方案并**经用户明确确认后**再通过 `idd issue create` 建单，随后通过 `idd start <issue#>` 在独立 Worktree 与 `<type>/<id>-<slug>` 分支中开发，禁止直接提交 `main`。
 - 在 `TASK/<issue>/` 拆解任务并记录真实测试验证；每完成一项即提交并运行 `idd sync` 推送。
 - 通过 `idd pr` / `idd mr` 发起合入并等待 CI 通过，验收后使用 `idd land` 清理临时 `TASK/` 目录并 Squash 直线合入 `main`。
 ```
@@ -222,7 +222,7 @@ idd board
 | `idd watch [--current-only]` | 在终端按 2 秒频率实时刷新全局（或当前仓库）Worktree 脉搏、当前 TASK 与 CI |
 | `idd status [-g\|--global]` | 终端一次性输出 Open Issues、Worktree `TASK` 进度、脉搏与 PR/MR CI |
 | `idd repos [list\|add\|remove\|prune]` | 查看或管理全局自动监控的仓库索引（`~/.config/idd/repos.json`） |
-| `idd issue create --title "..." [--type ...] [--scope ...]` | 按规范标题创建 GitHub / GitLab Issue |
+| `idd issue create --title "..." [--type ...] [--scope ...]` | 确认方案后按规范标题创建 GitHub / GitLab Issue |
 | `idd start <issue# \| slug>` | 创建或幂等复用独立 Worktree，`--no-track` 建分支并立即推远端 `origin`，同步 `.worktreeinclude` |
 | `idd sync [issue#]` | 将本地 `TASK` 勾选进度同步回 Issue 正文并自动推送当前开发分支 |
 | `idd pr` / `idd mr` | 汇总 `TASK` 与测试记录（附 `Closes #id`）创建或更新 PR / MR（开启 `auto_merge` 时自动等待 CI 并合入，支持 `--auto-merge` / `--no-auto-merge`） |
