@@ -34,7 +34,7 @@ metadata:
 | `idd land [issue# \| slug] [--keep-tasks] [--force-unfinished-tasks] [--rm-worktree] [--auto] [--wait-ci] [--no-check-acceptance] [--dry-run]` | 自动 Rebase、汇总正文、清理 `TASK/<issue>/`、Squash 直线合入并自动勾选 Issue 验收标准（默认保留分支与工作树） |
 | `idd cleanup [--dry-run]` | 按需移除已合入且 HEAD 一致的干净工作树目录（保留所有分支） |
 | `idd repo-init [--apply]` | 检查或配置 GitHub / GitLab 为线性 Squash 合入策略（保留分支） |
-| `idd config [auto-merge on\|off\|inherit] [-g\|--global] [--json]` | 查看或切换全局/单仓库 PR/MR 自动准入与自动合入开关（默认关闭） |
+| `idd config [auto-merge on\|off\|status] [--json]` | 查看或切换全局 PR/MR 自动准入与自动合入开关（默认关闭） |
 | `idd auth login <host> --token <PAT>` / `status` / `logout` | 保存与检查自建 GitLab / GitHub 企业版主机凭据 |
 | `idd upgrade [--check]` | 检查或立即拉取远端更新并快进同步本地 `idd`（另支持后台 6 小时安全自动同步） |
 | `idd uninstall [--dry-run] [--keep-config] [-y]` | 安全完全卸载 `idd`（移除软链、技能仓库、配置与缓存） |
@@ -198,7 +198,7 @@ Test: <简短命令或命令标签> — <结果>
 
 1. **本地最终验收**：运行项目级相关测试套件、适用的构建 / 类型检查 / Lint，逐项核对 Issue 验收标准，Review 完整 Git Diff（检查回归、安全、错误处理与无关改动）。
 2. **创建 / 更新 PR 或 MR**：确认工作树干净后运行 `idd pr`（GitLab 也可用别名 `idd mr`，自动汇总 `TASK` 列表与 `Test:` 并关联 `Closes #<id>`）。
-   - `idd pr` 会自动读取本仓库生效的 `auto_merge` 开关（仓库覆盖 > 全局默认，默认关闭；可在 CLI `idd config auto-merge ...` 或 `idd board` 设置，也支持单次传 `--auto-merge` / `--no-auto-merge`）。
+   - `idd pr` 会自动读取全局 `auto_merge` 开关（默认关闭；可在 CLI `idd config auto-merge ...` 或 `idd board` 设置，也支持单次传 `--auto-merge` / `--no-auto-merge`）。
    - **禁止擅自覆写开关或缓存旧状态**：除非用户本轮明确要求单次覆写（如“这次先别自动合入”），否则**默认直接运行无参 `idd pr` / `idd mr`，严禁擅自附加 `--no-auto-merge` 或 `--auto-merge`**；也不要凭对话早期的 `idd config` 快照决定是否自动合入（用户随时可能在开发途中通过 `idd board` 顶栏切换开关），始终交由 `idd pr` 在提 PR 当刻实时读取最新配置。
 3. **CI 校验与自愈**：
    - **当 `auto_merge` 关闭（默认）**：运行 `idd ci --watch` 等待远端 Checks / Pipeline 结束；失败时执行 `idd ci --logs` 拉取失败 Job/Run 日志并在原工作树定位修复、本地复测后推送。
@@ -244,5 +244,5 @@ Test: <简短命令或命令标签> — <结果>
   - 除非确有必要且理由充分，否则不要增加依赖；
   - 不修改无关文件，不覆盖用户已有修改；
   - 没有实际运行并通过的测试，绝不能声称通过；
-  - **常规开发分支推送默认允许且必须执行**：有 `origin` 远端时，向当前需求开发分支（`<type>/*`）执行 `git push -u origin HEAD`（含 `idd start` / `idd sync` 自动推送）属于标准开发动作，不属于“越权外部写入”；未经明确授权不得执行的是强推主干/重写共享历史、未经验收且未开启 `auto_merge` 开关时擅自合入 `main`、发版打 Tag、部署或生产变更（若当前仓库已开启 `auto_merge` 开关且满足安全门禁，则视作已获自动合入授权）；
+  - **常规开发分支推送默认允许且必须执行**：有 `origin` 远端时，向当前需求开发分支（`<type>/*`）执行 `git push -u origin HEAD`（含 `idd start` / `idd sync` 自动推送）属于标准开发动作，不属于“越权外部写入”；未经明确授权不得执行的是强推主干/重写共享历史、未经验收且未开启 `auto_merge` 开关时擅自合入 `main`、发版打 Tag、部署或生产变更（若已开启全局 `auto_merge` 开关且满足安全门禁，则视作已获自动合入授权）；
   - 若当前项目的 `AGENTS.md` 在技术栈、测试门禁、安全边界等业务规则上更严格，以项目指令为准；若项目文档中仍残留已废弃的旧 `TaskFlow` 工作流引用，一律以本 IDD 流程替代（先建 Issue、独立 Worktree、PR/MR 与 Squash 直线合入），不得退回无 Issue 的旧流程。

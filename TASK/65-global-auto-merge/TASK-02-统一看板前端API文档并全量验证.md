@@ -1,7 +1,7 @@
 # TASK-02：统一看板前端 API 文档并全量验证
 
 - Issue: 65-global-auto-merge
-- Status: in_progress
+- Status: done
 - Depends on: TASK-01
 - Test: `tests/test_monitor_and_board.py`, 全量 `python3 -m unittest discover -s tests -v`
 
@@ -15,10 +15,10 @@
 - `tests/test_monitor_and_board.py`：更新 API 与前端 JS 渲染测试覆盖全局统一行为。
 
 ## 验收标准
-- [ ] 看板顶栏（全局工作区、GitHub/GitLab 单仓库）均不带 `(全局)` / `(仓库)` 括号且点击切换全局开关
-- [ ] 侧栏仓库列表不再重复显示「自动」标签，设置弹窗仅保留全局开关
-- [ ] `/api/config/auto-merge` 拒绝 `scope: "repo"`，支持全局开关读写
-- [ ] 文档已同步且全量测试与 JS 语法检查通过
+- [x] 看板顶栏（全局工作区、GitHub/GitLab 单仓库）均不带 `(全局)` / `(仓库)` 括号且点击切换全局开关
+- [x] 侧栏仓库列表不再重复显示「自动」标签，设置弹窗仅保留全局开关
+- [x] `/api/config/auto-merge` 拒绝 `scope: "repo"`，支持全局开关读写
+- [x] 文档已同步且全量测试与 JS 语法检查通过
 
 ## 实现注意事项
 - 确认弹窗中仍按当前仓库类型动态展示 `PR` 或 `MR` 标签，但生效范围明确为全局。
@@ -28,11 +28,13 @@
 - Expected: 全量单元测试及 Node JS 语法与渲染用例通过。
 
 ## 执行结果
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已移除看板前端与 API 中的仓库级 `auto_merge` 配置及展示，文档已同步更新，全量 93 项单元测试及 Node JS 语法与渲染校验全部通过。
 
 ### 当前阻塞
 无。
 
 ### 验证记录
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-27 | `python3 -m unittest discover -s tests -v` | passed (93/93) | `tests/`（含 `test_board_auto_merge_api_and_ui` 与 Node JS 检查） |

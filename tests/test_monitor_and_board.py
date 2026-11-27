@@ -1610,16 +1610,16 @@ class TestMonitorAndBoard(unittest.TestCase):
                 self.assertEqual(csrf_err.exception.code, 403)
                 csrf_err.exception.close()
 
-                # 3. Non-whitelisted repo_path -> 403
+                # 3. Repo-level scope is rejected -> 400
                 req_bad_repo = urllib.request.Request(
                     f"{base_url}/api/config/auto-merge",
-                    data=json.dumps({"scope": "repo", "repo_path": str(outside_dir), "value": True}).encode("utf-8"),
+                    data=json.dumps({"scope": "repo", "repo_path": str(repo), "value": True}).encode("utf-8"),
                     headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
                     method="POST",
                 )
                 with self.assertRaises(urllib.error.HTTPError) as repo_err:
                     urllib.request.urlopen(req_bad_repo, timeout=5)
-                self.assertEqual(repo_err.exception.code, 403)
+                self.assertEqual(repo_err.exception.code, 400)
                 repo_err.exception.close()
 
                 # 4. Invalid payload type -> 400
@@ -1634,10 +1634,10 @@ class TestMonitorAndBoard(unittest.TestCase):
                 self.assertEqual(val_err.exception.code, 400)
                 val_err.exception.close()
 
-                # 5. Toggle global ON -> snapshot reflects global=True, repo inherited=True
+                # 5. Toggle global ON (omitting scope) -> snapshot reflects global=True and repo enabled=True
                 req_g_on = urllib.request.Request(
                     f"{base_url}/api/config/auto-merge",
-                    data=json.dumps({"scope": "global", "enabled": True}).encode("utf-8"),
+                    data=json.dumps({"enabled": True}).encode("utf-8"),
                     headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
                     method="POST",
                 )
@@ -1652,32 +1652,22 @@ class TestMonitorAndBoard(unittest.TestCase):
                     self.assertTrue(snap1["repos"][0]["auto_merge"]["enabled"])
                     self.assertEqual(snap1["repos"][0]["auto_merge"]["source"], "global")
 
-                # 6. Override repo OFF -> snapshot reflects repo override=False
-                req_r_off = urllib.request.Request(
+                # 6. Toggle global OFF with explicit scope -> snapshot reflects False
+                req_g_off = urllib.request.Request(
                     f"{base_url}/api/config/auto-merge",
-                    data=json.dumps({"scope": "repo", "repo_path": str(repo), "value": False}).encode("utf-8"),
+                    data=json.dumps({"scope": "global", "enabled": False}).encode("utf-8"),
                     headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
                     method="POST",
                 )
-                with urllib.request.urlopen(req_r_off, timeout=5) as resp:
-                    r_off_res = json.loads(resp.read().decode("utf-8"))
-                    self.assertTrue(r_off_res["ok"])
-                    self.assertFalse(r_off_res["auto_merge"]["enabled"])
-                    self.assertEqual(r_off_res["auto_merge"]["source"], "repo")
+                with urllib.request.urlopen(req_g_off, timeout=5) as resp:
+                    g_off_res = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(g_off_res["ok"])
+                    self.assertFalse(g_off_res["auto_merge"])
 
-                # 7. Reset repo to inherit (null) -> falls back to global=True
-                req_r_inh = urllib.request.Request(
-                    f"{base_url}/api/config/auto-merge",
-                    data=json.dumps({"scope": "repo", "repo_path": str(repo), "value": None}).encode("utf-8"),
-                    headers={"Content-Type": "application/json", "X-IDD-Request": "1"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req_r_inh, timeout=5) as resp:
-                    r_inh_res = json.loads(resp.read().decode("utf-8"))
-                    self.assertTrue(r_inh_res["ok"])
-                    self.assertTrue(r_inh_res["auto_merge"]["enabled"])
-                    self.assertEqual(r_inh_res["auto_merge"]["source"], "global")
-                    self.assertIsNone(r_inh_res["auto_merge"]["repo_override"])
+                with urllib.request.urlopen(f"{base_url}/api/snapshot", timeout=5) as resp:
+                    snap2 = json.loads(resp.read().decode("utf-8"))
+                    self.assertFalse(snap2["config"]["auto_merge"])
+                    self.assertFalse(snap2["repos"][0]["auto_merge"]["enabled"])
             finally:
                 proc.terminate()
                 try:
@@ -1693,13 +1683,14 @@ class TestMonitorAndBoard(unittest.TestCase):
         # Verify UI markers and JS syntax validity
         html_doc = board_ui.BOARD_HTML
         self.assertIn("data-am-global-toggle", html_doc)
-        self.assertIn("data-am-repo-val", html_doc)
         self.assertIn("data-am-quick-global", html_doc)
-        self.assertIn("data-am-quick-repo", html_doc)
         self.assertIn("am-confirm-overlay", html_doc)
         self.assertIn("am-confirm-modal", html_doc)
         self.assertIn("openAutoMergeConfirm", html_doc)
         self.assertIn("PR 自动准入", html_doc)
+        self.assertNotIn("data-am-repo-val", html_doc)
+        self.assertNotIn("data-am-quick-repo", html_doc)
+        self.assertNotIn("sb-auto-tag", html_doc)
         self.assertNotIn("全局自动合入", html_doc)
         self.assertIn("/api/config/auto-merge", html_doc)
 
@@ -1771,7 +1762,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                             repo_url: 'https://github.com/o/gh-repo',
                             forge: 'github',
                             repo_init: { state: 'aligned' },
-                            auto_merge: { enabled: false, source: 'global', global_default: false, repo_override: null }
+                            auto_merge: { enabled: false, source: 'global' }
                           },
                           {
                             repo_path: '/repos/gl',
@@ -1779,7 +1770,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                             repo_url: 'https://gitlab.example.com/g/gl-repo',
                             forge: 'gitlab',
                             repo_init: { state: 'aligned' },
-                            auto_merge: { enabled: true, source: 'repo', global_default: false, repo_override: true }
+                            auto_merge: { enabled: false, source: 'global' }
                           }
                         ]
                       }
@@ -1805,7 +1796,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                     """
                     const assert = require('assert');
 
-                    // 1. Global workspace hides redundant #scope-tag and displays "PR 自动准入"
+                    // 1. Global workspace hides redundant #scope-tag and displays "PR 自动准入" without scope suffix
                     renderWorkspaceHeader(state.snapshot);
                     assert.strictEqual(els['scope-tag'].style.display, 'none');
                     assert(els['ws-repo-link-wrap'].innerHTML.includes('PR 自动准入: 关'));
@@ -1814,35 +1805,49 @@ class TestMonitorAndBoard(unittest.TestCase):
                     state.snapshot.config.auto_merge = true;
                     renderWorkspaceHeader(state.snapshot);
                     assert(els['ws-repo-link-wrap'].innerHTML.includes('PR 自动准入: 开'));
+                    assert(!els['ws-repo-link-wrap'].innerHTML.includes('(全局)'));
 
-                    // 2. Single GitHub & GitLab repo headers show PR/MR 自动准入
+                    // 2. Single GitHub & GitLab repo headers follow global state without (全局) / (仓库)
                     state.selectedRepo = '/repos/gh';
                     renderWorkspaceHeader(state.snapshot);
-                    assert(els['ws-repo-link-wrap'].innerHTML.includes('PR 自动准入: 关'));
+                    assert(els['ws-repo-link-wrap'].innerHTML.includes('PR 自动准入: 开'));
+                    assert(els['ws-repo-link-wrap'].innerHTML.includes('data-am-quick-global="1"'));
+                    assert(!els['ws-repo-link-wrap'].innerHTML.includes('(全局)'));
+                    assert(!els['ws-repo-link-wrap'].innerHTML.includes('(仓库)'));
+
                     state.selectedRepo = '/repos/gl';
                     renderWorkspaceHeader(state.snapshot);
-                    assert(els['ws-repo-link-wrap'].innerHTML.includes('MR 自动准入: 开 (仓库)'));
+                    assert(els['ws-repo-link-wrap'].innerHTML.includes('MR 自动准入: 开'));
+                    assert(els['ws-repo-link-wrap'].innerHTML.includes('data-am-quick-global="1"'));
+                    assert(!els['ws-repo-link-wrap'].innerHTML.includes('(全局)'));
+                    assert(!els['ws-repo-link-wrap'].innerHTML.includes('(仓库)'));
+
+                    state.snapshot.config.auto_merge = false;
+                    renderWorkspaceHeader(state.snapshot);
+                    assert(els['ws-repo-link-wrap'].innerHTML.includes('MR 自动准入: 关'));
 
                     // 3. Confirmation warning modal opens before any mutation & closes on cancel
-                    state.snapshot.config.auto_merge = false;
-                    openAutoMergeConfirm('global', '', true);
+                    openAutoMergeConfirm(true, 'PR');
                     assert.ok(state.amConfirm);
                     assert.strictEqual(els['am-confirm-overlay'].attrs['aria-hidden'], 'false');
                     assert(els['am-confirm-overlay'].classList.contains('open'));
                     assert(els['am-confirm-modal'].innerHTML.includes('确认开启 PR 自动准入？'));
                     assert(els['am-confirm-modal'].innerHTML.includes('确认开启 PR 自动准入'));
                     assert(els['am-confirm-modal'].innerHTML.includes('Squash 直线合入'));
+                    assert(!els['am-confirm-modal'].innerHTML.includes('未单独覆盖'));
 
                     closeAutoMergeConfirm();
                     assert.strictEqual(state.amConfirm, null);
                     assert.strictEqual(els['am-confirm-overlay'].attrs['aria-hidden'], 'true');
                     assert(!els['am-confirm-overlay'].classList.contains('open'));
 
-                    // 4. Disable modal renders restore-manual explanation
-                    openAutoMergeConfirm('repo', '/repos/gl', false);
+                    // 4. Disable modal renders global restore-manual explanation
+                    state.snapshot.config.auto_merge = true;
+                    openAutoMergeConfirm(false, 'MR');
                     assert.ok(state.amConfirm);
                     assert(els['am-confirm-modal'].innerHTML.includes('确认关闭 MR 自动准入？'));
                     assert(els['am-confirm-modal'].innerHTML.includes('恢复人工把关'));
+                    assert(els['am-confirm-modal'].innerHTML.includes('立即全局生效'));
                     console.log('JS_PR_AUTO_APPROVE_MODAL_OK');
                     """,
                 ]

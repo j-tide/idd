@@ -455,18 +455,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .sb-meta.warn { color: var(--amber); }
     .sb-meta.danger { color: var(--red); }
 
-    .sb-auto-tag {
-      font-size: 10px;
-      font-weight: 600;
-      padding: 1px 5px;
-      border-radius: 999px;
-      background: var(--green-soft);
-      color: var(--green);
-      border: 1px solid rgba(74, 222, 128, 0.28);
-      line-height: 1.3;
-      flex-shrink: 0;
-    }
-
     body.sidebar-collapsed .sb-item {
       width: 38px;
       height: 36px;
@@ -2293,7 +2281,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
     .sb-policy-btn:hover { background: rgba(251, 191, 36, 0.24); }
     .sb-policy-btn:disabled { opacity: 0.55; cursor: wait; }
 
-    /* Auto-Merge Switch, 3-State Segmented Control & Header Pill */
+    /* Auto-Merge Switch & Header Pill */
     .am-toggle-switch {
       position: relative;
       display: inline-flex;
@@ -2348,63 +2336,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
     }
     .am-toggle-switch input:checked ~ .am-toggle-label {
       color: var(--green);
-    }
-    .am-seg-group {
-      position: relative;
-      display: inline-flex;
-      padding: 2px;
-      gap: 2px;
-      border-radius: 8px;
-      background: var(--bg-well);
-      border: 1px solid var(--border);
-      flex-shrink: 0;
-    }
-    .am-seg-group .seg-glider {
-      border-radius: 6px;
-      background: var(--bg-tile-active);
-    }
-    .am-seg-group .seg-glider.is-on { background: var(--green-soft); }
-    .am-seg-group .seg-glider.is-off { background: var(--bg-inset); }
-    .am-seg-group.has-glider .am-seg-btn.active { background: transparent; }
-    .am-seg-btn {
-      appearance: none;
-      position: relative;
-      z-index: 1;
-      border: 0;
-      background: transparent;
-      color: var(--text-dim);
-      height: 22px;
-      padding: 0 8px;
-      border-radius: 6px;
-      font-size: 11px;
-      font-weight: 560;
-      cursor: pointer;
-      transition:
-        background-color var(--dur-micro) var(--ease-standard),
-        color var(--dur-micro) var(--ease-standard),
-        transform var(--dur-press) var(--ease-standard);
-    }
-    .am-seg-btn:hover:not(:disabled) {
-      color: var(--text);
-      background: var(--bg-tile);
-    }
-    .am-seg-btn:active:not(:disabled) { transform: scale(var(--press-scale-sm)); }
-    .am-seg-btn.active {
-      background: var(--bg-tile-active);
-      color: var(--text);
-      font-weight: 650;
-    }
-    .am-seg-btn.active.is-on {
-      background: var(--green-soft);
-      color: var(--green);
-    }
-    .am-seg-btn.active.is-off {
-      background: var(--bg-inset);
-      color: var(--text-dim);
-    }
-    .am-seg-btn:disabled {
-      opacity: 0.55;
-      cursor: wait;
     }
     .am-header-pill {
       appearance: none;
@@ -3323,11 +3254,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         syncSegmentedIndicator(document.querySelector(".sb-nav"), ".sb-item.active");
         const wizNav = document.querySelector("#setup-modal .wizard-nav");
         if (wizNav) syncSegmentedIndicator(wizNav, ".wizard-nav-btn.active");
-        document.querySelectorAll("#setup-modal .am-seg-group").forEach((grp) => {
-          const act = grp.querySelector(".am-seg-btn.active");
-          const cls = act ? (act.classList.contains("is-on") ? "is-on" : (act.classList.contains("is-off") ? "is-off" : "")) : "";
-          syncSegmentedIndicator(grp, ".am-seg-btn.active", cls);
-        });
         const inspTabs = document.querySelector("#inspector-panel .tabs");
         if (inspTabs) syncSegmentedIndicator(inspTabs, ".tab-btn.active");
       }
@@ -4450,10 +4376,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 (riBusy ? tr("初始化中", "Applying") : (ri.error ? tr("重试", "Retry") : tr("待初始化", "Init"))) +
               "</button>"
             : "";
-          const amEnabled = Boolean(r.auto_merge && r.auto_merge.enabled);
-          const amTag = amEnabled
-            ? '<span class="sb-auto-tag hide-collapsed" title="' + escapeHtml(tr("已开启 PR/MR 自动准入", "Auto-Approve enabled")) + '">' + tr("自动", "Auto") + "</span>"
-            : "";
           repoHtml.push(
             '<div class="sb-item ' + (isAct ? "active" : "") + '" role="button" tabindex="0" data-repo="' + escapeHtml(r.repo_path) + '" title="' + escapeHtml("[" + platFull + "] " + r.repo_name + " (" + wtCnt + "/" + items.length + ")") + '">' +
               '<span class="sb-item-left">' +
@@ -4462,7 +4384,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
               "</span>" +
               '<span class="sb-right-group hide-collapsed">' +
                 policyBtn +
-                amTag +
                 '<span class="sb-meta">' + wtCnt + "/" + items.length + "</span>" +
                 extBtn +
               "</span>" +
@@ -4521,15 +4442,13 @@ BOARD_HTML = r"""<!DOCTYPE html>
                   "<span>" + (activeBusy ? tr("初始化中...", "Applying...") : (ari.error ? tr("策略初始化失败 · 点击重试", "Policy Init Failed · Retry") : tr("待初始化策略 · 点击执行", "Policy Pending · Apply"))) + "</span>" +
                 "</button>"
               : "";
-            const am = activeRepo.auto_merge || {};
-            const amEnabled = Boolean(am.enabled);
-            const amBusy = Boolean(state.autoMergeSaving[activeRepo.repo_path]);
-            const amSrc = am.source === "repo" ? tr("仓库", "Repo") : tr("全局", "Global");
+            const globalAm = Boolean(snap.config && snap.config.auto_merge);
+            const gBusy = Boolean(state.autoMergeSaving.__global__);
             const mrTag = activeRepo.forge === "gitlab" ? "MR" : "PR";
             const amHdrBtn = (activeRepo.forge === "github" || activeRepo.forge === "gitlab")
-              ? '<button class="am-header-pill ' + (amEnabled ? "is-on" : "") + '" type="button" data-am-quick-repo="' + escapeHtml(activeRepo.repo_path) + '" data-am-next="' + (amEnabled ? "0" : "1") + '" ' + (amBusy ? "disabled" : "") + ' title="' + escapeHtml(tr("点击查看影响说明并切换当前仓库 " + mrTag + " 自动准入开关", "Review impact and toggle " + mrTag + " Auto-Approve for this repo")) + '">' +
+              ? '<button class="am-header-pill ' + (globalAm ? "is-on" : "") + '" type="button" data-am-quick-global="1" data-am-tag="' + mrTag + '" data-am-next="' + (globalAm ? "0" : "1") + '" ' + (gBusy ? "disabled" : "") + ' title="' + escapeHtml(tr("点击查看影响说明并切换全局 " + mrTag + " 自动准入开关", "Review impact and toggle global " + mrTag + " Auto-Approve")) + '">' +
                   '<span class="am-dot"></span>' +
-                  "<span>" + (amEnabled ? tr(mrTag + " 自动准入: 开 (" + amSrc + ")", mrTag + " Auto-Approve: ON (" + amSrc + ")") : tr(mrTag + " 自动准入: 关", mrTag + " Auto-Approve: OFF")) + "</span>" +
+                  "<span>" + (globalAm ? tr(mrTag + " 自动准入: 开", mrTag + " Auto-Approve: ON") : tr(mrTag + " 自动准入: 关", mrTag + " Auto-Approve: OFF")) + "</span>" +
                 "</button>"
               : "";
             linkWrap.innerHTML = chipHtml + amHdrBtn + policyHdrBtn;
@@ -4548,7 +4467,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             const globalAm = Boolean(snap.config && snap.config.auto_merge);
             const gBusy = Boolean(state.autoMergeSaving.__global__);
             linkWrap.innerHTML =
-              '<button class="am-header-pill ' + (globalAm ? "is-on" : "") + '" type="button" data-am-quick-global="1" data-am-next="' + (globalAm ? "0" : "1") + '" ' + (gBusy ? "disabled" : "") + ' title="' + escapeHtml(tr("点击查看影响说明并切换全局默认 PR 自动准入开关", "Review impact and toggle global default PR Auto-Approve")) + '">' +
+              '<button class="am-header-pill ' + (globalAm ? "is-on" : "") + '" type="button" data-am-quick-global="1" data-am-tag="PR" data-am-next="' + (globalAm ? "0" : "1") + '" ' + (gBusy ? "disabled" : "") + ' title="' + escapeHtml(tr("点击查看影响说明并切换全局 PR 自动准入开关", "Review impact and toggle global PR Auto-Approve")) + '">' +
                 '<span class="am-dot"></span>' +
                 "<span>" + (globalAm ? tr("PR 自动准入: 开", "PR Auto-Approve: ON") : tr("PR 自动准入: 关", "PR Auto-Approve: OFF")) + "</span>" +
               "</button>";
@@ -5917,43 +5836,30 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
       }
 
-      async function setAutoMergeSetting(scope, repoPath, value) {
-        const busyKey = scope === "global" ? "__global__" : (repoPath || "");
-        if (!busyKey || state.autoMergeSaving[busyKey]) return false;
+      async function setAutoMergeSetting(value) {
+        const busyKey = "__global__";
+        if (state.autoMergeSaving[busyKey]) return false;
         state.autoMergeSaving[busyKey] = true;
         renderAll(true);
         if (state.setupOpen) renderSetupModal();
         try {
-          const payload = scope === "global"
-            ? { scope: "global", enabled: Boolean(value) }
-            : { scope: "repo", repo_path: repoPath, value: value };
           const res = await fetch("/api/config/auto-merge", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               "X-IDD-Request": "1"
             },
-            body: JSON.stringify(payload)
+            body: JSON.stringify({ scope: "global", enabled: Boolean(value) })
           });
           const data = await res.json();
           if (!res.ok || !data.ok) {
             throw new Error(data.error || ("HTTP " + res.status));
           }
-          if (scope === "global") {
-            showToast(
-              data.auto_merge
-                ? tr("已开启全局默认 PR 自动准入", "Enabled global default PR Auto-Approve")
-                : tr("已关闭全局默认 PR 自动准入", "Disabled global default PR Auto-Approve")
-            );
-          } else if (value === null) {
-            showToast(tr("已恢复跟随全局 PR 自动准入设置", "Repository PR Auto-Approve reset to inherit global"));
-          } else {
-            showToast(
-              value
-                ? tr("已为该仓库开启 PR/MR 自动准入", "Enabled PR/MR Auto-Approve for repository")
-                : tr("已为该仓库关闭 PR/MR 自动准入", "Disabled PR/MR Auto-Approve for repository")
-            );
-          }
+          showToast(
+            data.auto_merge
+              ? tr("已开启 PR/MR 自动准入", "Enabled PR/MR Auto-Approve")
+              : tr("已关闭 PR/MR 自动准入", "Disabled PR/MR Auto-Approve")
+          );
           await fetchSnapshot(false);
           renderAll(true);
           if (state.setupOpen) renderSetupModal();
@@ -5968,41 +5874,15 @@ BOARD_HTML = r"""<!DOCTYPE html>
         }
       }
 
-      function openAutoMergeConfirm(scope, repoPath, nextValue) {
+      function openAutoMergeConfirm(nextValue, mrTag) {
         const snap = state.snapshot || {};
         const globalDefault = Boolean(snap.config && snap.config.auto_merge);
-        const repos = snap.repos || [];
-        if (scope === "global") {
-          const nextBool = Boolean(nextValue);
-          if (nextBool === globalDefault) return;
-          state.amConfirm = {
-            scope: "global",
-            repoPath: "",
-            repoName: tr("全局默认（未单独覆盖的仓库）", "Global Default (all inheriting repos)"),
-            mrTag: "PR",
-            nextValue: nextBool,
-            nextEffective: nextBool,
-            globalDefault: globalDefault,
-            currentOverride: null
-          };
-          renderAutoMergeConfirmModal();
-          return;
-        }
-        const targetRepo = repos.find((r) => r.repo_path === repoPath);
-        if (!targetRepo) return;
-        const am = targetRepo.auto_merge || {};
-        const currentOverride = typeof am.repo_override === "boolean" ? am.repo_override : null;
-        if (nextValue === currentOverride) return;
-        const nextEffective = nextValue === null ? globalDefault : Boolean(nextValue);
+        const nextBool = Boolean(nextValue);
+        if (nextBool === globalDefault) return;
         state.amConfirm = {
-          scope: "repo",
-          repoPath: targetRepo.repo_path,
-          repoName: targetRepo.repo_name || targetRepo.repo_path,
-          mrTag: targetRepo.forge === "gitlab" ? "MR" : "PR",
-          nextValue: nextValue,
-          nextEffective: nextEffective,
-          globalDefault: globalDefault,
-          currentOverride: currentOverride
+          mrTag: mrTag || "PR",
+          nextValue: nextBool,
+          nextEffective: nextBool
         };
         if (typeof document !== "undefined" && document.activeElement) {
           state.lastFocusBeforeModal = document.activeElement;
@@ -6035,7 +5915,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         overlay.classList.add("open");
         overlay.setAttribute("aria-hidden", "false");
 
-        const isGlobal = pending.scope === "global";
         const isOn = Boolean(pending.nextEffective);
         const tag = pending.mrTag || "PR";
         const titleText = isOn
@@ -6045,11 +5924,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           ? tr("开启后将跳过人工口头确认，由 CI 决定是否直接合入主干分支。", "Skips verbal approval and lets CI gate direct Squash merges into main.")
           : tr("关闭后将恢复为「提交 PR/MR 后等待你人工确认才合入」。", "Restores manual confirmation before any PR/MR is merged into main.");
 
-        const scopeLabel = isGlobal
-          ? tr("全局默认设置（作用于所有未单独覆盖的仓库）", "Global default (applies to all repos without overrides)")
-          : (pending.nextValue === null
-              ? tr("仓库「" + pending.repoName + "」· 恢复跟随全局（当前全局为" + (pending.globalDefault ? "开" : "关") + "）", "Repo \"" + pending.repoName + "\" · Inherit global (currently " + (pending.globalDefault ? "ON" : "OFF") + ")")
-              : tr("仓库「" + pending.repoName + "」（仅对当前仓库生效）", "Repo \"" + pending.repoName + "\" (repo-only override)"));
+        const scopeLabel = tr("全局生效（所有 IDD 监控仓库）", "Global (applies to all IDD-monitored repos)");
 
         const bulletsHtml = isOn
           ? '<ul class="am-confirm-list">' +
@@ -6059,9 +5934,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             "</ul>"
           : '<ul class="am-confirm-list">' +
               "<li><strong>" + tr("恢复人工把关：", "Restore manual approval:") + "</strong>" + tr("Agent 提交 `idd pr` / `idd mr` 并完成 CI 检查后，将停在「待验收」状态，等待你明确同意或运行 `idd land` 后才会合入 `main`。", "After `idd pr` / `idd mr` and CI checks, the workflow pauses at Pending Review until you explicitly approve or run `idd land`.") + "</li>" +
-              "<li><strong>" + tr("单仓库覆盖说明：", "Override behavior:") + "</strong>" + (isGlobal
-                ? tr("关闭全局开关不会影响你曾单独设为「开」的仓库。", "Disabling the global default does not alter repositories explicitly set to ON.")
-                : tr("仅覆盖当前仓库，可随时在设置弹窗切回「跟随全局」或「开」。", "Overrides only this repository; you can switch back to Inherit or ON anytime in Setup.")) + "</li>" +
+              "<li><strong>" + tr("立即全局生效：", "Applies globally:") + "</strong>" + tr("关闭后所有仓库在下次执行 `idd pr` / `idd mr` 时都会恢复为提交后等待人工验收。", "Once disabled, all repositories will pause for manual review after `idd pr` / `idd mr`.") + "</li>" +
             "</ul>";
 
         const noteHtml = isOn
@@ -6413,36 +6286,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
           const globalAm = Boolean(state.snapshot && state.snapshot.config && state.snapshot.config.auto_merge);
           const gAmBusy = Boolean(state.autoMergeSaving.__global__);
-          const autoMergeRepoRows = remoteRepos.length === 0
-            ? ""
-            : '<div class="policy-repo-list">' +
-                remoteRepos.map((r) => {
-                  const am = r.auto_merge || {};
-                  const ovr = am.repo_override;
-                  const mode = ovr === true ? "on" : (ovr === false ? "off" : "inherit");
-                  const eff = Boolean(am.enabled);
-                  const rBusy = Boolean(state.autoMergeSaving[r.repo_path]);
-                  const effBadge = eff
-                    ? '<span class="badge tone-success">' + tr("生效: 开", "Active: ON") + (am.source === "repo" ? tr(" · 仓库", " · Repo") : tr(" · 全局", " · Global")) + "</span>"
-                    : '<span class="badge">' + tr("生效: 关", "Active: OFF") + "</span>";
-                  return (
-                    '<div class="policy-repo-row">' +
-                      '<div style="min-width:0;flex:1;">' +
-                        '<div style="display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;">' +
-                          '<span class="host-ic sm ' + (r.forge === "gitlab" ? "is-gitlab" : "is-github") + '">' + forgeIcon(r.forge, 12) + "</span>" +
-                          "<span>" + escapeHtml(r.repo_name) + "</span>" +
-                          effBadge +
-                        "</div>" +
-                      "</div>" +
-                      '<div class="am-seg-group" role="group" aria-label="' + escapeHtml(r.repo_name) + '">' +
-                        '<button class="am-seg-btn ' + (mode === "inherit" ? "active" : "") + '" type="button" data-am-repo-path="' + escapeHtml(r.repo_path) + '" data-am-repo-val="inherit" ' + (rBusy ? "disabled" : "") + ">" + tr("跟随全局", "Inherit") + "</button>" +
-                        '<button class="am-seg-btn ' + (mode === "on" ? "active is-on" : "") + '" type="button" data-am-repo-path="' + escapeHtml(r.repo_path) + '" data-am-repo-val="on" ' + (rBusy ? "disabled" : "") + ">" + tr("开", "ON") + "</button>" +
-                        '<button class="am-seg-btn ' + (mode === "off" ? "active is-off" : "") + '" type="button" data-am-repo-path="' + escapeHtml(r.repo_path) + '" data-am-repo-val="off" ' + (rBusy ? "disabled" : "") + ">" + tr("关", "OFF") + "</button>" +
-                      "</div>" +
-                    "</div>"
-                  );
-                }).join("") +
-              "</div>";
 
           const autoMergeSectionHtml =
             '<div class="policy-section">' +
@@ -6451,16 +6294,15 @@ BOARD_HTML = r"""<!DOCTYPE html>
                 '<label class="am-toggle-switch">' +
                   '<input type="checkbox" data-am-global-toggle="1" ' + (globalAm ? "checked" : "") + " " + (gAmBusy ? "disabled" : "") + " />" +
                   '<span class="am-toggle-track"></span>' +
-                  '<span class="am-toggle-label">' + (globalAm ? tr("全局默认: 开", "Global Default: ON") : tr("全局默认: 关", "Global Default: OFF")) + "</span>" +
+                  '<span class="am-toggle-label">' + (globalAm ? tr("开", "ON") : tr("关", "OFF")) + "</span>" +
                 "</label>" +
               "</div>" +
               '<div style="font-size:11.5px;color:var(--text-dim);line-height:1.45;">' +
                 tr(
-                  "默认关闭。开启后，Agent 运行 `idd pr` / `idd mr` 将跳过口头确认直接等待 CI 结算，通过（或无远端 CI 且本地测试通过）后自动清理 `TASK/` 并 Squash 直线合入；遇 CI 2 轮修复失败、Rebase 冲突或 evidence/ 含附件时自动暂停。",
-                  "Disabled by default. When enabled, `idd pr` / `idd mr` skips verbal approval, waits for CI settlement, and squash-lands linearly (including repos without remote CI after local tests pass). Pauses safely on CI failure, rebase conflicts, or evidence attachments."
+                  "默认关闭（全局统一开关）。开启后，Agent 运行 `idd pr` / `idd mr` 将跳过口头确认直接等待 CI 结算，通过（或无远端 CI 且本地测试通过）后自动清理 `TASK/` 并 Squash 直线合入；遇 CI 2 轮修复失败、Rebase 冲突或 evidence/ 含附件时自动暂停。",
+                  "Disabled by default (single global switch). When enabled, `idd pr` / `idd mr` skips verbal approval, waits for CI settlement, and squash-lands linearly (including repos without remote CI after local tests pass). Pauses safely on CI failure, rebase conflicts, or evidence attachments."
                 ) +
               "</div>" +
-              autoMergeRepoRows +
             "</div>";
 
           bodyHtml = hostCards + autoCheckHtml + policyRowsHtml + autoMergeSectionHtml + customForm;
@@ -6976,7 +6818,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         if (e.target && e.target.matches("[data-am-global-toggle]")) {
           const nextChecked = Boolean(e.target.checked);
           e.target.checked = !nextChecked;
-          openAutoMergeConfirm("global", "", nextChecked);
+          openAutoMergeConfirm(nextChecked, "PR");
         }
       });
 
@@ -7012,14 +6854,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const applyPolicyBtn = e.target.closest("[data-apply-repo-init]");
         if (applyPolicyBtn) {
           await applyRepoInit(applyPolicyBtn.getAttribute("data-apply-repo-init") || "");
-          return;
-        }
-        const amSegBtn = e.target.closest("[data-am-repo-path][data-am-repo-val]");
-        if (amSegBtn) {
-          const rp = amSegBtn.getAttribute("data-am-repo-path") || "";
-          const rawVal = amSegBtn.getAttribute("data-am-repo-val") || "inherit";
-          const nextVal = rawVal === "on" ? true : (rawVal === "off" ? false : null);
-          openAutoMergeConfirm("repo", rp, nextVal);
           return;
         }
         const tabBtn = e.target.closest("[data-setup-tab]");
@@ -7138,7 +6972,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
           submitBtn.disabled = true;
           submitBtn.classList.add("spin");
           submitBtn.innerHTML = icon("refresh", 13) + "<span>" + tr("保存中...", "Saving...") + "</span>";
-          await setAutoMergeSetting(pending.scope, pending.repoPath, pending.nextValue);
+          await setAutoMergeSetting(pending.nextValue);
           closeAutoMergeConfirm();
         }
       });
@@ -7152,14 +6986,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const qGlobal = e.target.closest("[data-am-quick-global]");
         if (qGlobal) {
           const nextOn = qGlobal.getAttribute("data-am-next") === "1";
-          openAutoMergeConfirm("global", "", nextOn);
-          return;
-        }
-        const qRepo = e.target.closest("[data-am-quick-repo]");
-        if (qRepo) {
-          const rp = qRepo.getAttribute("data-am-quick-repo") || "";
-          const nextOn = qRepo.getAttribute("data-am-next") === "1";
-          openAutoMergeConfirm("repo", rp, nextOn);
+          const tag = qGlobal.getAttribute("data-am-tag") || "PR";
+          openAutoMergeConfirm(nextOn, tag);
         }
       });
 
@@ -7830,54 +7658,26 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "请求格式无效"})
                 return
             scope = str(payload.get("scope") or "").strip().lower()
-            if not scope and payload.get("global") is True:
-                scope = "global"
-            if scope == "global":
-                raw_enabled = payload.get("enabled")
-                if not isinstance(raw_enabled, bool):
-                    self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "enabled 必须为布尔值"})
-                    return
-                cfg = monitor.set_global_auto_merge(raw_enabled)
-                self._send_json(
-                    HTTPStatus.OK,
-                    {
-                        "ok": True,
-                        "scope": "global",
-                        "auto_merge": bool(cfg["auto_merge"]),
-                        "config_path": str(monitor.get_config_path()),
-                    },
-                )
-                return
             if scope == "repo":
-                raw_repo_path = str(payload.get("repo_path") or "").strip()
-                if not raw_repo_path:
-                    self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "缺少 repo_path 参数"})
-                    return
-                try:
-                    req_path = Path(raw_repo_path).expanduser().resolve()
-                except OSError:
-                    self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "无效的仓库路径"})
-                    return
-                target_repos = [p.expanduser().resolve() for p in self._target_repos()]
-                if req_path not in target_repos:
-                    self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "仓库不在当前监控白名单内"})
-                    return
-                val = payload.get("value")
-                if val is not None and not isinstance(val, bool):
-                    self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "value 必须为 true、false 或 null"})
-                    return
-                resolved = monitor.set_repo_auto_merge_override(req_path, val)
-                self._send_json(
-                    HTTPStatus.OK,
-                    {
-                        "ok": True,
-                        "scope": "repo",
-                        "repo_path": str(req_path),
-                        "auto_merge": resolved,
-                    },
-                )
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "auto_merge 仅支持全局开关，不支持仓库级设置"})
                 return
-            self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "scope 必须为 global 或 repo"})
+            if scope not in ("", "global"):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "scope 必须为 global"})
+                return
+            raw_enabled = payload.get("enabled")
+            if not isinstance(raw_enabled, bool):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "enabled 必须为布尔值"})
+                return
+            cfg = monitor.set_global_auto_merge(raw_enabled)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "scope": "global",
+                    "auto_merge": bool(cfg["auto_merge"]),
+                    "config_path": str(monitor.get_config_path()),
+                },
+            )
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})

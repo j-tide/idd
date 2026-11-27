@@ -86,7 +86,7 @@ config/local.*.json
    - 确认工作树无未提交改动（`git status --porcelain` 为空）且已完成 Issue 级最终 Review。
    - 运行 `idd pr`（GitLab 也可直接敲别名 `idd mr`，支持 `--draft`、`--title`、`--auto-merge`、`--no-auto-merge`、`--dry-run`）：自动扫描本分支相对于 `origin/<main>` 的提交记录与 `TASK/` 文件，生成包含 `Closes #<id>`、`## 变更内容` 列表与 `## 验证记录` 表格的 PR / MR 描述，推送分支并创建或更新 PR / MR。
 2. **PR / MR 自动准入与自动合入开关（`auto_merge`）**：
-   - 配置层级：**仓库级覆盖**（`~/.config/idd/repos.json` 可选 `auto_merge` 字段）> **全局默认**（`~/.config/idd/config.json`，默认关闭 `false`）；CLI 支持 `idd config auto-merge [on|off|inherit] [-g|--global]`，看板 `idd board` 顶栏与设置弹窗亦支持实时切换。
+   - 全局配置：`~/.config/idd/config.json`（默认关闭 `false`）；CLI 支持 `idd config auto-merge [on|off|status]`，看板 `idd board` 顶栏与设置弹窗亦支持实时切换。
    - **禁止擅自覆写或缓存旧开关值**：除非用户本轮显式要求单次覆写，Agent 发起 PR / MR 时应直接运行 `idd pr` / `idd mr`，**不得凭对话早期的 `idd config` 快照自行附加 `--no-auto-merge` / `--auto-merge`**，确保用户中途通过 `idd board` 或 CLI 切换的开关在提 PR 当刻实时生效。
    - 开关开启（或单次传 `--auto-merge`）时：`idd pr` 创建/更新 PR 或 MR 后自动进入阻塞等待 CI 结算（对刚推送分支保留短暂注册宽限期，防远端 CI 尚未注册就被误判为无 CI）。
    - 若远端 CI 通过（`PASS`）或仓库未配置远端 CI（`NONE`）且本地测试已通过，`idd pr` 自动串行执行 `idd land --wait-ci`（Rebase、汇总正文、清理 `TASK/<issue>/`、推送清理提交并等待二次 CI 结算、Squash 直线合入、勾选 Issue 验收框与快进本地 `main`）。
