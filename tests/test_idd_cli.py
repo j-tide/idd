@@ -515,8 +515,11 @@ class TestIddCli(unittest.TestCase):
             dry_pr = h.run_idd("pr", "42", "--dry-run").stdout
             self.assertNotIn("Goal:", dry_pr)
             self.assertIn("Closes #42", dry_pr)
-            self.assertIn("### TASK-01 增加 CSV 后端导出接口", dry_pr)
-            self.assertIn("- **Test:** `pytest tests/test_export.py` — 5 passed", dry_pr)
+            self.assertIn("## 变更内容", dry_pr)
+            self.assertIn("- **TASK-01** 增加 CSV 后端导出接口", dry_pr)
+            self.assertIn("## 验证记录", dry_pr)
+            self.assertIn("| TASK-02 | `pytest tests/test_export.py` | 5 passed |", dry_pr)
+            self.assertNotIn("### TASK-01", dry_pr)
 
             # Real PR creation
             pr_out = h.run_idd("pr", "42").stdout
@@ -606,8 +609,8 @@ class TestIddCli(unittest.TestCase):
             final_state = h.load_state()
             self.assertEqual(final_state["prs"][pr_num]["state"], "MERGED")
             self.assertEqual(final_state["issues"]["42"]["state"], "CLOSED")
-            self.assertIn("### TASK-01 增加 CSV 后端导出接口", final_state["prs"][pr_num]["body"])
-            self.assertIn("- **Test:** `pytest tests/test_export.py` — 5 passed", final_state["prs"][pr_num]["body"])
+            self.assertIn("- **TASK-01** 增加 CSV 后端导出接口", final_state["prs"][pr_num]["body"])
+            self.assertIn("| TASK-02 | `pytest tests/test_export.py` | 5 passed |", final_state["prs"][pr_num]["body"])
             squash_msg = subprocess.check_output(
                 ["git", "-C", str(h.repo), "log", "-1", "--format=%B", "main"],
                 text=True,
@@ -1818,7 +1821,7 @@ class TestIddCli(unittest.TestCase):
                 "tests/integrations/test_wecom_relay.py tests/review/test_notifications.py "
                 "tests/architecture/test_dependencies.py — 379 passed; compileall/alembic/diff-check passed"
             ),
-            "**Test:**\n\n- `pytest (7 个测试文件)` — 379 passed\n- `compileall/alembic/diff-check` — passed",
+            "**Test:**\n\n- `pytest`（7 个测试文件） — 379 passed\n- `compileall/alembic/diff-check` — passed",
         )
         self.assertEqual(
             idd_cli._format_test_summary_line(
@@ -1899,12 +1902,16 @@ class TestIddCli(unittest.TestCase):
             self.assertNotIn("TASK-01", single_title)
             expected_single_pr = (
                 "Closes #6\n\n"
-                "### TASK-01 扩展独立复核上下文\n\n"
-                "第一段说明包含上下文细节。\n\n"
-                "第二段列出关键点：\n"
-                "- 含文件头与扩展窗口\n"
-                "- 零 I/O 关联符号变更\n\n"
-                "- **Test:** `tests/review/` — 95 passed\n\n"
+                "## 变更内容\n\n"
+                "- **TASK-01** 扩展独立复核上下文\n\n"
+                "  第一段说明包含上下文细节。\n\n"
+                "  第二段列出关键点：\n"
+                "  - 含文件头与扩展窗口\n"
+                "  - 零 I/O 关联符号变更\n\n"
+                "## 验证记录\n\n"
+                "| 任务 | 验证项 | 结果 |\n"
+                "| --- | --- | --- |\n"
+                "| TASK-01 | `tests/review/` | 95 passed |\n\n"
                 "<details>\n"
                 "<summary>完整验证命令</summary>\n\n"
                 "- **TASK-01:** `uv run --offline --locked -q tests/review/`\n\n"
@@ -1947,7 +1954,12 @@ class TestIddCli(unittest.TestCase):
                 repo, "6-review", 6, "main", issue_title="fix(review): 收敛噪音"
             )
             self.assertIn(
-                "### TASK-02 同步文档\n\n**Test:**\n\n- `pytest tests/a.py` — 10 passed\n- `pytest tests/b.py` — 3 passed\n",
+                "- **TASK-02** 同步文档\n\n## 验证记录",
+                multi_pr_body,
+            )
+            self.assertIn(
+                "| TASK-02 | `pytest tests/a.py` | 10 passed |\n"
+                "|  | `pytest tests/b.py` | 3 passed |\n",
                 multi_pr_body,
             )
             self.assertIn(
@@ -1974,6 +1986,148 @@ class TestIddCli(unittest.TestCase):
             self.assertEqual(
                 short_commit_body,
                 "Closes #6\n\nTASK-02: 精简验证\nTest: pytest tests/b.py — 3 passed\n",
+            )
+
+    def test_pr_summary_table_regression_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+            (repo / "README.md").write_text("init\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-m", "chore: init"], check=True, capture_output=True)
+
+            subprocess.run(["git", "-C", str(repo), "checkout", "-b", "feat/19-ai-status"], check=True, capture_output=True)
+            task_dir = repo / "TASK" / "19-ai-status"
+            task_dir.mkdir(parents=True)
+
+            # 1. Compound command with 3 files + semicolons inside result parentheses
+            (task_dir / "TASK-01-a.md").write_text(
+                "# TASK-01：顶栏 AI 状态休眠态与动效\n\n- Issue: #19\n- Status: done\n- Depends on: none\n- Test: pnpm\n",
+                encoding="utf-8",
+            )
+            (repo / "a.ts").write_text("export const a = 1;\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(repo), "commit", "-m",
+                    "feat(console): 顶栏 AI 状态休眠态与动效\n\n"
+                    "Task: 19-ai-status/TASK-01\n"
+                    "Refs: #19\n"
+                    "Test: pnpm test a.test.ts b.test.ts c.test.ts && pnpm test:architecture — passed (3 files / 16 tests; architecture 4 passed)",
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+            # 2. Long deep single file path should be shortened to basename + kept in <details>
+            (task_dir / "TASK-02-b.md").write_text(
+                "# TASK-02：管理视角全局总闸面板\n\n- Issue: #19\n- Status: done\n- Depends on: TASK-01\n- Test: pnpm\n",
+                encoding="utf-8",
+            )
+            (repo / "b.ts").write_text("export const b = 2;\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(repo), "commit", "-m",
+                    "feat(console): 管理视角全局总闸面板\n\n"
+                    "Task: 19-ai-status/TASK-02\n"
+                    "Refs: #19\n"
+                    "Test: pnpm test apps/console/src/modules/projects/components/PlatformGlobalControls.test.ts && pnpm test:architecture — passed (1 file / 3 tests; architecture 4 passed)",
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+            # 3. Backtick-wrapped command followed by parenthetical note + pipe char in another check
+            (task_dir / "TASK-03-c.md").write_text(
+                "# TASK-03：全站文案同步与全量验收\n\n- Issue: #19\n- Status: done\n- Depends on: TASK-02\n- Test: pnpm\n",
+                encoding="utf-8",
+            )
+            (repo / "c.ts").write_text("export const c = 3;\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(repo), "commit", "-m",
+                    "feat(console): 全站文案同步与全量验收\n\n"
+                    "Task: 19-ai-status/TASK-03\n"
+                    "Refs: #19\n"
+                    "Test: `pnpm typecheck && pnpm test:runtime && pnpm test:architecture` (CI 3 项检查) — passed (typecheck 0 errors; runtime 71 passed; architecture 4 passed)\n"
+                    "Test: grep -E \"foo|bar\" README.md — passed (ok | verified)",
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+            # 4. Unrecorded check
+            (task_dir / "TASK-04-d.md").write_text(
+                "# TASK-04：补充说明文档\n\n- Issue: #19\n- Status: done\n- Depends on: TASK-03\n- Test: 未记录\n",
+                encoding="utf-8",
+            )
+            (repo / "d.ts").write_text("export const d = 4;\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(repo), "commit", "-m",
+                    "docs: 补充说明文档\n\nTask: 19-ai-status/TASK-04\nRefs: #19",
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+            _, pr_body, commit_body = idd_cli.build_issue_summaries(
+                repo, "19-ai-status", 19, "main", issue_title="feat(console): 顶栏与总闸优化"
+            )
+            self.assertNotIn("### TASK-", pr_body)
+            self.assertIn(
+                "## 变更内容\n\n"
+                "- **TASK-01** 顶栏 AI 状态休眠态与动效\n"
+                "- **TASK-02** 管理视角全局总闸面板\n"
+                "- **TASK-03** 全站文案同步与全量验收\n"
+                "- **TASK-04** 补充说明文档\n",
+                pr_body,
+            )
+            self.assertIn(
+                "| TASK-01 | `pnpm test`（3 个测试文件）、`pnpm test:architecture` | passed (3 files / 16 tests; architecture 4 passed) |",
+                pr_body,
+            )
+            self.assertIn(
+                "| TASK-02 | `pnpm test`（`PlatformGlobalControls.test.ts`）、`pnpm test:architecture` | passed (1 file / 3 tests; architecture 4 passed) |",
+                pr_body,
+            )
+            self.assertIn(
+                "| TASK-03 | `pnpm typecheck`、`pnpm test:runtime`、`pnpm test:architecture`（CI 3 项检查） | passed (typecheck 0 errors; runtime 71 passed; architecture 4 passed) |",
+                pr_body,
+            )
+            self.assertIn(
+                r'|  | `grep -E "foo\|bar" README.md` | passed (ok \| verified) |',
+                pr_body,
+            )
+            self.assertIn("| TASK-04 | — | 未记录 |", pr_body)
+            self.assertNotIn("``", pr_body)
+            self.assertNotIn("(3 个测试目标)", pr_body)
+            self.assertIn(
+                "- **TASK-01:** `pnpm test a.test.ts b.test.ts c.test.ts && pnpm test:architecture`",
+                pr_body,
+            )
+            self.assertIn(
+                "- **TASK-02:** `pnpm test apps/console/src/modules/projects/components/PlatformGlobalControls.test.ts && pnpm test:architecture`",
+                pr_body,
+            )
+            self.assertNotIn("- **TASK-03:**", pr_body)
+
+            # Squash commit body remains zero-Markdown plain text
+            self.assertNotIn("## ", commit_body)
+            self.assertNotIn("| 任务 |", commit_body)
+            self.assertNotIn("**TASK-", commit_body)
+            self.assertNotIn("`", commit_body)
+            self.assertNotIn("<details>", commit_body)
+            self.assertIn(
+                "- pnpm typecheck && pnpm test:runtime && pnpm test:architecture (CI 3 项检查) — passed (typecheck 0 errors; runtime 71 passed; architecture 4 passed)",
+                commit_body,
             )
 
     def test_land_blocks_unfinished_tasks_and_allows_force_or_terminal_states(self) -> None:

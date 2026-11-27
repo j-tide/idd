@@ -592,9 +592,12 @@ class TestGitLabForge(unittest.TestCase):
                 self.assertIn("已创建 MR !10", mr_res.stdout)
                 self.assertIn("Closes #1", state.mrs[10]["description"])
                 self.assertIn(
-                    "### TASK-01 实现 CSV 导出\n\n- **Test:** `pytest test_csv.py` — 2 passed",
+                    "## 变更内容\n\n- **TASK-01** 实现 CSV 导出\n\n"
+                    "## 验证记录\n\n| 任务 | 验证项 | 结果 |\n| --- | --- | --- |\n"
+                    "| TASK-01 | `pytest test_csv.py` | 2 passed |",
                     state.mrs[10]["description"],
                 )
+                self.assertNotIn("### TASK-01", state.mrs[10]["description"])
                 self.assertNotIn("Goal:", state.mrs[10]["description"])
 
                 # 6. Check failed CI log & status board
@@ -648,8 +651,8 @@ class TestGitLabForge(unittest.TestCase):
                 self.assertTrue((repo / "csv_export.py").is_file())
                 self.assertTrue((repo / "OTHER.md").is_file())
                 self.assertFalse((repo / "TASK/1-export-csv").exists())
-                self.assertIn("### TASK-01 实现 CSV 导出", state.mrs[10]["description"])
-                self.assertIn("- **Test:** `pytest test_csv.py` — 2 passed", state.mrs[10]["description"])
+                self.assertIn("- **TASK-01** 实现 CSV 导出", state.mrs[10]["description"])
+                self.assertIn("| TASK-01 | `pytest test_csv.py` | 2 passed |", state.mrs[10]["description"])
                 gl_squash_msg = subprocess.check_output(
                     ["git", "-C", str(repo), "log", "-1", "--format=%B", "main"],
                     text=True,
