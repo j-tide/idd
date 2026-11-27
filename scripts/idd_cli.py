@@ -1177,6 +1177,16 @@ def _format_change_item(tid: str, change: str, extra: str) -> str:
     return f"{head}\n\n{indented}"
 
 
+def _format_plain_task_block(tid: str, change: str, extra: str, plain_test: str) -> str:
+    """Format a compact zero-Markdown plain-text TASK block without internal blank lines."""
+    lines = [f"{tid}: {change}"]
+    if extra:
+        lines.extend(line.rstrip() for line in extra.splitlines() if line.strip())
+    if plain_test:
+        lines.append(plain_test)
+    return "\n".join(lines)
+
+
 def _format_conventional_title(default_type: str, raw_title: str) -> str:
     """Ensure a PR / Squash commit title has a single normalized Conventional Commit prefix."""
     cleaned = raw_title.strip()
@@ -1245,10 +1255,7 @@ def build_issue_summaries(
                     detailed_commands.append(pair)
 
         plain_test = _format_test_summary_plain(test_text)
-        if extra:
-            plain_blocks.append(f"{tid}: {change}\n\n{extra}\n\n{plain_test}")
-        else:
-            plain_blocks.append(f"{tid}: {change}\n{plain_test}")
+        plain_blocks.append(_format_plain_task_block(tid, change, extra, plain_test))
 
     if tasks:
         for task in tasks:
