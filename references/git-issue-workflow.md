@@ -84,7 +84,7 @@ config/local.*.json
 
 1. **发起 / 更新 PR 或 MR**：
    - 确认工作树无未提交改动（`git status --porcelain` 为空）且已完成 Issue 级最终 Review。
-   - 运行 `idd pr`（GitLab 也可直接敲别名 `idd mr`，支持 `--draft`、`--title`、`--auto-merge`、`--no-auto-merge`、`--dry-run`）：自动扫描本分支相对于 `origin/<main>` 的提交记录与 `TASK/` 文件，生成包含 `Closes #<id>` 以及按顺序排列的 `TASK-XX` / `Test:` 块，推送分支并创建或更新 PR / MR。
+   - 运行 `idd pr`（GitLab 也可直接敲别名 `idd mr`，支持 `--draft`、`--title`、`--auto-merge`、`--no-auto-merge`、`--dry-run`）：自动扫描本分支相对于 `origin/<main>` 的提交记录与 `TASK/` 文件，生成包含 `Closes #<id>`、`## 变更内容` 列表与 `## 验证记录` 表格的 PR / MR 描述，推送分支并创建或更新 PR / MR。
 2. **PR / MR 自动准入与自动合入开关（`auto_merge`）**：
    - 配置层级：**仓库级覆盖**（`~/.config/idd/repos.json` 可选 `auto_merge` 字段）> **全局默认**（`~/.config/idd/config.json`，默认关闭 `false`）；CLI 支持 `idd config auto-merge [on|off|inherit] [-g|--global]`，看板 `idd board` 顶栏与设置弹窗亦支持实时切换。
    - **禁止擅自覆写或缓存旧开关值**：除非用户本轮显式要求单次覆写，Agent 发起 PR / MR 时应直接运行 `idd pr` / `idd mr`，**不得凭对话早期的 `idd config` 快照自行附加 `--no-auto-merge` / `--auto-merge`**，确保用户中途通过 `idd board` 或 CLI 切换的开关在提 PR 当刻实时生效。
