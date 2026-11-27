@@ -1201,37 +1201,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
     }
 
     /* Skeleton Loading Primitives */
-    .init-status-left svg {
-      animation: spin 1s linear infinite;
-      flex-shrink: 0;
-    }
-    .init-status-bar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      flex-wrap: wrap;
-      padding: 10px 14px;
-      border-radius: 12px;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      color: var(--text-dim);
-      font-size: 12.5px;
-      margin-bottom: 12px;
-    }
-    .init-status-left {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      color: var(--text);
-      font-weight: 550;
-      min-width: 0;
-    }
-    .init-status-left svg { color: var(--accent); }
-    .init-status-sub {
-      font-size: 11.5px;
-      color: var(--text-faint);
-    }
     .skel-block {
       display: inline-block;
       border-radius: 6px;
@@ -1270,7 +1239,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
       .top-progress-bar,
       .skel-block,
       .seg-pill.skel,
-      .init-status-left svg,
+      .glass-filter-hint.is-syncing svg,
       .btn.spin svg {
         animation: none !important;
       }
@@ -1499,6 +1468,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
       color: var(--text-faint);
       white-space: nowrap;
       transition: opacity var(--dur-micro) var(--ease-standard);
+    }
+    .glass-filter-hint.is-syncing {
+      color: var(--text-dim);
+      font-weight: 500;
+      gap: 6px;
+    }
+    .glass-filter-hint.is-syncing svg {
+      color: var(--accent);
+      flex-shrink: 0;
+      animation: spin 1s linear infinite;
     }
     .glass-filter-reset {
       appearance: none;
@@ -4652,10 +4631,20 @@ BOARD_HTML = r"""<!DOCTYPE html>
           { act: "toggle-cleanup", label: tr("可清理", "Cleanable"), cnt: retainedCnt, active: state.cleanupOnly, cls: "is-cleanup", ic: icon("sparkle", 13) }
         ];
 
+        const reposCnt = ((snap && snap.repos) || []).length;
         const activeChip = statChips.find((c) => c.active && c.act !== "filter-all");
-        const filterHintHtml = activeChip
-          ? '<div class="glass-filter-hint"><span>' + escapeHtml(tr("已筛选 · ", "Filtered · ") + activeChip.label) + '</span><button type="button" class="glass-filter-reset" data-kpi-action="filter-all">' + tr("重置筛选", "Reset") + "</button></div>"
-          : '<div class="glass-filter-hint"><span>' + tr("点击胶囊切换筛选视角", "Click chips to filter") + "</span></div>";
+        let filterHintHtml = "";
+        if (activeChip) {
+          filterHintHtml = '<div class="glass-filter-hint"><span>' + escapeHtml(tr("已筛选 · ", "Filtered · ") + activeChip.label) + '</span><button type="button" class="glass-filter-reset" data-kpi-action="filter-all">' + tr("重置筛选", "Reset") + "</button></div>";
+        } else if (Boolean(snap && snap.forge_syncing && !snap.local_only)) {
+          const syncMsg = reposCnt > 0
+            ? tr("正在从远端同步 " + reposCnt + " 个仓库的 Issue 与 PR/MR…", "Syncing Issues & PR/MRs from " + reposCnt + " repo(s)…")
+            : tr("正在从远端同步 Issue 与 PR/MR…", "Syncing remote Issues & PR/MRs…");
+          const syncTip = tr("同步完成后将自动展示，无需刷新页面", "Results will appear automatically once sync completes");
+          filterHintHtml = '<div class="glass-filter-hint is-syncing" title="' + escapeHtml(syncTip) + '">' + icon("refresh", 12) + "<span>" + escapeHtml(syncMsg) + "</span></div>";
+        } else {
+          filterHintHtml = '<div class="glass-filter-hint"><span>' + tr("点击胶囊切换筛选视角", "Click chips to filter") + "</span></div>";
+        }
 
         const kpiMarkup =
           '<div class="stat-strip">' +
@@ -4671,7 +4660,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
         const bentoEl = document.getElementById("bento-kpis");
         const pct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
-        const reposCnt = ((snap && snap.repos) || []).length;
         const issueSlots = buildSegSlots(scopedItems.length, 8, [
           { count: issueReady, cls: "done" },
           { count: Math.max(0, activeWt - issueReady), cls: "ink" }
@@ -4744,8 +4732,16 @@ BOARD_HTML = r"""<!DOCTYPE html>
           }
           const curHint = kpisEl.querySelector(".glass-filter-hint");
           const nextHint = tplK.content.querySelector(".glass-filter-hint");
-          if (curHint && nextHint && curHint.innerHTML !== nextHint.innerHTML) {
-            curHint.innerHTML = nextHint.innerHTML;
+          if (curHint && nextHint) {
+            if (curHint.className !== nextHint.className) curHint.className = nextHint.className;
+            const nextTitle = nextHint.getAttribute("title") || "";
+            if ((curHint.getAttribute("title") || "") !== nextTitle) {
+              if (nextTitle) curHint.setAttribute("title", nextTitle);
+              else curHint.removeAttribute("title");
+            }
+            if (curHint.innerHTML !== nextHint.innerHTML) {
+              curHint.innerHTML = nextHint.innerHTML;
+            }
           }
         } else {
           kpisEl.innerHTML = kpiMarkup;
@@ -4971,13 +4967,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         return '<span class="skel-block" style="width:' + w + ";height:" + (h || 12) + 'px;"></span>';
       }
 
-      function renderMainSkeleton(bannerTitle, bannerSub) {
-        const statusBar =
-          '<div class="init-status-bar">' +
-            '<span class="init-status-left">' + icon("refresh", 13) + "<span>" + escapeHtml(bannerTitle) + "</span></span>" +
-            (bannerSub ? '<span class="init-status-sub">' + escapeHtml(bannerSub) + "</span>" : "") +
-          "</div>";
-
+      function renderMainSkeleton() {
         if (state.viewMode === "kanban") {
           const cols = [0, 1, 2, 3].map(() =>
             '<section class="column">' +
@@ -4994,7 +4984,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
               "</div>" +
             "</section>"
           ).join("");
-          return statusBar + '<div class="kanban">' + cols + "</div>";
+          return '<div class="kanban">' + cols + "</div>";
         }
 
         if (state.viewMode === "list") {
@@ -5011,7 +5001,6 @@ BOARD_HTML = r"""<!DOCTYPE html>
             "</tr>"
           ).join("");
           return (
-            statusBar +
             '<div class="list-wrap"><table class="list-table"><thead><tr>' +
               "<th>" + tr("Issue / 标题", "Issue / Title") + "</th>" +
               "<th>" + tr("仓库", "Repo") + "</th>" +
@@ -5039,7 +5028,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
             "</div>" +
           "</section>"
         ).join("");
-        return statusBar + sections;
+        return sections;
       }
 
       function renderLoadingState() {
@@ -5069,9 +5058,17 @@ BOARD_HTML = r"""<!DOCTYPE html>
 
         const kpisEl = document.getElementById("kpis");
         if (kpisEl) {
+          let hintHtml = '<div class="glass-filter-hint"></div>';
+          if (!state.initError) {
+            const initTitle = state.slowInit
+              ? tr("仓库较多，仍在扫描本机 Git 与 Worktree…", "Large workspace, still scanning local Git & worktrees…")
+              : tr("正在扫描本机 Git 仓库与 Worktree…", "Scanning local Git repositories & worktrees…");
+            const initTip = tr("首屏就绪后将自动同步远端状态", "Remote status syncs automatically once local scan finishes");
+            hintHtml = '<div class="glass-filter-hint is-syncing" title="' + escapeHtml(initTip) + '">' + icon("refresh", 12) + "<span>" + escapeHtml(initTitle) + "</span></div>";
+          }
           kpisEl.innerHTML =
             '<div class="stat-strip">' + [86, 76, 74, 74, 74, 74].map((w) => skelBar(w + "px", 30)).join("") + "</div>" +
-            '<div class="glass-filter-hint">' + skelBar("120px", 12) + "</div>";
+            hintHtml;
         }
         const bentoEl = document.getElementById("bento-kpis");
         if (bentoEl) {
@@ -5101,13 +5098,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
               '<button class="btn btn-primary" type="button" data-retry-init="1">' + icon("refresh", 12) + "<span>" + tr("立即重试", "Retry Now") + "</span></button>" +
             "</div>";
         } else {
-          const sub = state.slowInit
-            ? tr("纳管仓库较多或响应较慢，仍在全力扫描中…", "Large workspace or slow response, still scanning…")
-            : tr("首屏就绪后将自动同步远端状态", "Remote status syncs automatically once local scan finishes");
-          container.innerHTML = renderMainSkeleton(
-            tr("正在初始化工作区，扫描本机 Git 仓库与 Worktree…", "Initializing workspace — scanning local Git repositories and worktrees…"),
-            sub
-          );
+          container.innerHTML = renderMainSkeleton();
         }
 
         const footerEl = document.getElementById("footer");
@@ -5572,14 +5563,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
         const items = state.cleanupOnly ? collectRetainedWorktrees(snap, false) : collectItems(false);
         const hasFilters = Boolean(state.search.trim() || state.worktreeOnly || state.alertsOnly || state.readyOnly || state.todoOnly || state.cleanupOnly);
         if (items.length === 0 && snap.forge_syncing && !hasFilters && !state.initialLoadSettled) {
-          reconcileMainContent(
-            container,
-            renderMainSkeleton(
-              tr("正在从远端同步 " + repos.length + " 个仓库的 Issue 与 PR/MR…", "Syncing open Issues & PR/MRs from " + repos.length + " repository(ies)…"),
-              tr("同步完成后将自动展示，无需刷新页面", "Results will appear automatically once sync completes")
-            ),
-            "loading-sync"
-          );
+          reconcileMainContent(container, renderMainSkeleton(), "loading-sync");
           return;
         }
         if (!snap.forge_syncing || snap.local_only || items.length > 0) {
