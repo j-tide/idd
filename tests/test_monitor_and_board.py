@@ -2866,6 +2866,215 @@ class TestMonitorAndBoard(unittest.TestCase):
                 if proc.stderr is not None:
                     proc.stderr.close()
 
+    def test_board_cleanup_ui_modal_and_streaming_removal(self) -> None:
+        html_doc = board_ui.BOARD_HTML
+        for marker in (
+            "cleanup-confirm-overlay",
+            "cleanup-confirm-modal",
+            "openCleanupConfirm",
+            "runCleanupQueue",
+            "data-cleanup-open-batch",
+            "data-cleanup-one",
+            "data-cleanup-stop",
+            "/api/cleanup",
+        ):
+            self.assertIn(marker, html_doc)
+
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to evaluate board_ui.py cleanup UI helpers")
+
+        script_match = re.search(r"<script>\s*([\s\S]*?)\s*</script>", html_doc)
+        self.assertIsNotNone(script_match)
+        assert script_match is not None
+        js_src = script_match.group(1)
+
+        def _extract_js_fn(name: str) -> str:
+            marker = f"function {name}("
+            start = js_src.index(marker)
+            brace_start = js_src.index("{", start)
+            depth = 0
+            for idx in range(brace_start, len(js_src)):
+                ch = js_src[idx]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return js_src[start : idx + 1]
+            raise AssertionError(f"Unclosed JS function: {name}")
+
+        fn_names = (
+            "isEn",
+            "tr",
+            "escapeHtml",
+            "safeUrl",
+            "icon",
+            "forgeIcon",
+            "forgeLabel",
+            "parseStage",
+            "isItemAlert",
+            "collectItems",
+            "matchesFilters",
+            "getProgressNumbers",
+            "shortWorktreePath",
+            "shortDirSlug",
+            "collectRetainedWorktrees",
+            "getStageQuickCli",
+            "buildHandoffPrompt",
+            "resolveRepoMeta",
+            "renderRepoChip",
+            "renderIdHtml",
+            "renderChangeInline",
+            "localizeAgo",
+            "renderPulseSummary",
+            "renderSegBar",
+            "resolvePrimaryLink",
+            "renderPrimaryLinkBtn",
+            "renderCard",
+            "renderReposView",
+            "openCleanupConfirm",
+            "closeCleanupConfirm",
+            "renderCleanupConfirmModal",
+        )
+        harness = "\n".join(
+            [
+                """
+                const makeEl = () => ({
+                  innerHTML: '',
+                  attrs: {},
+                  classes: new Set(),
+                  classList: {
+                    add(c) { this._p.classes.add(c); },
+                    remove(c) { this._p.classes.delete(c); }
+                  },
+                  setAttribute(k, v) { this.attrs[k] = v; },
+                  querySelector() { return null; }
+                });
+                const overlayEl = makeEl();
+                overlayEl.classList._p = overlayEl;
+                const modalEl = makeEl();
+                modalEl.classList._p = modalEl;
+                const els = {
+                  'cleanup-confirm-overlay': overlayEl,
+                  'cleanup-confirm-modal': modalEl
+                };
+                const document = {
+                  activeElement: null,
+                  getElementById: (id) => els[id] || null
+                };
+                const focusInsideModal = () => {};
+                const restoreSavedFocus = () => {};
+                const ICONS = {
+                  github: '<gh/>', gitlab: '<gl/>', terminal: '<tm/>', externalLink: '<ext/>',
+                  copy: '<cp/>', folder: '<fd/>', branch: '<br/>', trash: '<tr/>',
+                  chevronRight: '<cr/>', x: '<x/>', sparkle: '<sp/>', check: '<ck/>',
+                  refresh: '<rf/>', stop: '<st/>', alertTriangle: '<at/>'
+                };
+                const state = {
+                  lang: 'zh',
+                  viewMode: 'repos',
+                  selectedRepo: 'ALL',
+                  search: '',
+                  worktreeOnly: false,
+                  alertsOnly: false,
+                  readyOnly: false,
+                  todoOnly: false,
+                  cleanupOnly: false,
+                  cleanupDrawerOpen: true,
+                  inspectedKey: null,
+                  repoInitRunning: {},
+                  cleanupConfirm: null,
+                  cleanupRun: { active: false, stopRequested: false, scopeKey: '', activeKey: '', total: 0, done: 0, cleaned: 0, skipped: 0 },
+                  cleanupRemovedKeys: {},
+                  cleanupResults: {},
+                  snapshot: {
+                    repos: [
+                      {
+                        repo_path: '/repos/demo',
+                        repo_name: 'demo',
+                        repo_url: 'https://github.com/o/demo',
+                        forge: 'github',
+                        retained_idle_worktrees: [
+                          {
+                            worktree: '/repos/demo-worktrees/1-one',
+                            name: '1-one',
+                            branch: 'fix/1-one',
+                            issue_number: 1,
+                            last_active_ago: '1 天前',
+                            last_commit_sha: 'aaa1111'
+                          },
+                          {
+                            worktree: '/repos/demo-worktrees/2-two',
+                            name: '2-two',
+                            branch: 'feat/2-two',
+                            issue_number: 2,
+                            last_active_ago: '2 天前',
+                            last_commit_sha: 'bbb2222'
+                          }
+                        ]
+                      }
+                    ],
+                    issues: [],
+                    local_only_items: [],
+                    orphan_changes: []
+                  }
+                };
+                """,
+                *(_extract_js_fn(n) for n in fn_names),
+                """
+                const assert = require('assert');
+
+                const retained0 = collectRetainedWorktrees(state.snapshot, false);
+                assert.strictEqual(retained0.length, 2);
+
+                const html0 = renderReposView([], state.snapshot);
+                assert(html0.includes('data-cleanup-open-batch="__all__"'));
+                assert(html0.includes('一键清理'));
+                assert(html0.includes('data-cleanup-one="' + retained0[0]._key + '"'));
+
+                // Batch modal opens with both items & safety note
+                openCleanupConfirm('batch', '__all__');
+                assert(overlayEl.classes.has('open'));
+                assert(modalEl.innerHTML.includes('确认清理 2 个已合入工作树？'));
+                assert(modalEl.innerHTML.includes('fix/1-one'));
+                assert(modalEl.innerHTML.includes('feat/2-two'));
+                assert(modalEl.innerHTML.includes('data-cleanup-confirm-submit="1"'));
+                closeCleanupConfirm();
+                assert(!overlayEl.classes.has('open'));
+
+                // Single modal opens for one card
+                openCleanupConfirm('single', retained0[1]._key);
+                assert(overlayEl.classes.has('open'));
+                assert(modalEl.innerHTML.includes('确认清理 #2 工作树目录？'));
+                assert(modalEl.innerHTML.includes('/repos/demo-worktrees/2-two'));
+                closeCleanupConfirm();
+
+                // Active cleaning & skipped card rendering + streaming removal via cleanupRemovedKeys
+                state.cleanupRun = { active: true, stopRequested: false, scopeKey: '__all__', activeKey: retained0[0]._key, total: 2, done: 0, cleaned: 0, skipped: 0 };
+                state.cleanupResults[retained0[1]._key] = { status: 'skipped_dirty', message: '工作区存在 1 处未提交改动，已跳过清理', isError: false };
+                const htmlRunning = renderReposView([], state.snapshot);
+                assert(htmlRunning.includes('清理中 0/2'));
+                assert(htmlRunning.includes('data-cleanup-stop="1"'));
+                assert(htmlRunning.includes('is-cleaning'));
+                assert(htmlRunning.includes('is-cleanup-skipped'));
+                assert(htmlRunning.includes('工作区存在 1 处未提交改动，已跳过清理'));
+
+                // Removing first card drops it immediately and decrements retained count to 1
+                state.cleanupRun.active = false;
+                state.cleanupRemovedKeys[retained0[0]._key] = true;
+                const retained1 = collectRetainedWorktrees(state.snapshot, false);
+                assert.strictEqual(retained1.length, 1);
+                assert.strictEqual(retained1[0].issue_number, 2);
+
+                console.log('JS_CLEANUP_UI_MODAL_OK');
+                """,
+            ]
+        )
+        proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        self.assertIn("JS_CLEANUP_UI_MODAL_OK", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
