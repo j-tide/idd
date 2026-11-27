@@ -3236,6 +3236,111 @@ class TestMonitorAndBoard(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
         self.assertIn("JS_FIRST_LOAD_SKELETON_OK", proc.stdout)
 
+    def test_pulse_porcelain_v2_subprocess_budget_and_idle_cache_invalidation(self) -> None:
+        monitor.invalidate_monitor_caches()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            repo, _, _, env = _create_repo_harness(root / "h", "perf-repo", cfg)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+
+            start_active = json.loads(self._run(env, repo, "start", "42", "--slug", "fast-scan", "--json").stdout)
+            wt_active = Path(start_active["worktree"])
+            active_branch = start_active["branch"]
+            start_idle = json.loads(self._run(env, repo, "start", "43", "--slug", "old-landed", "--json").stdout)
+            wt_idle = Path(start_idle["worktree"])
+            idle_branch = start_idle["branch"]
+            subprocess.run(
+                ["git", "-C", str(wt_idle), "commit", "--allow-empty", "-m", "chore: 清理已汇总的任务记录"],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(["git", "-C", str(wt_idle), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
+
+            # 1) Cold clean worktree pulse uses <= 2 git subprocesses; warm HEAD cache uses <= 1
+            with mock.patch.object(monitor, "_run_git_ro", wraps=monitor._run_git_ro) as spy_git:
+                pulse1 = monitor.inspect_worktree_pulse(
+                    wt_idle,
+                    branch=idle_branch,
+                    has_origin=True,
+                    default_branch="main",
+                )
+                self.assertEqual(pulse1["remote_state"], "synced")
+                self.assertTrue(pulse1["remote_branch_exists"])
+                self.assertEqual(pulse1["dirty_count"], 0)
+                self.assertLessEqual(spy_git.call_count, 2)
+
+            with mock.patch.object(monitor, "_run_git_ro", wraps=monitor._run_git_ro) as spy_git_warm:
+                pulse2 = monitor.inspect_worktree_pulse(
+                    wt_idle,
+                    branch=idle_branch,
+                    has_origin=True,
+                    default_branch="main",
+                )
+                self.assertEqual(pulse2["last_commit_sha"], pulse1["last_commit_sha"])
+                self.assertLessEqual(spy_git_warm.call_count, 1)
+
+            # 2) Porcelain v2 captures modified, untracked, and renamed files accurately
+            (wt_active / "README.md").write_text("# perf-repo\nupdated line\n", encoding="utf-8")
+            (wt_active / "new_untracked.py").write_text("x = 1\n", encoding="utf-8")
+            tdir = wt_active / "TASK" / "42-fast-scan"
+            tdir.mkdir(parents=True, exist_ok=True)
+            (tdir / "TASK-01-scan.md").write_text(
+                "# TASK-01：优化扫描\n\n- Issue: #42\n- Status: in_progress\n- Depends on: none\n- Test: unittest\n",
+                encoding="utf-8",
+            )
+            pulse_dirty = monitor.inspect_worktree_pulse(
+                wt_active,
+                in_progress_count=1,
+                branch=active_branch,
+                has_origin=True,
+                default_branch="main",
+            )
+            self.assertEqual(pulse_dirty["modified_count"], 1)
+            self.assertGreaterEqual(pulse_dirty["untracked_count"], 2)
+            self.assertEqual(pulse_dirty["insertions"], 1)
+
+            # 3) Retained idle worktree is cached across steady-state polls and invalidated on mutation
+            with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
+                snap1 = monitor.collect_repo_snapshot(
+                    repo,
+                    local_only=True,
+                    allow_stale_async=True,
+                    register=False,
+                )
+                self.assertEqual(len(snap1["retained_idle_worktrees"]), 1)
+
+                with mock.patch.object(monitor, "inspect_worktree_pulse", wraps=monitor.inspect_worktree_pulse) as spy_p:
+                    snap2 = monitor.collect_repo_snapshot(
+                        repo,
+                        local_only=True,
+                        allow_stale_async=True,
+                        register=False,
+                    )
+                    self.assertEqual(len(snap2["retained_idle_worktrees"]), 1)
+                    # Only wt_active should invoke inspect_worktree_pulse; wt_idle hits fingerprint cache
+                    probed_paths = [Path(c.args[0]).resolve() for c in spy_p.call_args_list]
+                    self.assertIn(wt_active.resolve(), probed_paths)
+                    self.assertNotIn(wt_idle.resolve(), probed_paths)
+
+                # Mutating wt_idle (creating a top-level file updates wt_path mtime) invalidates immediately
+                (wt_idle / "wake_up.txt").write_text("changed\n", encoding="utf-8")
+                snap3 = monitor.collect_repo_snapshot(
+                    repo,
+                    local_only=True,
+                    allow_stale_async=True,
+                    register=False,
+                )
+                self.assertEqual(len(snap3["retained_idle_worktrees"]), 0)
+
+                # 4) register_repo respects min_touch_interval to avoid rewriting repos.json every poll
+                repos_file = cfg / "repos.json"
+                monitor.register_repo(repo)
+                mtime_before = repos_file.stat().st_mtime_ns
+                time.sleep(0.02)
+                monitor.register_repo(repo, min_touch_interval=60.0)
+                self.assertEqual(repos_file.stat().st_mtime_ns, mtime_before)
 
 if __name__ == "__main__":
     unittest.main()
