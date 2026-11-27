@@ -1,7 +1,7 @@
 # TASK-04：全链路契约回归测试与百卡长列表满帧 / 零 CLS / 多视口实测验收
 
 - Issue: 59-apple-motion-polish
-- Status: planned
+- Status: in_progress
 - Depends on: TASK-02, TASK-03
 - Test: `tests/test_monitor_and_board.py`、`tests/test_preview_ui.py` 与 Headless Chrome CDP 实测脚本
 

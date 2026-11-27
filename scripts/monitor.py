@@ -2477,6 +2477,13 @@ def render_watch_frame(
     return "\n".join(lines)
 
 
+def _format_tty_watch_frame(frame: str) -> str:
+    """Format a flicker-free TTY frame using synchronized output and line-wise erase."""
+    lines = frame.split("\n")
+    body = "\x1b[K\n".join(lines)
+    return f"\x1b[?2026h\x1b[H{body}\x1b[K\x1b[J\x1b[?2026l"
+
+
 def run_watch_loop(
     *,
     root: Path | None = None,
@@ -2525,7 +2532,7 @@ def run_watch_loop(
                 local_only=local_only,
             )
             if is_tty:
-                sys.stdout.write("\x1b[2J\x1b[H" + frame + "\n")
+                sys.stdout.write(_format_tty_watch_frame(frame))
                 sys.stdout.flush()
             else:
                 print(frame, flush=True)
