@@ -369,9 +369,11 @@ class TestMonitorAndBoard(unittest.TestCase):
                     self.assertIn("display: none !important;", html)
                     self.assertIn("body.sidebar-collapsed .show-collapsed { display: inline-grid !important; }", html)
                     self.assertNotIn("sync-banner-wrap", html)
+                    self.assertNotIn("init-status-bar", html)
                     self.assertNotIn("renderSyncBanner", html)
                     self.assertNotIn("本地工作树已就绪，正在后台同步", html)
                     self.assertNotIn("已快速恢复上次视图，正在拉取最新状态", html)
+                    self.assertIn(".glass-filter-hint.is-syncing", html)
                     self.assertIn(".workspace > #top-alerts-wrap:empty", html)
                     self.assertIn("#sync-btn { min-width: 88px; justify-content: center; }", html)
                     node_bin = shutil.which("node")
@@ -3203,10 +3205,11 @@ class TestMonitorAndBoard(unittest.TestCase):
                 """
                 const assert = require('assert');
 
-                // 1. Initial cold load with 0 active items & forge_syncing=true shows skeleton
+                // 1. Initial cold load with 0 active items & forge_syncing=true shows skeleton without mid-page banner
                 renderMain();
                 assert.strictEqual(container.dataset.viewKey, 'loading-sync');
                 assert(container.innerHTML.includes('skel-block'));
+                assert(!container.innerHTML.includes('init-status-bar'));
 
                 // 2. First sync settles -> initialLoadSettled becomes true and renders repos view
                 state.snapshot.forge_syncing = false;
@@ -3236,6 +3239,223 @@ class TestMonitorAndBoard(unittest.TestCase):
         proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
         self.assertIn("JS_FIRST_LOAD_SKELETON_OK", proc.stdout)
+
+    def test_board_sync_status_relocated_to_top_deck_hint(self) -> None:
+        html_doc = board_ui.BOARD_HTML
+        self.assertNotIn("init-status-bar", html_doc)
+        self.assertIn(".glass-filter-hint.is-syncing", html_doc)
+
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to evaluate board_ui.py top-deck sync hint")
+
+        script_match = re.search(r"<script>\s*([\s\S]*?)\s*</script>", html_doc)
+        self.assertIsNotNone(script_match)
+        assert script_match is not None
+        js_src = script_match.group(1)
+
+        def _extract_js_fn(name: str) -> str:
+            marker = f"function {name}("
+            start = js_src.index(marker)
+            brace_start = js_src.index("{", start)
+            depth = 0
+            for idx in range(brace_start, len(js_src)):
+                ch = js_src[idx]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return js_src[start : idx + 1]
+            raise AssertionError(f"Unclosed JS function: {name}")
+
+        fn_names = (
+            "isEn",
+            "tr",
+            "escapeHtml",
+            "icon",
+            "parseStage",
+            "isItemAlert",
+            "collectItems",
+            "matchesFilters",
+            "getProgressNumbers",
+            "collectRetainedWorktrees",
+            "cardBucket",
+            "skelBar",
+            "renderMainSkeleton",
+            "renderLoadingState",
+            "renderKpis",
+        )
+        harness = "\n".join(
+            [
+                r"""
+                const window = {};
+                function makeHintNode(html) {
+                  const m = html.match(/<div class="([^"]*)"(?: title="([^"]*)")?>([\s\S]*)<\/div>/);
+                  if (!m) return null;
+                  const attrs = {};
+                  if (m[2] !== undefined) attrs.title = m[2];
+                  return {
+                    className: m[1],
+                    innerHTML: m[3],
+                    getAttribute(k) { return Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null; },
+                    setAttribute(k, v) { attrs[k] = String(v); },
+                    removeAttribute(k) { delete attrs[k]; },
+                  };
+                }
+                function makeKpisContent(html) {
+                  const chips = [];
+                  const chipRe = /<button class="([^"]*)"[^>]*><span class="stat-ic">[\s\S]*?<\/span><span class="stat-lbl">([\s\S]*?)<\/span><span class="stat-val">([\s\S]*?)<\/span><\/button>/g;
+                  let cm;
+                  while ((cm = chipRe.exec(html)) !== null) {
+                    const lblNode = { textContent: cm[2] };
+                    const valNode = {
+                      textContent: cm[3],
+                      classList: { remove() {}, add() {} },
+                      offsetWidth: 10,
+                    };
+                    chips.push({
+                      className: cm[1],
+                      querySelector(sel) {
+                        if (sel === '.stat-lbl') return lblNode;
+                        if (sel === '.stat-val') return valNode;
+                        return null;
+                      },
+                    });
+                  }
+                  const hintStart = html.indexOf('<div class="glass-filter-hint');
+                  const hintNode = hintStart >= 0 ? makeHintNode(html.slice(hintStart)) : null;
+                  const stripNode = { querySelectorAll(sel) { return sel === '.stat-chip' ? chips : []; } };
+                  return {
+                    querySelector(sel) {
+                      if (sel === '.stat-strip') return chips.length ? stripNode : null;
+                      if (sel === '.glass-filter-hint') return hintNode;
+                      return null;
+                    },
+                    querySelectorAll(sel) {
+                      if (sel === '.stat-chip') return chips;
+                      return [];
+                    },
+                  };
+                }
+                const kpisEl = {
+                  _html: '',
+                  _parsed: null,
+                  set innerHTML(v) {
+                    this._html = v;
+                    this._parsed = makeKpisContent(v);
+                  },
+                  get innerHTML() { return this._html; },
+                  querySelector(sel) { return this._parsed ? this._parsed.querySelector(sel) : null; },
+                };
+                const bentoEl = { innerHTML: '', querySelectorAll() { return []; } };
+                const mainEl = { innerHTML: '' };
+                const elements = {
+                  'kpis': kpisEl,
+                  'bento-kpis': bentoEl,
+                  'main-content': mainEl,
+                };
+                const document = {
+                  getElementById: (id) => elements[id] || null,
+                  createElement: (tag) => {
+                    if (tag !== 'template') return {};
+                    const tpl = { _html: '', content: null };
+                    Object.defineProperty(tpl, 'innerHTML', {
+                      set(v) { tpl._html = v; tpl.content = makeKpisContent(v); },
+                      get() { return tpl._html; },
+                    });
+                    return tpl;
+                  },
+                };
+                const ICONS = {
+                  refresh: '<svg class="rf"></svg>',
+                  branch: '<svg class="br"></svg>',
+                  alertTriangle: '<svg class="at"></svg>',
+                  radar: '<svg class="rd"></svg>',
+                  gear: '<svg class="gr"></svg>',
+                  checkCircle: '<svg class="cc"></svg>',
+                  queue: '<svg class="qu"></svg>',
+                  sparkle: '<svg class="sp"></svg>',
+                };
+                const state = {
+                  lang: 'zh',
+                  viewMode: 'repos',
+                  selectedRepo: 'ALL',
+                  search: '',
+                  worktreeOnly: false,
+                  alertsOnly: false,
+                  readyOnly: false,
+                  todoOnly: false,
+                  cleanupOnly: false,
+                  slowInit: false,
+                  initError: '',
+                  cleanupRemovedKeys: {},
+                  snapshot: null,
+                };
+                """,
+                *(_extract_js_fn(n) for n in fn_names),
+                """
+                const assert = require('assert');
+
+                // 1. Cold init loading state puts scanning hint in top-deck #kpis and clean skeleton in #main-content
+                renderLoadingState();
+                const initHint = kpisEl.querySelector('.glass-filter-hint');
+                assert(initHint, 'expected .glass-filter-hint in loading state');
+                assert(initHint.className.includes('is-syncing'));
+                assert(initHint.innerHTML.includes('正在扫描本机 Git 仓库与 Worktree'));
+                assert(initHint.getAttribute('title').includes('首屏就绪后将自动同步远端状态'));
+                assert(mainEl.innerHTML.includes('skel-block'));
+                assert(!mainEl.innerHTML.includes('init-status-bar'));
+
+                // 2. Snapshot arrives while forge_syncing=true (5 repos, no filter) -> top-deck shows 5-repo syncing hint
+                const fiveRepos = [1, 2, 3, 4, 5].map((i) => ({
+                  repo_path: '/repos/r' + i,
+                  repo_name: 'r' + i,
+                  retained_idle_worktrees: [],
+                }));
+                state.snapshot = {
+                  forge_syncing: true,
+                  local_only: false,
+                  repos: fiveRepos,
+                  issues: [],
+                  local_only_items: [],
+                  orphan_changes: [],
+                };
+                // Reset kpisEl so renderKpis performs initial render
+                kpisEl.innerHTML = '';
+                renderKpis(state.snapshot);
+                const syncHint = kpisEl.querySelector('.glass-filter-hint');
+                assert(syncHint);
+                assert.strictEqual(syncHint.className, 'glass-filter-hint is-syncing');
+                assert(syncHint.innerHTML.includes('正在从远端同步 5 个仓库的 Issue 与 PR/MR…'));
+                assert.strictEqual(syncHint.getAttribute('title'), '同步完成后将自动展示，无需刷新页面');
+
+                // 3. In-place DOM patch when forge_syncing finishes -> removes is-syncing & title, restores default hint
+                state.snapshot.forge_syncing = false;
+                renderKpis(state.snapshot);
+                const doneHint = kpisEl.querySelector('.glass-filter-hint');
+                assert.strictEqual(doneHint, syncHint, 'expected in-place patch on existing hint node');
+                assert.strictEqual(doneHint.className, 'glass-filter-hint');
+                assert.strictEqual(doneHint.getAttribute('title'), null);
+                assert(doneHint.innerHTML.includes('点击胶囊切换筛选视角'));
+
+                // 4. Active filter takes precedence even when forge_syncing=true
+                state.snapshot.forge_syncing = true;
+                state.worktreeOnly = true;
+                renderKpis(state.snapshot);
+                const filteredHint = kpisEl.querySelector('.glass-filter-hint');
+                assert.strictEqual(filteredHint.className, 'glass-filter-hint');
+                assert.strictEqual(filteredHint.getAttribute('title'), null);
+                assert(filteredHint.innerHTML.includes('已筛选'));
+                assert(filteredHint.innerHTML.includes('重置筛选'));
+
+                console.log('JS_TOP_DECK_SYNC_HINT_OK');
+                """,
+            ]
+        )
+        proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        self.assertIn("JS_TOP_DECK_SYNC_HINT_OK", proc.stdout)
 
     def test_pulse_porcelain_v2_subprocess_budget_and_idle_cache_invalidation(self) -> None:
         monitor.invalidate_monitor_caches()
