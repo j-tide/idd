@@ -2589,6 +2589,55 @@ class TestMonitorAndBoard(unittest.TestCase):
         self.assertIn("\x1b[K\n", tty_out)
         self.assertTrue(tty_out.endswith("\x1b[K\x1b[J\x1b[?2026l"))
 
+    def test_board_collapsed_sidebar_and_header_pill_layout_css(self) -> None:
+        html_doc = board_ui.BOARD_HTML
+        collapsed_brand_match = re.search(
+            r"body\.sidebar-collapsed \.sb-brand\s*\{([^}]*)\}",
+            html_doc,
+        )
+        self.assertIsNotNone(collapsed_brand_match)
+        assert collapsed_brand_match is not None
+        collapsed_brand_css = collapsed_brand_match.group(1)
+        self.assertIn("flex-direction: column;", collapsed_brand_css)
+        self.assertIn("gap: 6px;", collapsed_brand_css)
+
+        self.assertIn(
+            "@media (max-width: 780px)",
+            html_doc,
+        )
+        self.assertIn(
+            "body.sidebar-collapsed .sb-brand { flex-direction: row; justify-content: space-between; padding: 2px 4px 8px; }",
+            html_doc,
+        )
+
+        icon_btn_match = re.search(r"\.icon-btn\s*\{([^}]*)\}", html_doc)
+        self.assertIsNotNone(icon_btn_match)
+        assert icon_btn_match is not None
+        self.assertIn("flex-shrink: 0;", icon_btn_match.group(1))
+
+        wrap_match = re.search(r"#ws-repo-link-wrap\s*\{([^}]*)\}", html_doc)
+        self.assertIsNotNone(wrap_match)
+        assert wrap_match is not None
+        wrap_css = wrap_match.group(1)
+        self.assertIn("display: inline-flex;", wrap_css)
+        self.assertIn("gap: 8px;", wrap_css)
+        self.assertIn("#ws-repo-link-wrap:empty {\n      display: none;\n    }", html_doc)
+
+        pill_override_match = re.search(
+            r"#ws-repo-link-wrap \.forge-chip,\s*#ws-repo-link-wrap \.btn-xs\s*\{([^}]*)\}",
+            html_doc,
+        )
+        self.assertIsNotNone(pill_override_match)
+        assert pill_override_match is not None
+        pill_override_css = pill_override_match.group(1)
+        self.assertIn("height: 26px;", pill_override_css)
+        self.assertIn("border-radius: 999px;", pill_override_css)
+
+        am_pill_match = re.search(r"\.am-header-pill\s*\{([^}]*)\}", html_doc)
+        self.assertIsNotNone(am_pill_match)
+        assert am_pill_match is not None
+        self.assertIn("white-space: nowrap;", am_pill_match.group(1))
+
 
 if __name__ == "__main__":
     unittest.main()
