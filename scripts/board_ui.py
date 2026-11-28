@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from functools import partial
 import html
 from http import HTTPStatus
@@ -43,6 +44,7 @@ from git_worktrees import (
     resolve_main_worktree,
 )
 from worktree_cleanup import CleanupResult, inspect_worktree, remove_merged_worktree
+from board_events import BoardEvents
 import repo_registry
 import monitor  # noqa: E402
 from local_http import LocalHTTPServer, LocalRequestHandler, load_page_template
@@ -236,6 +238,7 @@ class _SnapshotCoalescer:
         """Clear cached snapshot bytes and bump epoch so stale in-flight runs cannot repopulate."""
         with self._lock:
             self._epoch += 1
+            self._inflight = None
             self._payload = None
             self._stored_at = 0.0
             self._watched_paths = ()
@@ -271,6 +274,7 @@ class _SnapshotCoalescer:
                 wait_slot = self._inflight
             else:
                 if bypass_cache:
+                    self._inflight = None
                     self._epoch += 1
                     self._payload = None
                     self._stored_at = 0.0
@@ -317,10 +321,18 @@ class _SnapshotCoalescer:
         return body
 
 
+def _board_snapshot(root: Path | None, global_mode: bool, local_only: bool, cache: monitor.ForgeSnapshotCache) -> dict:
+    return monitor.collect_scope_snapshot(
+        root=root, global_mode=global_mode, open_only=False, local_only=local_only,
+        forge_cache=cache, allow_stale_async=True,
+    )
+
+
 class BoardRequestHandler(LocalRequestHandler):
     """Serve the IDD Web Dashboard HTML and JSON snapshot endpoints."""
 
     snapshot_cache: _SnapshotCoalescer | None = None
+    events: BoardEvents | None = None
 
     def __init__(
         self,
@@ -332,6 +344,7 @@ class BoardRequestHandler(LocalRequestHandler):
         version: str,
         merged_cache: _MergedChangesCache | None = None,
         snapshot_cache: _SnapshotCoalescer | None = None,
+        events: BoardEvents | None = None,
         **kwargs: object,
     ) -> None:
         self.cache = cache
@@ -341,6 +354,7 @@ class BoardRequestHandler(LocalRequestHandler):
         self.version = version
         self.merged_cache = merged_cache
         self.snapshot_cache = snapshot_cache
+        self.events = events
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
 
     def _require_local_csrf(self) -> bool:
@@ -377,15 +391,16 @@ class BoardRequestHandler(LocalRequestHandler):
     def _invalidate_snapshot_cache(self) -> None:
         if self.snapshot_cache is not None:
             self.snapshot_cache.invalidate()
+        if self.events is not None:
+            self.events.invalidate()
 
     def _refresh_cached_repos(self, *, timeout: float = 2.0) -> None:
         monitor.github_cli_auth.invalidate()
         monitor.invalidate_monitor_caches()
+        self.cache.invalidate_all()
+        if not self.local_only:
+            self.cache.refresh_now(self._target_repos(), timeout=timeout)
         self._invalidate_snapshot_cache()
-        if self.local_only:
-            self.cache.invalidate_all()
-            return
-        self.cache.refresh_now(self._target_repos(), timeout=timeout)
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -418,31 +433,42 @@ class BoardRequestHandler(LocalRequestHandler):
             self._send_json(HTTPStatus.OK, auth_status)
             return
 
+        if parsed.path == "/api/events" and self.events is not None:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.close_connection = True
+            self.connection.settimeout(10.0)
+            with closing(self.events.frames()) as frames:
+                self.wfile.write(b": connected\n\n")
+                self.wfile.flush()
+                for frame in frames:
+                    try:
+                        self.wfile.write(frame)
+                        self.wfile.flush()
+                    except TimeoutError:
+                        break
+            return
+
         if parsed.path == "/api/snapshot":
             params = urllib.parse.parse_qs(parsed.query)
             force_refresh = params.get("refresh", ["0"])[0] in ("1", "true", "yes")
-            if force_refresh:
-                monitor.invalidate_monitor_caches()
-                if not self.local_only:
-                    self.cache.warm_async(self._target_repos(), force_refresh=True)
-
-            def _produce_snapshot() -> dict[str, object]:
-                return monitor.collect_scope_snapshot(
-                    root=self.root,
-                    global_mode=self.global_mode,
-                    open_only=False,
-                    local_only=self.local_only,
-                    forge_cache=self.cache,
-                    force_refresh=False,
-                    allow_stale_async=True,
-                )
-
+            produce = partial(_board_snapshot, self.root, self.global_mode, self.local_only, self.cache)
             try:
+                if force_refresh:
+                    monitor.invalidate_monitor_caches()
+                    if not self.local_only and self.cache.ttl_seconds > 0:
+                        if not self.cache.refresh_now(self._target_repos(), timeout=45.0):
+                            self._send_json(HTTPStatus.GATEWAY_TIMEOUT, {"error": "等待远端同步超时"})
+                            return
                 if self.snapshot_cache is not None:
-                    body = self.snapshot_cache.get_bytes(_produce_snapshot, bypass_cache=force_refresh)
+                    body = self.snapshot_cache.get_bytes(produce, bypass_cache=force_refresh)
+                    if force_refresh and self.events is not None:
+                        self.events.invalidate()
                     self._send_bytes(HTTPStatus.OK, "application/json; charset=utf-8", body)
                     return
-                snapshot = _produce_snapshot()
+                snapshot = produce()
             except Exception as exc:
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
                 return
@@ -692,14 +718,8 @@ def run_board_server(
     resolved_version = version if version is not None else get_version()
     cache = monitor.ForgeSnapshotCache(ttl_seconds=forge_ttl)
     snapshot_cache = _SnapshotCoalescer(ttl_seconds=1.5)
-    if not local_only:
-        def _warm_on_boot() -> None:
-            if not global_mode and root is not None:
-                cache.warm_async([root], force_refresh=False)
-            else:
-                repos = [Path(r["path"]) for r in repo_registry.load_registered_repos()]
-                cache.warm_async(repos, force_refresh=False)
-        threading.Thread(target=_warm_on_boot, daemon=True).start()
+    produce = partial(_board_snapshot, root, global_mode, local_only, cache)
+    events = BoardEvents(partial(snapshot_cache.get_bytes, produce))
     merged_cache = _MergedChangesCache(ttl_seconds=60.0)
     handler_cls = partial(
         BoardRequestHandler,
@@ -710,6 +730,7 @@ def run_board_server(
         version=resolved_version,
         merged_cache=merged_cache,
         snapshot_cache=snapshot_cache,
+        events=events,
     )
     server = _bind_server(host, port, handler_cls)  # type: ignore[arg-type]
     actual_host, actual_port = server.server_address[:2]
@@ -725,5 +746,6 @@ def run_board_server(
     except KeyboardInterrupt:
         pass
     finally:
+        events.close()
         server.server_close()
     return 0

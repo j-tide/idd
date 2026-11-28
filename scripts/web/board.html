@@ -1105,48 +1105,14 @@
       border-radius: 6px;
     }
     .live-pill.is-live .dot-pulse { background: var(--green); box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.22); }
-    .live-pill.is-loading .dot-pulse,
-    .live-pill.is-syncing .dot-pulse { background: var(--accent); animation: pulse 1.2s infinite; }
-    .live-pill.is-loading,
-    .live-pill.is-syncing { border-color: var(--accent-ring); color: var(--text); }
+    .live-pill.is-loading .dot-pulse { background: var(--accent); animation: pulse 1.2s infinite; }
+    .live-pill.is-loading { border-color: var(--accent-ring); color: var(--text); }
     .live-pill.is-local .dot-pulse { background: var(--text-faint); }
     .live-pill.is-err { color: var(--red); border-color: rgba(248, 113, 113, 0.32); }
     .dot-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.45; }
-    }
-
-    /* Global Top Indeterminate Progress Bar */
-    .top-progress {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 2.5px;
-      z-index: 120;
-      pointer-events: none;
-      overflow: hidden;
-      opacity: 0;
-      transition: opacity 0.2s ease;
-    }
-    .top-progress.is-active { opacity: 1; }
-    .top-progress-bar {
-      position: absolute;
-      top: 0;
-      left: 0;
-      bottom: 0;
-      width: 38%;
-      border-radius: 999px;
-      background: linear-gradient(90deg, transparent, var(--accent), transparent);
-      animation: none;
-    }
-    .top-progress.is-active .top-progress-bar {
-      animation: topProgressSlide 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-    }
-    @keyframes topProgressSlide {
-      0% { transform: translateX(-110%); }
-      100% { transform: translateX(360%); }
     }
 
     /* Skeleton Loading Primitives */
@@ -1185,7 +1151,6 @@
         --dur-layout: 0ms;
         --card-lift: none;
       }
-      .top-progress-bar,
       .skel-block,
       .seg-pill.skel,
       .glass-filter-hint.is-syncing svg,
@@ -3004,7 +2969,6 @@
   </style>
 </head>
 <body>
-  <div id="top-progress" class="top-progress is-active" aria-hidden="true"><div class="top-progress-bar"></div></div>
   <div class="app-shell">
     <!-- Left Inset Sidebar -->
     <aside class="sidebar" aria-label="工作区侧栏">
@@ -3085,7 +3049,7 @@
                   <span class="sep live-sep">·</span>
                   <span id="updated-tag" class="num live-clock">扫描仓库...</span>
                 </span>
-                <button id="pause-btn" class="cluster-icon-btn" type="button" title="暂停自动轮询" aria-label="暂停自动轮询"></button>
+                <button id="pause-btn" class="cluster-icon-btn" type="button" title="暂停实时更新" aria-label="暂停实时更新"></button>
               </div>
               <span class="status-cluster-sep" aria-hidden="true"></span>
               <div id="forge-status-group" class="forge-status-group"></div>
@@ -3219,10 +3183,11 @@
         lastForgeStatusSig: "",
         lastTopAlertsSig: "",
         inspectorTab: "tasks",
-        timerId: null,
-        quickSyncTimerId: null,
+        stream: null,
+        reconnectTimer: null,
+        ageTimer: null,
+        streamStatus: "connecting",
         slowInitTimerId: null,
-        fetching: false,
         manualRefreshing: false,
         hasLiveSnapshot: false,
         fromCache: false,
@@ -3231,7 +3196,6 @@
         lastClockStr: initialLang === "en" ? "Scanning..." : "扫描仓库...",
         lastSig: "",
         lastFocusBeforeModal: null,
-        pendingManualSyncToast: false,
         lastToastSig: "",
         lastToastTime: 0,
         lastSetupBtnSig: "",
@@ -3530,16 +3494,6 @@
         document.body.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
       }
 
-      function updateTopProgress() {
-        const bar = document.getElementById("top-progress");
-        if (!bar) return;
-        const active =
-          (!state.hasLiveSnapshot && !state.initError) ||
-          Boolean(state.snapshot && state.snapshot.forge_syncing) ||
-          state.manualRefreshing;
-        bar.classList.toggle("is-active", Boolean(active));
-      }
-
       function resolveForgeConnections() {
         const snap = state.snapshot;
         if (snap && snap.forge_connections && snap.forge_connections.github && snap.forge_connections.gitlab) {
@@ -3640,7 +3594,6 @@
         const conns = resolveForgeConnections();
         const snap = state.snapshot;
         const localOnly = Boolean(snap && snap.local_only);
-        const syncingRemote = Boolean(snap && snap.forge_syncing);
         const sig = JSON.stringify({
           c: conns,
           po: state.statusPopoverOpen,
@@ -3648,7 +3601,6 @@
           lg: state.lang,
           pa: state.paused,
           lo: localOnly,
-          fs: syncingRemote,
           ck: state.lastClockStr,
           sv: state.authSavingHost
         });
@@ -3692,12 +3644,9 @@
 
         popEl.classList.add("open");
         popEl.setAttribute("aria-hidden", "false");
-        const pollStateLabel = state.paused
-          ? tr("轮询已暂停", "Polling Paused")
-          : (localOnly
-              ? tr("仅本地模式 (--local-only)", "Local-Only Mode")
-              : (syncingRemote ? tr("后台同步远端中...", "Syncing remote...") : tr("实时监控 · 2s 轮询", "Live · 2s polling")));
-        const pollDotColor = state.paused ? "var(--amber)" : (localOnly ? "var(--text-faint)" : (syncingRemote ? "var(--accent)" : "var(--green)"));
+        const streamLabel = state.paused ? tr("实时更新已暂停", "Live updates paused")
+          : (localOnly ? tr("仅本地模式 (--local-only)", "Local-only mode") : tr("实时推送 · SSE", "Live updates · SSE"));
+        const streamColor = state.paused ? "var(--amber)" : (localOnly ? "var(--text-faint)" : "var(--green)");
 
         const cardsHtml = ["github", "gitlab"].map((fg) => {
           const info = conns[fg] || { forge: fg, label: fg === "github" ? "GitHub" : "GitLab", status: "unconfigured", hosts: [] };
@@ -3761,7 +3710,7 @@
 
         popEl.innerHTML =
           '<div class="status-pop-hdr">' +
-            '<span class="status-pop-live"><span style="width:7px;height:7px;border-radius:50%;background:' + pollDotColor + ';display:inline-block;"></span><span>' + escapeHtml(pollStateLabel) + "</span></span>" +
+            '<span class="status-pop-live"><span style="width:7px;height:7px;border-radius:50%;background:' + streamColor + ';display:inline-block;"></span><span>' + escapeHtml(streamLabel) + "</span></span>" +
             '<span style="display:inline-flex;align-items:center;gap:6px;">' +
               '<span class="num">' + escapeHtml(state.lastClockStr || "—") + "</span>" +
               '<button class="cluster-icon-btn" type="button" data-popover-close="1" aria-label="' + tr("关闭", "Close") + '">' + icon("x", 13) + "</button>" +
@@ -3799,17 +3748,14 @@
           const pauseSig = state.lang + ":" + (state.paused ? "1" : "0");
           if (pauseSig !== state.lastPauseBtnSig) {
             state.lastPauseBtnSig = pauseSig;
-            const pLabel = state.paused ? tr("继续自动轮询", "Resume auto-refresh") : tr("暂停自动轮询", "Pause auto-refresh");
+            const pLabel = state.paused ? tr("继续实时更新", "Resume auto-refresh") : tr("暂停实时更新", "Pause auto-refresh");
             pauseBtn.classList.toggle("is-paused", Boolean(state.paused));
             pauseBtn.title = pLabel;
             pauseBtn.setAttribute("aria-label", pLabel);
             pauseBtn.innerHTML = state.paused ? icon("play", 12) : icon("pause", 12);
           }
         }
-        const isBusy =
-          (!state.hasLiveSnapshot && !state.initError) ||
-          Boolean(state.snapshot && state.snapshot.forge_syncing) ||
-          state.manualRefreshing;
+        const isBusy = state.manualRefreshing;
         const syncBtn = document.getElementById("sync-btn");
         if (syncBtn) {
           const localOnly = Boolean(state.snapshot && state.snapshot.local_only);
@@ -3817,6 +3763,7 @@
           if (syncSig !== state.lastSyncBtnSig) {
             state.lastSyncBtnSig = syncSig;
             syncBtn.classList.toggle("spin", isBusy);
+            syncBtn.disabled = isBusy;
             syncBtn.title = localOnly
               ? tr("当前为仅本地模式 (快捷键 r 刷新本地)", "Local-only mode (press r to refresh)")
               : tr("同步 GitHub / GitLab 远端 (快捷键 r)", "Sync GitHub / GitLab (shortcut r)");
@@ -3849,61 +3796,39 @@
           }
           syncAllGliders();
         }
-        updateTopProgress();
       }
 
-      function updateConnectionBadge(ok, errorMsg) {
+      function updateConnectionBadge() {
         const tag = document.getElementById("conn-tag");
-        const cluster = document.getElementById("status-cluster");
-        if (cluster) cluster.classList.toggle("is-err", !ok);
         if (!tag) return;
-        const clockRaw = state.lastClockStr || tr("同步中...", "Syncing...");
-        const clock = escapeHtml(clockRaw);
-        const modeSig = [
-          ok ? "1" : "0",
-          errorMsg || "",
-          state.paused ? "1" : "0",
-          state.hasLiveSnapshot ? "1" : "0",
-          state.snapshot ? "1" : "0",
-          state.fromCache ? "1" : "0",
-          Boolean(state.snapshot && state.snapshot.local_only) ? "1" : "0",
-          Boolean(state.snapshot && state.snapshot.forge_syncing) ? "1" : "0",
-          state.lang
-        ].join("|");
-        if (modeSig === state.lastConnModeSig && tag.querySelector("#updated-tag")) {
-          const upd = tag.querySelector("#updated-tag");
-          if (upd && upd.textContent !== clockRaw) upd.textContent = clockRaw;
-          return;
-        }
-        state.lastConnModeSig = modeSig;
-        if (!ok) {
-          tag.className = "live-pill is-err";
-          tag.innerHTML = icon("alertTriangle", 12) + "<span>" + escapeHtml(errorMsg || tr("连接中断", "Disconnected")) + '</span><span id="updated-tag" style="display:none;">' + clock + "</span>";
-          return;
-        }
+        const disconnected = !state.paused && (state.streamStatus === "reconnecting" || state.streamStatus === "error");
+        document.getElementById("status-cluster").classList.toggle("is-err", disconnected);
+        const clock = state.snapshot ? state.lastClockStr : "";
+        let label, style;
         if (state.paused) {
-          tag.className = "live-pill";
-          tag.innerHTML = icon("pause", 11) + "<span>" + tr("已暂停", "Paused") + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + clock + "</span>";
-          return;
+          label = tr("已暂停", "Paused");
+          style = "";
+        } else if (disconnected) {
+          label = state.streamStatus === "error" ? tr("读取失败", "Scan failed") : tr("正在重连", "Reconnecting");
+          style = "is-err";
+        } else if (state.streamStatus !== "live") {
+          label = state.snapshot ? tr("连接中", "Connecting") : tr("初始化中", "Initializing");
+          style = state.snapshot ? "" : "is-loading";
+        } else {
+          const local = Boolean(state.snapshot && state.snapshot.local_only);
+          label = local ? tr("仅本地", "Local") : tr("实时", "Live");
+          style = local ? "is-local" : "is-live";
         }
-        if (!state.hasLiveSnapshot && !state.snapshot) {
-          tag.className = "live-pill is-loading";
-          tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("初始化中", "Initializing") + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + tr("扫描中...", "Scanning...") + "</span>";
-          return;
+        const sig = [style, label, Boolean(clock)].join("|");
+        if (sig !== state.lastConnModeSig) {
+          state.lastConnModeSig = sig;
+          tag.className = ("live-pill " + style).trim();
+          tag.innerHTML = (state.paused ? icon("pause", 11) : '<span class="dot-pulse"></span>') +
+            "<span>" + label + "</span>" + (clock ? '<span class="live-sep">·</span><span id="updated-tag" class="num live-clock"></span>' : "");
         }
-        if (!state.hasLiveSnapshot && state.fromCache) {
-          tag.className = "live-pill is-syncing";
-          tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("更新中", "Updating") + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + clock + "</span>";
-          return;
-        }
-        if (state.snapshot && state.snapshot.local_only) {
-          tag.className = "live-pill is-local";
-          tag.innerHTML = '<span class="dot-pulse"></span><span>' + tr("仅本地", "Local") + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + clock + "</span>";
-          return;
-        }
-        const syncingRemote = Boolean(state.snapshot && state.snapshot.forge_syncing);
-        tag.className = syncingRemote ? "live-pill is-syncing" : "live-pill is-live";
-        tag.innerHTML = '<span class="dot-pulse"></span><span>' + (syncingRemote ? tr("同步中", "Syncing") : tr("实时", "Live")) + '</span><span class="live-sep">·</span><span id="updated-tag" class="num live-clock">' + clock + "</span>";
+        tag.title = disconnected ? state.initError : "";
+        const updated = tag.querySelector("#updated-tag");
+        if (updated && updated.textContent !== clock) updated.textContent = clock;
       }
 
       function parseStage(rawStage) {
@@ -4067,6 +3992,7 @@
               name: w.name || "",
               stage: "已合入",
               last_active_ago: w.last_active_ago || "",
+              last_active_ts: w.last_active_ts,
               last_commit_sha: w.last_commit_sha || "",
               tasks: [],
               counts: {},
@@ -4335,11 +4261,38 @@
         return ago;
       }
 
+      function activityAge(timestamp) {
+        const minutes = Math.max(0, Math.floor((Date.now() / 1000 - timestamp) / 60));
+        if (minutes < 1) return tr("刚刚活跃", "Active now");
+        if (minutes < 60) return tr(minutes + "分钟前", minutes + "m ago");
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return tr(hours + "小时前", hours + "h ago");
+        const days = Math.floor(hours / 24);
+        return tr(days + "天前", days + "d ago");
+      }
+
+      function renderActivityTime(item) {
+        const timestamp = Number(item.last_active_ts);
+        if (!(timestamp > 0)) return escapeHtml(localizeAgo(item.last_active_ago));
+        return '<time data-active-at="' + timestamp + '">' + activityAge(timestamp) + "</time>";
+      }
+
+      function updateActivityTimes() {
+        clearTimeout(state.ageTimer);
+        if (state.paused || document.hidden) return;
+        const times = document.querySelectorAll("time[data-active-at]");
+        for (const el of times) {
+          const value = activityAge(Number(el.dataset.activeAt));
+          if (value !== el.textContent) el.textContent = value;
+        }
+        if (times.length) state.ageTimer = setTimeout(updateActivityTimes, 60000);
+      }
+
       function renderPulseSummary(pulse) {
         if (!pulse) return "";
         const parts = [];
-        const ago = pulse.last_active_ago || "";
-        if (ago) parts.push(localizeAgo(ago));
+        const ago = renderActivityTime(pulse);
+        if (ago) parts.push(ago);
         const dirty = Number(pulse.dirty_count || 0);
         const ins = Number(pulse.insertions || 0);
         const dels = Number(pulse.deletions || 0);
@@ -4585,7 +4538,7 @@
         let filterHintHtml = "";
         if (activeChip) {
           filterHintHtml = '<div class="glass-filter-hint"><span>' + escapeHtml(tr("已筛选 · ", "Filtered · ") + activeChip.label) + '</span><button type="button" class="glass-filter-reset" data-kpi-action="filter-all">' + tr("重置筛选", "Reset") + "</button></div>";
-        } else if (Boolean(snap && snap.forge_syncing && !snap.local_only)) {
+        } else if (Boolean(!state.initialLoadSettled && snap && snap.forge_syncing && !snap.local_only)) {
           const syncMsg = reposCnt > 0
             ? tr("正在从远端同步 " + reposCnt + " 个仓库的 Issue 与 PR/MR…", "Syncing Issues & PR/MRs from " + reposCnt + " repo(s)…")
             : tr("正在从远端同步 Issue 与 PR/MR…", "Syncing remote Issues & PR/MRs…");
@@ -4842,7 +4795,7 @@
 
         const pulseHtml = renderPulseSummary(item.pulse) || (
           item._kind === "retained"
-            ? (tr("已合入主干 · 工作区干净", "Merged · Clean") + (item.last_active_ago ? " · " + escapeHtml(localizeAgo(item.last_active_ago)) : ""))
+            ? (tr("已合入主干 · 工作区干净", "Merged · Clean") + (item.last_active_ago ? " · " + renderActivityTime(item) : ""))
             : ""
         );
         const cardChip = options.inRepoGroup ? "" : renderRepoChip(item, { compact: true, hideName: !options.showRepo });
@@ -6848,47 +6801,11 @@
         });
       }
 
-      function computeNextPollDelayMs(snap) {
-        if (snap && snap.forge_syncing) return 1200;
-        const s = snap && snap.summary;
-        if (!s) return 4000;
-        if (Number(s.coding_now_count || 0) > 0 || Number(s.dirty_worktrees || 0) > 0) {
-          return 4000;
-        }
-        if (Number(s.active_worktrees || 0) > 0) {
-          return 8000;
-        }
-        return 15000;
-      }
-
-      function clearPollTimers() {
-        if (state.timerId) {
-          clearTimeout(state.timerId);
-          state.timerId = null;
-        }
-        if (state.quickSyncTimerId) {
-          clearTimeout(state.quickSyncTimerId);
-          state.quickSyncTimerId = null;
-        }
-      }
-
-      function scheduleNextPoll(delayOverrideMs) {
-        clearPollTimers();
-        if (state.paused || document.hidden) return;
-        const delay = typeof delayOverrideMs === "number" ? delayOverrideMs : computeNextPollDelayMs(state.snapshot);
-        state.timerId = setTimeout(() => {
-          state.timerId = null;
-          if (!state.paused && !document.hidden) {
-            fetchSnapshot(false);
-          }
-        }, delay);
-      }
-
       function renderAll(force) {
         const snap = state.snapshot;
         if (!snap) {
           syncHeaderControls();
-          updateConnectionBadge(!state.initError, state.initError);
+          updateConnectionBadge();
           renderLoadingState();
           return true;
         }
@@ -6912,6 +6829,7 @@
         renderMain();
         renderSidebarReposAndWorktrees(snap);
         renderInspector();
+        updateActivityTimes();
 
         const authAlerts = snap.auth_alerts || [];
         const warns = (snap.warnings || []).filter((w) => !authAlerts.length || !String(w).includes("需要鉴权"));
@@ -6939,108 +6857,145 @@
         return true;
       }
 
-      async function fetchSnapshot(forceRefresh) {
-        if (state.fetching && !forceRefresh) return;
-        clearPollTimers();
-        state.fetching = true;
-        if (forceRefresh) state.manualRefreshing = true;
-        if (!state.snapshot && !state.slowInitTimerId) {
-          state.slowInitTimerId = setTimeout(() => {
-            state.slowInitTimerId = null;
-            if (!state.snapshot && !state.initError) {
-              state.slowInit = true;
-              renderAll(true);
+      function applySnapshot(nextSnap) {
+        if (state.hasLiveSnapshot && nextSnap.generated_at < state.snapshot.generated_at) return false;
+        // A restarting server can briefly have only local data. Keep the last
+        // complete view until its first remote scan has settled.
+        if (state.streamStatus !== "live" && state.initialLoadSettled &&
+            nextSnap.repos.some(repo => repo.forge_syncing && !repo.forge_fetched_at)) return false;
+        clearTimeout(state.slowInitTimerId);
+        state.slowInitTimerId = null;
+        state.snapshot = nextSnap;
+        const liveRetainedKeys = new Set();
+        for (const r of (nextSnap.repos || [])) {
+          for (const w of (r.retained_idle_worktrees || [])) {
+            liveRetainedKeys.add(r.repo_path + "#retained#" + (w.worktree || w.name || w.branch || ""));
+          }
+        }
+        for (const k of Object.keys(state.cleanupRemovedKeys)) {
+          if (!liveRetainedKeys.has(k)) delete state.cleanupRemovedKeys[k];
+        }
+        state.hasLiveSnapshot = true;
+        state.fromCache = false;
+        if (!nextSnap.forge_syncing || nextSnap.local_only) {
+          state.initialLoadSettled = true;
+        }
+        state.initError = "";
+        state.slowInit = false;
+        if (!state.didAutoInspect) {
+          state.didAutoInspect = true;
+          const qInspect = urlParams.get("inspect");
+          if (qInspect) {
+            const found = collectItems(true).find((it) => String(it.issue_number) === qInspect || it._key === qInspect);
+            if (found) {
+              state.inspectedKey = found._key;
             }
+          }
+        }
+        state.lastClockStr = formatClock(state.snapshot.generated_at);
+        updateConnectionBadge();
+        const didRender = renderAll(false);
+        if (didRender) {
+          setTimeout(() => saveCachedSnapshot(nextSnap), 0);
+        }
+        if (!state.didCheckOnboarding) {
+          const qOnb = urlParams.get("onboarding");
+          const forceOnb = qOnb === "1" || qOnb === "guide";
+          if (forceOnb || !state.snapshot.forge_syncing) {
+            state.didCheckOnboarding = true;
+            const hasAlerts = ((state.snapshot && state.snapshot.auth_alerts) || []).length > 0;
+            if (forceOnb) {
+              openSetupModal(qOnb === "guide" ? "guide" : "auth");
+            } else if (!urlParams.has("inspect") && qOnb !== "0") {
+              if (hasAlerts && !sessionStorage.getItem("idd_setup_dismissed")) {
+                openSetupModal("auth");
+              } else if (!localStorage.getItem("idd_onboarding_done")) {
+                openSetupModal(hasAlerts ? "auth" : "guide");
+              }
+            }
+          }
+        }
+        return true;
+      }
+
+      function stopStream() {
+        if (state.stream) state.stream.close();
+        state.stream = null;
+        clearTimeout(state.ageTimer);
+        clearTimeout(state.reconnectTimer);
+        state.reconnectTimer = null;
+        clearTimeout(state.slowInitTimerId);
+        state.slowInitTimerId = null;
+      }
+
+      function connectStream() {
+        if (state.paused || document.hidden || state.stream) return;
+        updateActivityTimes();
+        if (state.streamStatus !== "reconnecting") {
+          state.streamStatus = "connecting";
+          state.initError = "";
+        }
+        updateConnectionBadge();
+        if (!state.snapshot) {
+          state.slowInitTimerId = setTimeout(() => {
+            state.slowInit = true;
+            if (!state.snapshot) renderAll(true);
           }, 3500);
         }
-        syncHeaderControls();
+        const stream = new EventSource("/api/events");
+        state.stream = stream;
+        stream.addEventListener("snapshot", event => {
+          if (state.stream !== stream) return;
+          if (applySnapshot(JSON.parse(event.data))) {
+            state.streamStatus = "live";
+            state.initError = "";
+          }
+          updateConnectionBadge();
+        });
+        function reportError(status, message) {
+          if (state.stream !== stream) return;
+          state.streamStatus = status;
+          state.initError = message;
+          updateConnectionBadge();
+          if (!state.snapshot) renderAll(true);
+        }
+        stream.addEventListener("snapshot-error", event => reportError("error", JSON.parse(event.data)));
+        stream.onerror = () => {
+          if (state.stream !== stream) return;
+          reportError("reconnecting", tr("等待看板服务恢复连接", "Waiting for the board to reconnect"));
+          // A terminal HTTP/network error can stop the native reconnect loop.
+          if (stream.readyState === EventSource.CLOSED) {
+            stopStream();
+            state.reconnectTimer = setTimeout(connectStream, 3000);
+          }
+        };
+      }
+
+      async function fetchSnapshot(forceRefresh) {
+        if (forceRefresh && state.manualRefreshing) return;
+        if (forceRefresh) {
+          state.manualRefreshing = true;
+          syncHeaderControls();
+        }
         try {
           const url = forceRefresh ? "/api/snapshot?refresh=1" : "/api/snapshot";
           const res = await fetch(url, { cache: "no-store" });
           if (!res.ok) throw new Error("HTTP " + res.status);
-          const nextSnap = await res.json();
-          clearTimeout(state.slowInitTimerId);
-          state.slowInitTimerId = null;
-          state.snapshot = nextSnap;
-          const liveRetainedKeys = new Set();
-          for (const r of (nextSnap.repos || [])) {
-            for (const w of (r.retained_idle_worktrees || [])) {
-              liveRetainedKeys.add(r.repo_path + "#retained#" + (w.worktree || w.name || w.branch || ""));
-            }
-          }
-          for (const k of Object.keys(state.cleanupRemovedKeys)) {
-            if (!liveRetainedKeys.has(k)) delete state.cleanupRemovedKeys[k];
-          }
-          state.hasLiveSnapshot = true;
-          state.fromCache = false;
-          if (!nextSnap.forge_syncing || nextSnap.local_only) {
-            state.initialLoadSettled = true;
-          }
-          state.initError = "";
-          state.slowInit = false;
-          if (!state.didAutoInspect) {
-            state.didAutoInspect = true;
-            const qInspect = urlParams.get("inspect");
-            if (qInspect) {
-              const found = collectItems(true).find((it) => String(it.issue_number) === qInspect || it._key === qInspect);
-              if (found) {
-                state.inspectedKey = found._key;
-              }
-            }
-          }
-          state.lastClockStr = formatClock(state.snapshot.generated_at);
-          updateConnectionBadge(true);
-          const didRender = renderAll(false);
-          if (didRender) {
-            setTimeout(() => saveCachedSnapshot(nextSnap), 0);
-          }
-          if (!state.didCheckOnboarding) {
-            const qOnb = urlParams.get("onboarding");
-            const forceOnb = qOnb === "1" || qOnb === "guide";
-            if (forceOnb || !state.snapshot.forge_syncing) {
-              state.didCheckOnboarding = true;
-              const hasAlerts = ((state.snapshot && state.snapshot.auth_alerts) || []).length > 0;
-              if (forceOnb) {
-                openSetupModal(qOnb === "guide" ? "guide" : "auth");
-              } else if (!urlParams.has("inspect") && qOnb !== "0") {
-                if (hasAlerts && !sessionStorage.getItem("idd_setup_dismissed")) {
-                  openSetupModal("auth");
-                } else if (!localStorage.getItem("idd_onboarding_done")) {
-                  openSetupModal(hasAlerts ? "auth" : "guide");
-                }
-              }
-            }
-          }
+          const snapshot = await res.json();
+          applySnapshot(snapshot);
           if (forceRefresh) {
-            if (state.snapshot && state.snapshot.local_only) {
-              state.pendingManualSyncToast = false;
-              showToast(tr("已刷新本地工作树", "Local worktrees refreshed"));
-            } else if (state.snapshot && state.snapshot.forge_syncing) {
-              state.pendingManualSyncToast = true;
-              showToast(tr("正在同步远端状态…", "Syncing remote status…"), "info");
-            } else {
-              state.pendingManualSyncToast = false;
-              showToast(tr("远端同步已完成", "Remote sync complete"));
-            }
-          } else if (state.pendingManualSyncToast && state.snapshot && !state.snapshot.forge_syncing) {
-            state.pendingManualSyncToast = false;
-            showToast(tr("远端同步已完成", "Remote sync complete"));
+            const failedRepo = snapshot.repos.find(repo => repo.forge_error);
+            const problem = (failedRepo && failedRepo.forge_error) || snapshot.warnings[0];
+            if (problem) showToast(tr("同步提示：", "Sync notice: ") + problem, "err");
+            else showToast(snapshot.local_only ? tr("已刷新本地工作树", "Local worktrees refreshed") : tr("远端同步已完成", "Remote sync complete"));
           }
         } catch (err) {
-          if (!state.snapshot) {
-            clearTimeout(state.slowInitTimerId);
-            state.slowInitTimerId = null;
-            state.initError = err && err.message ? err.message : tr("连接异常", "Network error");
-            updateConnectionBadge(false, tr("初始化失败", "Init failed"));
-            renderAll(true);
-          } else {
-            updateConnectionBadge(false, tr("连接异常: ", "Sync error: ") + err.message);
-          }
+          showToast(tr("同步失败：", "Sync failed: ") + err.message, "err");
         } finally {
-          state.fetching = false;
-          if (forceRefresh) state.manualRefreshing = false;
-          syncHeaderControls();
-          scheduleNextPoll();
+          if (forceRefresh) {
+            state.manualRefreshing = false;
+            syncHeaderControls();
+          }
         }
       }
 
@@ -7485,7 +7440,8 @@
           state.initError = "";
           state.slowInit = false;
           renderAll(true);
-          fetchSnapshot(true);
+          stopStream();
+          connectStream();
           return;
         }
         const openEl = e.target.closest("[data-open-key]");
@@ -7533,11 +7489,11 @@
       document.getElementById("pause-btn").addEventListener("click", () => {
         state.paused = !state.paused;
         if (state.paused) {
-          clearPollTimers();
+          stopStream();
         }
         syncHeaderControls();
-        updateConnectionBadge(true);
-        if (!state.paused && !document.hidden) fetchSnapshot(false);
+        updateConnectionBadge();
+        if (!state.paused) connectStream();
       });
 
       document.getElementById("forge-status-group").addEventListener("click", (e) => {
@@ -7613,7 +7569,7 @@
         applyLang();
         applyTheme(document.documentElement.getAttribute("data-theme") || "dark");
         syncHeaderControls();
-        updateConnectionBadge(true);
+        updateConnectionBadge();
         renderForgeStatus(true);
         renderAll(true);
         if (state.setupOpen) renderSetupModal();
@@ -7702,20 +7658,20 @@
         const hidden = Boolean(document.hidden);
         document.documentElement.classList.toggle("is-tab-hidden", hidden);
         if (hidden) {
-          clearPollTimers();
+          stopStream();
         } else if (!state.paused) {
-          fetchSnapshot(false);
+          connectStream();
         }
       });
+      window.addEventListener("pagehide", stopStream);
+      window.addEventListener("pageshow", connectStream);
 
       document.documentElement.classList.toggle("is-tab-hidden", Boolean(document.hidden));
       syncHeaderControls();
-      updateConnectionBadge(true);
+      updateConnectionBadge();
       renderAll(true);
       fetchAuthStatus();
-      if (!document.hidden) {
-        fetchSnapshot(false);
-      }
+      connectStream();
     })();
   </script>
 </body>
