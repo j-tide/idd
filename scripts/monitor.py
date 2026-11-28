@@ -4,11 +4,6 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import contextmanager
-try:
-    import fcntl
-except ImportError:
-    fcntl = None  # type: ignore[assignment]
 import json
 import os
 from pathlib import Path
@@ -16,10 +11,9 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
-from typing import Any, Iterator
+from typing import Any
 import urllib.parse
 
 from forge import (
@@ -28,12 +22,10 @@ from forge import (
     build_issue_web_url,
     build_repo_web_url,
     evaluate_repo_init_settings,
-    get_config_dir,
     get_forge,
-    get_hosts_path,
     inspect_remote_origin,
-    load_hosts_config,
 )
+from local_state import atomic_write_json, config_file_lock, get_config_dir, get_hosts_path, load_hosts_config
 from git_worktrees import detect_default_branch, has_remote_origin, list_worktrees, read_git
 import task_status
 
@@ -90,48 +82,21 @@ def _read_raw_config_unlocked() -> dict[str, Any]:
 
 def _save_config_unlocked(data: dict[str, Any]) -> dict[str, Any]:
     normalized = _normalize_global_config(data)
-    path = get_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix="config-", suffix=".tmp", dir=str(path.parent))
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(normalized, handle, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, path)
-    finally:
-        tmp_path.unlink(missing_ok=True)
+    atomic_write_json(get_config_path(), normalized)
     return normalized
-
-
-@contextmanager
-def _file_lock(lock_path: Path) -> Iterator[None]:
-    """Acquire an advisory cross-process exclusive file lock when supported by the OS."""
-    if fcntl is None:
-        yield
-        return
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except OSError:
-                pass
 
 
 def load_global_config() -> dict[str, Any]:
     """Load global IDD configuration (`~/.config/idd/config.json`) with safe defaults."""
     with _CONFIG_LOCK:
-        with _file_lock(get_config_dir() / ".config.lock"):
+        with config_file_lock(get_config_dir() / ".config.lock"):
             return _read_raw_config_unlocked()
 
 
 def save_global_config(data: dict[str, Any]) -> dict[str, Any]:
     """Atomically persist global IDD configuration."""
     with _CONFIG_LOCK:
-        with _file_lock(get_config_dir() / ".config.lock"):
+        with config_file_lock(get_config_dir() / ".config.lock"):
             return _save_config_unlocked(data)
 
 
@@ -143,7 +108,7 @@ def get_global_auto_merge() -> bool:
 def set_global_auto_merge(enabled: bool) -> dict[str, Any]:
     """Update and persist the global `auto_merge` switch."""
     with _CONFIG_LOCK:
-        with _file_lock(get_config_dir() / ".config.lock"):
+        with config_file_lock(get_config_dir() / ".config.lock"):
             cfg = _read_raw_config_unlocked()
             cfg["auto_merge"] = bool(enabled)
             return _save_config_unlocked(cfg)
@@ -335,17 +300,8 @@ def _detect_repo_meta_and_origin_cached(main_worktree: Path) -> tuple[bool, str,
 
 
 def _save_repos_unlocked(entries: list[dict[str, Any]]) -> None:
-    path = get_repos_path()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(prefix="repos-", suffix=".tmp", dir=str(path.parent))
-        tmp_path = Path(tmp_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump({"repos": entries}, handle, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, path)
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        atomic_write_json(get_repos_path(), {"repos": entries})
     except OSError:
         pass
 
@@ -384,7 +340,7 @@ def _copy_repo_init_fields(src: dict[str, Any], dst: dict[str, Any]) -> None:
 def load_registered_repos(*, prune_missing: bool = True) -> list[dict[str, Any]]:
     """Load registered repository entries sorted by recency, optionally pruning stale paths."""
     with _REPOS_LOCK:
-        with _file_lock(get_config_dir() / ".repos.lock"):
+        with config_file_lock(get_config_dir() / ".repos.lock"):
             raw_items = _read_raw_repos_unlocked()
             seen: dict[str, dict[str, Any]] = {}
             dirty = False
@@ -431,7 +387,7 @@ def register_repo(main_worktree: Path, *, min_touch_interval: float = 0.0) -> di
     entry: dict[str, Any] = {"path": key, "name": resolved.name, "last_seen_at": now}
 
     with _REPOS_LOCK:
-        with _file_lock(get_config_dir() / ".repos.lock"):
+        with config_file_lock(get_config_dir() / ".repos.lock"):
             raw_items = _read_raw_repos_unlocked()
             by_path: dict[str, dict[str, Any]] = {}
             needs_cleanup = False
@@ -474,7 +430,7 @@ def get_repo_init_meta(main_worktree: Path) -> dict[str, Any]:
     """Return persisted repo merge-policy status `{'state', 'mismatches', 'error'}`."""
     key = str(main_worktree.expanduser().resolve())
     with _REPOS_LOCK:
-        with _file_lock(get_config_dir() / ".repos.lock"):
+        with config_file_lock(get_config_dir() / ".repos.lock"):
             raw_items = _read_raw_repos_unlocked()
         for item in raw_items:
             try:
@@ -511,7 +467,7 @@ def set_repo_init_meta(
     now = time.time()
     normalized = "pending" if state == "prompted" else state
     with _REPOS_LOCK:
-        with _file_lock(get_config_dir() / ".repos.lock"):
+        with config_file_lock(get_config_dir() / ".repos.lock"):
             raw_items = _read_raw_repos_unlocked()
             by_path: dict[str, dict[str, Any]] = {}
             for item in raw_items:
@@ -578,7 +534,7 @@ def unregister_repo(target: Path) -> bool:
         candidates.add(str(main_wt))
 
     with _REPOS_LOCK:
-        with _file_lock(get_config_dir() / ".repos.lock"):
+        with config_file_lock(get_config_dir() / ".repos.lock"):
             raw_items = _read_raw_repos_unlocked()
             kept: list[dict[str, Any]] = []
             removed = False

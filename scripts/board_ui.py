@@ -28,11 +28,10 @@ from forge import (  # noqa: E402
     evaluate_repo_init_settings,
     get_forge,
     inspect_remote_origin,
-    load_hosts_config,
     normalize_host_input,
-    save_hosts_config,
     verify_host_token,
 )
+from local_state import remove_hosts, set_host
 from git_worktrees import default_worktree_root, has_remote_origin
 from worktree_cleanup import CleanupResult, inspect_worktree, remove_merged_worktree
 import monitor  # noqa: E402
@@ -8272,14 +8271,12 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
 
-            hosts = load_hosts_config()
-            hosts[host_key] = {
+            set_host(host_key, {
                 "forge": forge_type,
                 "api_url": api_base,
                 "token": token,
                 "username": username,
-            }
-            save_hosts_config(hosts)
+            })
             auto_repo_init = payload.get("auto_repo_init", True)
             if isinstance(auto_repo_init, str):
                 auto_repo_init = auto_repo_init.strip().lower() not in ("0", "false", "no")
@@ -8364,7 +8361,6 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "请求格式无效"})
                 return
             raw_host = str(payload.get("host") or "").strip()
-            hosts = load_hosts_config()
             removed = False
             if raw_host:
                 candidates = {raw_host}
@@ -8373,12 +8369,8 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
                     candidates.add(hk)
                 except ForgeError:
                     pass
-                for k in list(hosts.keys()):
-                    if k in candidates:
-                        hosts.pop(k, None)
-                        removed = True
+                removed = remove_hosts(candidates)
                 if removed:
-                    save_hosts_config(hosts)
                     self._refresh_cached_repos(timeout=1.5)
             auth_status = monitor.collect_auth_hosts_status(root=self.root, global_mode=self.global_mode)
             self._send_json(HTTPStatus.OK, {"ok": True, "removed": removed, "auth": auth_status})

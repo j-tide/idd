@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import re
 import shutil
-import stat
 import subprocess
 import tempfile
 import time
@@ -17,6 +16,8 @@ from typing import Any
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from local_state import load_hosts_config
 
 
 FAIL_CONCLUSIONS = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"}
@@ -149,44 +150,6 @@ def parse_remote_url(url: str) -> RemoteSpec | None:
             api_base=f"https://{hostname}",
         )
     return None
-
-
-def get_config_dir() -> Path:
-    override = os.environ.get("IDD_CONFIG_DIR", "").strip()
-    if override:
-        return Path(override).expanduser().resolve()
-    return (Path.home() / ".config" / "idd").resolve()
-
-
-def get_hosts_path() -> Path:
-    return get_config_dir() / "hosts.json"
-
-
-def load_hosts_config() -> dict[str, dict[str, str]]:
-    path = get_hosts_path()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def save_hosts_config(data: dict[str, dict[str, str]]) -> None:
-    path = get_hosts_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        path.parent.chmod(stat.S_IRWXU)
-    except OSError:
-        pass
-    fd, tmp_name = tempfile.mkstemp(prefix="hosts-", suffix=".tmp", dir=str(path.parent))
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, ensure_ascii=False, indent=2)
-        tmp_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-        os.replace(tmp_path, path)
-    finally:
-        tmp_path.unlink(missing_ok=True)
 
 
 def normalize_host_input(host_or_url: str, *, use_http: bool = False) -> tuple[str, str]:

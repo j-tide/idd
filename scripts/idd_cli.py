@@ -13,7 +13,6 @@ import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 from typing import Any
 import unicodedata
@@ -22,6 +21,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from local_state import atomic_write_json, get_config_dir, get_hosts_path, load_hosts_config, remove_hosts, set_host
 from command_runner import IddError, run_cmd
 from delivery_summary import build_issue_summaries
 from git_worktrees import default_worktree_root, detect_default_branch, list_worktrees, ref_exists
@@ -35,12 +35,8 @@ from naming import (
 from forge import (  # noqa: E402
     ForgeError,
     evaluate_repo_init_settings,
-    get_config_dir,
     get_forge,
-    get_hosts_path,
-    load_hosts_config,
     normalize_host_input,
-    save_hosts_config,
     verify_host_token,
 )
 import monitor  # noqa: E402
@@ -2762,9 +2758,7 @@ def cmd_auth(args: argparse.Namespace) -> int:
         if not args.no_verify:
             username = verify_host_token(forge_type, api_base, args.token)
             user_info = f"（已校验用户：{username}）"
-        hosts = load_hosts_config()
-        hosts[host_key] = {"forge": forge_type, "api_url": api_base, "token": args.token}
-        save_hosts_config(hosts)
+        set_host(host_key, {"forge": forge_type, "api_url": api_base, "token": args.token})
         print(f"已保存 {forge_type} 主机凭据：{host_key} ({api_base}) {user_info}\n配置文件：{get_hosts_path()}")
         return 0
 
@@ -2788,11 +2782,9 @@ def cmd_auth(args: argparse.Namespace) -> int:
 
     if subcmd == "logout":
         host_key, _ = normalize_host_input(args.host)
-        hosts = load_hosts_config()
-        removed = hosts.pop(host_key, None) or hosts.pop(host_key.split(":", 1)[0], None)
+        removed = remove_hosts((host_key, host_key.split(":", 1)[0]), first_only=True)
         if not removed:
             raise IddError(f"未找到主机 `{args.host}` 的保存凭据。")
-        save_hosts_config(hosts)
         print(f"已移除主机 `{host_key}` 的凭据。")
         return 0
 
@@ -2853,17 +2845,8 @@ def _load_update_state() -> dict[str, Any]:
 
 
 def _save_update_state(state: dict[str, Any]) -> None:
-    path = get_update_state_path()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(prefix="state-", suffix=".tmp", dir=str(path.parent))
-        tmp_path = Path(tmp_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(state, handle, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, path)
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        atomic_write_json(get_update_state_path(), state)
     except OSError:
         pass
 
