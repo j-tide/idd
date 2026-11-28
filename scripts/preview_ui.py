@@ -22,7 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from local_http import LocalHTTPServer, LocalRequestHandler
+from local_http import LocalHTTPServer, LocalRequestHandler, load_page_template
 from version import get_version  # noqa: E402
 
 
@@ -290,7 +290,7 @@ class PreviewRegistry:
         return candidate, False
 
 
-PREVIEW_HTML = (SCRIPT_DIR / "web" / "preview.html").read_text(encoding="utf-8")
+PREVIEW_HTML = load_page_template("preview.html")
 
 
 class PreviewRequestHandler(LocalRequestHandler):

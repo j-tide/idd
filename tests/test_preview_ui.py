@@ -22,7 +22,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from local_http import LocalHTTPServer
+from local_http import LocalHTTPServer, load_page_template
 import preview_ui  # noqa: E402
 
 
@@ -221,6 +221,18 @@ class TestPreviewUI(unittest.TestCase):
         self.assertNotEqual(err_proc.returncode, 0)
         combined = err_proc.stdout + err_proc.stderr
         self.assertIn("找不到预览目标文件或目录", combined)
+
+    def test_both_ui_templates_inline_one_motion_definition(self) -> None:
+        web = Path(preview_ui.__file__).parent / "web"
+        properties = (web / "motion-properties.css.inc").read_text(encoding="utf-8")
+        self.assertIn("--ease-spring:", properties)
+        self.assertIn("--dur-layout:", properties)
+        for page in ("board.html", "preview.html"):
+            source = (web / page).read_text(encoding="utf-8")
+            self.assertNotIn("--ease-spring:", source)
+            rendered = load_page_template(page)
+            self.assertEqual(rendered.count(properties), 1)
+            self.assertNotIn("/* IDD shared motion properties */", rendered)
 
     def test_preview_motion_tokens_direct_manipulation_and_state_contracts(self) -> None:
         html_doc = preview_ui.PREVIEW_HTML

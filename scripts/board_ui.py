@@ -45,11 +45,11 @@ from git_worktrees import (
 from worktree_cleanup import CleanupResult, inspect_worktree, remove_merged_worktree
 import repo_registry
 import monitor  # noqa: E402
-from local_http import LocalHTTPServer, LocalRequestHandler
+from local_http import LocalHTTPServer, LocalRequestHandler, load_page_template
 from version import get_version  # noqa: E402
 
 
-BOARD_HTML = (SCRIPT_DIR / "web" / "board.html").read_text(encoding="utf-8")
+BOARD_HTML = load_page_template("board.html")
 
 
 def _apply_repo_init_for_path(repo_path: Path, *, apply: bool = True) -> dict[str, object]:

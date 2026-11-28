@@ -6,7 +6,16 @@ import errno
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+from pathlib import Path
 import sys
+
+
+def load_page_template(filename: str) -> str:
+    """Inline the shared CSS declarations so each HTTP response remains self-contained."""
+    web = Path(__file__).with_name("web")
+    template = (web / filename).read_text(encoding="utf-8")
+    motion = (web / "motion-properties.css.inc").read_text(encoding="utf-8")
+    return template.replace("/* IDD shared motion properties */\n", motion)
 
 
 _CLIENT_DISCONNECT_ERRNOS = frozenset(
