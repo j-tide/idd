@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 import os
 from pathlib import Path
 import re
@@ -1009,7 +1009,7 @@ class ForgeSnapshotCache:
         self.ttl_seconds = max(0.0, float(ttl_seconds))
         self._lock = threading.Lock()
         self._entries: dict[str, dict[str, Any]] = {}
-        self._inflight: set[str] = set()
+        self._inflight: dict[str, Future[None]] = {}
         self._epoch: int = 0
 
     def invalidate_all(self) -> None:
@@ -1019,15 +1019,20 @@ class ForgeSnapshotCache:
             self._entries.clear()
             self._inflight.clear()
 
-    def refresh_now(self, repo_paths: list[Path], *, timeout: float = 2.0) -> None:
-        """Invalidate cache, kick off parallel refreshes, and wait up to `timeout` seconds."""
-        self.invalidate_all()
-        self.warm_async(repo_paths, force_refresh=True)
-        deadline = time.monotonic() + max(0.0, timeout)
-        while time.monotonic() < deadline:
-            if not self.is_syncing():
-                break
-            time.sleep(0.03)
+    def refresh_now(
+        self, repo_paths: list[Path], *, timeout: float = 2.0, report_errors: bool = True,
+    ) -> bool:
+        """Join or start a refresh per repository and wait for this batch only."""
+        pending = []
+        for path in repo_paths:
+            main = resolve_main_worktree(path)
+            if main is not None and has_remote_origin(main):
+                pending.append(self._schedule_refresh(main, str(main.resolve())))
+        done, unfinished = wait(pending, timeout=timeout)
+        if report_errors:
+            for task in done:
+                task.result()
+        return not unfinished
 
     @staticmethod
     def _build_local_placeholder(main_worktree: Path, *, has_origin: bool, syncing: bool) -> dict[str, Any]:
@@ -1145,53 +1150,33 @@ class ForgeSnapshotCache:
                     self._entries[key] = entry
         return dict(entry)
 
-    def _refresh_in_background(self, main_worktree: Path, key: str, epoch: int) -> None:
+    def _refresh_in_background(self, main_worktree: Path, key: str, epoch: int, task: Future[None]) -> None:
+        error = None
         try:
             self._query_and_store(main_worktree, key, epoch=epoch)
-        except Exception:
-            pass
-        finally:
-            with self._lock:
-                if self._epoch == epoch:
-                    self._inflight.discard(key)
+        except Exception as exc:
+            error = exc
+        with self._lock:
+            if self._inflight.get(key) is task:
+                del self._inflight[key]
+        if error is None:
+            task.set_result(None)
+        else:
+            task.set_exception(error)
 
-    def _schedule_refresh(self, main_worktree: Path, key: str) -> None:
+    def _schedule_refresh(self, main_worktree: Path, key: str) -> Future[None]:
         with self._lock:
             if key in self._inflight:
-                return
-            self._inflight.add(key)
+                return self._inflight[key]
+            task: Future[None] = Future()
+            self._inflight[key] = task
             epoch = self._epoch
         threading.Thread(
             target=self._refresh_in_background,
-            args=(main_worktree, key, epoch),
+            args=(main_worktree, key, epoch, task),
             daemon=True,
         ).start()
-
-    def is_syncing(self) -> bool:
-        with self._lock:
-            return bool(self._inflight)
-
-    def warm_async(self, repo_paths: list[Path], *, force_refresh: bool = False) -> None:
-        """Start parallel non-blocking background forge refreshes for valid origin repos."""
-        now = time.time()
-        for raw_path in repo_paths:
-            main_wt = resolve_main_worktree(raw_path)
-            if main_wt is None:
-                continue
-            has_origin = has_remote_origin(main_wt)
-            if not has_origin:
-                continue
-            key = str(main_wt.resolve())
-            with self._lock:
-                cached = self._entries.get(key)
-                fresh = (
-                    cached is not None
-                    and not force_refresh
-                    and self.ttl_seconds > 0
-                    and (now - cached["fetched_at"]) < self.ttl_seconds
-                )
-            if not fresh:
-                self._schedule_refresh(main_wt, key)
+        return task
 
     def get(
         self,
@@ -1220,7 +1205,7 @@ class ForgeSnapshotCache:
                 res["syncing"] = inflight
                 return res
 
-        if allow_stale_async:
+        if allow_stale_async and self.ttl_seconds > 0:
             self._schedule_refresh(main_worktree, key)
             if cached is not None:
                 res = dict(cached)
@@ -1850,6 +1835,7 @@ def collect_repo_snapshot(
                     "branch": branch,
                     "issue_number": inum,
                     "last_active_ago": pulse["last_active_ago"],
+                    "last_active_ts": pulse["last_active_ts"],
                     "last_commit_sha": pulse["last_commit_sha"],
                 }
             )

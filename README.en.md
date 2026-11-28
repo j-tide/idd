@@ -43,7 +43,7 @@ When you run multiple AI coding tools at once, two bottlenecks hit immediately: 
 | **Native Experience** | Native windows, no extra lock-in | Forces a custom UI or wrapper | **Keep Claude Code, Codex, and Antigravity native** |
 | **Parallel Isolation** | Shared directory, frequent conflicts | Proprietary sandboxes or containers | **Dedicated physical Git Worktree per Issue** |
 | **Cross-Agent Handoff** | Manual copy-paste of chat history | Restricted to built-in model swaps | **On-disk `TASK/` ledger + 1-click Handoff prompt** |
-| **Global Visibility** | Check chat tabs one by one | Extra daemon & token overhead | **Zero-token frosted-glass Web radar (adaptive polling) & terminal watch** |
+| **Global Visibility** | Check chat tabs one by one | Extra daemon & token overhead | **Zero-token frosted-glass Web radar (SSE updates) & terminal watch** |
 | **Git & Merge Hygiene** | Messy merge commits or `main` edits | Local-only or platform-locked state | **GitHub & GitLab native, CI self-healing, linear Squash to `main`** |
 | **Dependencies & Footprint** | None | Heavy runtime & configuration | **0 dependencies (Python 3 stdlib + sh), zero Git hooks** |
 
@@ -71,7 +71,7 @@ IDD connects three lightweight pieces into a single loop that you drive with nat
   <tr>
     <td width="50%" valign="top">
       <h3>Low-Overhead Engine · Zero-Flicker Motion</h3>
-      Shows layout skeletons only on initial load and updates via <strong>in-place DOM reconciliation & FLIP card motion</strong>, consolidating sync status into the topbar with zero layout jump. Automatically pauses polling in background tabs, backs off serially between <code>1.2s–15s</code>, and pairs <code>porcelain v2</code> scanning with a 30s idle signature cache and server-side singleflight coalescing.
+      The board shows cached cards on reload and a skeleton on the first visit. Visible tabs share one local sampler over <strong>SSE</strong>. Cards update in place when a worktree, task, or CI result changes. Paused and hidden tabs disconnect and receive the latest snapshot on return. Local sampling follows worktree activity. GitHub/GitLab results are cached for 30 seconds by default, configurable with <code>--forge-ttl</code>.
     </td>
     <td width="50%" valign="top">
       <h3>Global Auto-Merge · 2-Round CI Self-Healing</h3>
@@ -217,7 +217,7 @@ This repository uses the `idd` skill (Issue-Driven Development) for all changes:
 
 | Command | Description |
 | :--- | :--- |
-| `idd board` / `idd ui [--current-only] [--local-only] [--port ...]` | Start the frosted-glass Web radar & 1-click handoff board (multi-view, adaptive polling, per-card cleanup, bilingual 中文 / EN) |
+| `idd board` / `idd ui [--current-only] [--local-only] [--port ...]` | Start the frosted-glass Web radar & 1-click handoff board (multi-view, SSE updates, per-card cleanup, bilingual 中文 / EN) |
 | `idd preview <target>... [--compare] [--title "..."] [--port ...]` | Launch the local prototype preview workbench (hot reload, side-by-side A/B compare, and responsive viewports) |
 | `idd watch [--current-only] [--open-only] [--once]` | Live terminal monitor for global or single-repo worktrees, tasks, and CI |
 | `idd status [-g\|--global] [--open-only] [--local-only] [--json]` | One-shot terminal summary of Open Issues, `TASK` progress, pulse, and PR/MR CI |
