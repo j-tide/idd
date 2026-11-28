@@ -1,7 +1,7 @@
 # TASK-04：工作流文档同步与全量回归验证
 
 - Issue: #79
-- Status: planned
+- Status: in_progress
 - Depends on: TASK-03
 - Test: python3 -m py_compile scripts/*.py && python3 -m unittest discover -s tests -v
 

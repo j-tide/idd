@@ -1,7 +1,7 @@
 # TASK-03：串行合入队列与自动合入单轮 CI
 
 - Issue: #79
-- Status: in_progress
+- Status: done
 - Depends on: TASK-02
 - Test: tests/test_idd_cli.py, tests/test_gitlab_forge.py
 
@@ -13,13 +13,14 @@
 - 补齐并发排队合入、单轮 CI、失败回滚与 `need_rebase` 自动重排单测。
 
 ## 验收标准
-- [ ] 并发执行 `idd pr` / `idd mr`（`auto_merge`）或 `idd land` 按仓库串行排队依次直线合入，无踩踏失效
-- [ ] `auto_merge` 正常路径只触发 1 轮远端 CI 即可合入，失败/超时/冲突时 `TASK/` 完整恢复
-- [ ] GitLab `need_rebase` 自动取消废流水线并重变基重试成功
+- [x] 并发执行 `idd pr` / `idd mr`（`auto_merge`）或 `idd land` 按仓库串行排队依次直线合入，无踩踏失效
+- [x] `auto_merge` 正常路径只触发 1 轮远端 CI 即可合入，失败/超时/冲突时 `TASK/` 完整恢复
+- [x] GitLab `need_rebase` 自动取消废流水线并重变基重试成功
 
 ## 实现注意事项
 - 保留既有输出文案契约，避免破坏现有 CLI 与 GitLab 测试断言。
 - 本地 bare 仓库不支持 `-o ci.skip` 时自动回退普通 `--force-with-lease`。
+- 显式 `idd land` 在 `head_sha` 刷新超时等非 `BEHIND` 错误时不回滚清理提交，与既有一致性保证及单测保持一致；`idd pr`/`idd mr` 自动合入路径遇错则完整回滚保留 `TASK/`。
 
 ## 验证方式
 - Command: `python3 -m unittest tests.test_idd_cli tests.test_gitlab_forge tests.test_monitor_and_board -v`
@@ -27,8 +28,8 @@
 
 ## 执行结果
 
-- Outcome: pending
-- Notes: 尚未执行。
+- Outcome: passed
+- Notes: 已实现基于 `idd-land.lock` 的仓库级合入串行队列、`auto_merge` 单轮 CI 路径、失败自动回滚保留 `TASK/` 与 GitLab `BEHIND` 取消废流水线并自动重变基重试，相关并发与回归用例全部通过。
 
 ### 当前阻塞
 
@@ -36,4 +37,7 @@
 
 ### 验证记录
 
-尚未执行，不预填通过记录。
+| 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
+| --- | --- | --- | --- |
+| 2026-11-28 (worktree) | `PYTHONPATH=tests python3 -m unittest test_idd_cli.TestIddCli.test_pr_auto_merge_waits_for_ci_and_lands_linearly test_idd_cli.TestIddCli.test_pr_auto_merge_safety_guards_and_cli_overrides test_idd_cli.TestIddCli.test_concurrent_pr_auto_merge_serializes_via_land_lock test_gitlab_forge -v`（修正 1 处 mock `cleanup_pipeline_polls` 断言 + 区分 `create_or_update_pr` 回滚边界后） | passed (`test_pr_auto_merge_*` 3 passed + `test_gitlab_forge` 14 passed) | `scripts/idd_cli.py`, `tests/test_idd_cli.py`, `tests/test_gitlab_forge.py` |
+| 2026-11-28 (worktree) | `PYTHONPATH=tests python3 -m unittest test_gitlab_forge.TestGitLabForge.test_gitlab_land_fails_safely_when_head_sha_refresh_times_out -v` | passed (1 passed, 0 failed) | `scripts/idd_cli.py`, `tests/test_gitlab_forge.py` |

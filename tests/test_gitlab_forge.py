@@ -1021,17 +1021,22 @@ class TestGitLabForge(unittest.TestCase):
                 self.assertEqual(fail_mr.returncode, 3)
                 self.assertIn("AssertionError: csv header mismatch", fail_mr.stderr)
                 self.assertTrue((wt / "TASK/1-async-land").is_dir())
+                self.assertNotIn("清理已汇总的任务记录", subprocess.check_output(["git", "-C", str(wt), "log", "-1", "--pretty=%s"], text=True))
                 self.assertEqual(state.mrs[10]["state"], "opened")
 
-                # Fix pipeline: running -> success (both initial MR and cleanup commit), then auto-lands
+                # Fix pipeline: running -> success in a single pass (cleanup commit pushed before MR create), then auto-lands
                 state.jobs[701]["status"] = "success"
                 state.pending_pipeline_polls = 2
                 state.cleanup_pipeline_polls = 2
+                state.mr_create_calls = 0
+                state.mr_put_calls = 0
                 before = state.origin_sha("main")
                 mr_res = run_idd("mr", "1")
                 self.assertIn("已开启自动准入合入（来源：全局配置）", mr_res.stdout)
                 self.assertIn("已通过 Squash Merge 直线合入 MR !10", mr_res.stdout)
                 self.assertIn("已自动勾选 Issue #1 验收标准（1 项）", mr_res.stdout)
+                self.assertEqual(state.mr_create_calls, 0)
+                self.assertEqual(state.mr_put_calls, 1)
                 after = state.origin_sha("main")
                 self.assertEqual(
                     subprocess.check_output(["git", "-C", str(repo), "rev-list", "--parents", "-n", "1", "main"], text=True).split(),
@@ -1131,6 +1136,94 @@ class TestGitLabForge(unittest.TestCase):
                         os.environ.pop("IDD_CONFIG_DIR", None)
                     else:
                         os.environ["IDD_CONFIG_DIR"] = old_cfg
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_gitlab_mr_auto_rebase_when_behind_and_concurrent_mr_serialization(self) -> None:
+        # Case 1: BEHIND during CI poll cancels stale pipeline, auto-rebases, and lands cleanly.
+        with tempfile.TemporaryDirectory() as tmp:
+            _, repo, wt, state, server, env, run_idd = self._setup_gitlab_mr_repo(tmp)
+            try:
+                env["IDD_CI_GRACE_SECONDS"] = "0"
+                env["IDD_CI_POLL_INTERVAL"] = "0.02"
+                env["IDD_LAND_SYNC_INTERVAL"] = "0.01"
+
+                run_idd("config", "auto-merge", "on")
+                state.jobs[701]["status"] = "success"
+                state.pending_pipeline_polls = 10
+                state.forced_detailed_merge_status = "need_rebase"
+
+                # Advance origin/main externally so rebase is required.
+                base_sha = state.origin_sha("main")
+                base_tree = subprocess.check_output(["git", "--git-dir", str(state.origin_dir), "rev-parse", f"{base_sha}^{{tree}}"], text=True).strip()
+                ext_sha = subprocess.check_output(
+                    ["git", "--git-dir", str(state.origin_dir), "commit-tree", base_tree, "-p", base_sha, "-m", "feat: upstream change"],
+                    text=True,
+                ).strip()
+                subprocess.check_call(["git", "--git-dir", str(state.origin_dir), "update-ref", "refs/heads/main", ext_sha])
+
+                def _clear_behind() -> None:
+                    while not state.canceled_pipeline_ids:
+                        threading.Event().wait(0.02)
+                    state.forced_detailed_merge_status = None
+                    state.pending_pipeline_polls = 2
+
+                t = threading.Thread(target=_clear_behind, daemon=True)
+                t.start()
+                res = run_idd("mr", "1")
+                t.join(timeout=5)
+                self.assertIn("因远端主线前移需要 Rebase（BEHIND）", res.stdout)
+                self.assertIn("已通过 Squash Merge 直线合入 MR !10", res.stdout)
+                self.assertTrue(state.canceled_pipeline_ids)
+                self.assertEqual(state.mrs[10]["state"], "merged")
+                self.assertFalse((repo / "TASK/1-async-land").exists())
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        # Case 2: Two parallel worktrees calling `idd mr` on the same GitLab repo serialize via idd-land.lock.
+        with tempfile.TemporaryDirectory() as tmp:
+            _, repo, wt1, state, server, env, run_idd = self._setup_gitlab_mr_repo(tmp)
+            try:
+                env["IDD_CI_GRACE_SECONDS"] = "0"
+                env["IDD_CI_POLL_INTERVAL"] = "0.02"
+                env["IDD_LAND_SYNC_INTERVAL"] = "0.01"
+
+                state.issues[2] = {
+                    "iid": 2,
+                    "title": "feat(ui): 第二并行需求",
+                    "description": "## 验收标准\n\n- [ ] 完成第二需求\n",
+                    "labels": ["feat"],
+                    "state": "opened",
+                    "web_url": f"{state.base_url}/dept/sub/demo/-/issues/2",
+                }
+                wt2 = Path(json.loads(run_idd("start", "2", "--slug", "second-task", "--json").stdout)["worktree"])
+                subprocess.run(["git", "-C", str(wt2), "config", "user.name", "Tester"], check=True)
+                subprocess.run(["git", "-C", str(wt2), "config", "user.email", "test@example.com"], check=True)
+                tdir2 = wt2 / "TASK/2-second-task"
+                tdir2.mkdir(parents=True)
+                (tdir2 / "TASK-01-impl.md").write_text("# TASK-01：第二需求\n\n- Issue: #2\n- Status: done\n- Depends on: none\n- Test: pytest\n", encoding="utf-8")
+                (wt2 / "second.py").write_text("ok = True\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(wt2), "add", "."], check=True)
+                subprocess.run(["git", "-C", str(wt2), "commit", "-m", "feat: 第二需求"], check=True, capture_output=True)
+
+                run_idd("config", "auto-merge", "on")
+                state.jobs[701]["status"] = "success"
+                state.pending_pipeline_polls = 3
+
+                p1 = subprocess.Popen([sys.executable, str(IDD_BIN), "mr"], cwd=str(wt1), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                p2 = subprocess.Popen([sys.executable, str(IDD_BIN), "mr"], cwd=str(wt2), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                out1, err1 = p1.communicate(timeout=30)
+                out2, err2 = p2.communicate(timeout=30)
+                self.assertEqual(p1.returncode, 0, err1 or out1)
+                self.assertEqual(p2.returncode, 0, err2 or out2)
+                self.assertIn("排队等待中", out1 + out2)
+                self.assertEqual(state.canceled_pipeline_ids, [])
+                self.assertTrue((repo / "app.py").is_file())
+                self.assertTrue((repo / "second.py").is_file())
+                self.assertEqual(state.issues[1]["state"], "closed")
+                self.assertEqual(state.issues[2]["state"], "closed")
             finally:
                 server.shutdown()
                 server.server_close()

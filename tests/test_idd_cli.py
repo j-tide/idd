@@ -1654,6 +1654,8 @@ class TestIddCli(unittest.TestCase):
             self.assertFalse((h.repo / "TASK/42-export-csv").exists())
             final_state = h.load_state()
             self.assertEqual(final_state["prs"]["10"]["state"], "MERGED")
+            # Single-pass CI: cleanup happened before PR creation so cleanup_pending_polls was never triggered via pr edit.
+            self.assertEqual(final_state.get("cleanup_pending_polls"), 2)
             self.assertIn("- [x] 支持导出 CSV", final_state["issues"]["42"]["body"])
 
         # Case 2: Repo with no remote CI (NONE) allows auto-merge
@@ -1707,6 +1709,7 @@ class TestIddCli(unittest.TestCase):
             self.assertEqual(fail_res.returncode, 3)
             self.assertIn("AssertionError: boom", fail_res.stderr)
             self.assertTrue((wt / "TASK/42-export-csv").is_dir(), "TASK/ must remain intact when CI fails")
+            self.assertNotIn("清理已汇总的任务记录", subprocess.check_output(["git", "-C", str(wt), "log", "-1", "--pretty=%s"], text=True))
             self.assertEqual(h.load_state()["prs"]["10"]["state"], "OPEN")
 
             # Fix code, turn CI green, re-run `idd pr` -> updates PR and auto-lands
@@ -2338,6 +2341,78 @@ class TestIddCli(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(child_ok.returncode, 0, child_ok.stderr)
+
+    def test_concurrent_pr_auto_merge_serializes_via_land_lock(self) -> None:
+        fast_env = {
+            "IDD_CI_GRACE_SECONDS": "0",
+            "IDD_CI_POLL_INTERVAL": "0.02",
+            "IDD_LAND_SYNC_INTERVAL": "0.01",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            h.state["issues"]["43"] = {
+                "number": 43,
+                "title": "feat(auth): 支持令牌刷新",
+                "body": "## 验收标准\n\n- [ ] 支持令牌刷新\n",
+                "labels": ["feat"],
+                "state": "OPEN",
+                "url": "https://github.com/acme/demo/issues/43",
+            }
+            h.state["default_checks"] = [{"name": "ci / test", "status": "IN_PROGRESS", "conclusion": ""}]
+            h.state["pending_check_polls"] = 4
+            h.state["settled_checks"] = [{"name": "ci / test", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+            h.save_state()
+
+            h.run_idd("config", "auto-merge", "on", extra_env=fast_env)
+            wt1 = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json", extra_env=fast_env).stdout)["worktree"])
+            wt2 = Path(json.loads(h.run_idd("start", "43", "--slug", "token-refresh", "--json", extra_env=fast_env).stdout)["worktree"])
+            for wt, slug, fname, msg in (
+                (wt1, "42-export-csv", "export.py", "feat: 导出 CSV"),
+                (wt2, "43-token-refresh", "auth.py", "feat: 刷新令牌"),
+            ):
+                subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+                subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+                self._write_task(wt, slug, 1, msg, "done")
+                (wt / fname).write_text("ok = True\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+                subprocess.run(["git", "-C", str(wt), "commit", "-m", msg], check=True, capture_output=True)
+
+            env = dict(os.environ)
+            env["PATH"] = f"{h.bin_dir}{os.pathsep}{env.get('PATH', '')}"
+            env["FAKE_GH_STATE"] = str(h.state_file)
+            env["FAKE_GH_ORIGIN"] = str(h.origin)
+            env["IDD_NO_AUTO_UPDATE"] = "1"
+            env["IDD_CONFIG_DIR"] = str(h.root / "idd-config")
+            env.pop("IDD_WORKTREE_ROOT", None)
+            env.update(fast_env)
+            p1 = subprocess.Popen(
+                [sys.executable, str(IDD_BIN), "pr"],
+                cwd=str(wt1),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            p2 = subprocess.Popen(
+                [sys.executable, str(IDD_BIN), "pr"],
+                cwd=str(wt2),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            out1, err1 = p1.communicate(timeout=30)
+            out2, err2 = p2.communicate(timeout=30)
+            self.assertEqual(p1.returncode, 0, err1 or out1)
+            self.assertEqual(p2.returncode, 0, err2 or out2)
+            self.assertIn("排队等待中", out1 + out2)
+            self.assertTrue((h.repo / "export.py").is_file())
+            self.assertTrue((h.repo / "auth.py").is_file())
+            self.assertFalse((h.repo / "TASK/42-export-csv").exists())
+            self.assertFalse((h.repo / "TASK/43-token-refresh").exists())
+            final_state = h.load_state()
+            self.assertEqual(final_state["issues"]["42"]["state"], "CLOSED")
+            self.assertEqual(final_state["issues"]["43"]["state"], "CLOSED")
 
 
 if __name__ == "__main__":
