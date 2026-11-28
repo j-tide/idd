@@ -253,6 +253,8 @@ feat · fix · refactor · perf · docs · test · ci · chore
 
 ## Development, Testing & Releases
 
+For module ownership, state, and regression checks, see the [architecture map and decisions](references/architecture.md) (in Chinese).
+
 Zero external dependencies—run the Python 3 standard-library test suite directly, with [SKILL.md](SKILL.md) (`metadata.version`) as the single source of truth:
 
 ```bash

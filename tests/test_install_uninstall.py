@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 import urllib.request
 
@@ -130,7 +131,12 @@ class TestInstallAndUninstall(unittest.TestCase):
                     env=ver_env, cwd=skill_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 ) as server:
                     try:
-                        banner = server.stdout.readline()
+                        startup_deadline = threading.Timer(10, server.kill)
+                        startup_deadline.start()
+                        try:
+                            banner = server.stdout.readline()
+                        finally:
+                            startup_deadline.cancel()
                         url = re.search(r"http://127\.0\.0\.1:\d+", banner)
                         self.assertIsNotNone(url, banner)
                         with urllib.request.urlopen(url.group(), timeout=5) as response:
