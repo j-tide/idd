@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
-import json
 import os
 from pathlib import Path
 import re
@@ -25,13 +24,30 @@ from forge import (
     get_forge,
     inspect_remote_origin,
 )
-from local_state import atomic_write_json, config_file_lock, get_config_dir, get_hosts_path, load_hosts_config
-from git_worktrees import detect_default_branch, has_remote_origin, list_worktrees, read_git
+from local_state import (
+    get_config_path,
+    get_global_auto_merge,
+    get_hosts_path,
+    load_hosts_config,
+)
+from repo_registry import (
+    get_repo_init_meta,
+    get_repos_path,
+    load_registered_repos,
+    register_repo,
+    set_repo_init_meta,
+)
+from git_worktrees import (
+    detect_default_branch,
+    has_remote_origin,
+    list_worktrees,
+    main_worktree_and_inventory,
+    read_git,
+    resolve_main_worktree,
+)
 import task_status
 
 
-_REPOS_LOCK = threading.Lock()
-_CONFIG_LOCK = threading.Lock()
 _IGNORED_GIT_ERROR = (OSError, subprocess.SubprocessError)
 _CACHE_LOCK = threading.Lock()
 _PACKED_REFS_CACHE: dict[str, tuple[tuple[int, int, int] | None, dict[str, str]]] = {}
@@ -51,67 +67,6 @@ def invalidate_monitor_caches() -> None:
         _REPO_META_CACHE.clear()
         _WORKTREE_PULSE_CACHE.clear()
         _TASK_GIT_META_CACHE.clear()
-
-
-def get_repos_path() -> Path:
-    """Return path to the global active-repository registry JSON file."""
-    return get_config_dir() / "repos.json"
-
-
-def get_config_path() -> Path:
-    """Return path to the global IDD settings JSON file."""
-    return get_config_dir() / "config.json"
-
-
-def _normalize_global_config(raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, dict):
-        return {"auto_merge": False}
-    normalized = dict(raw)
-    normalized["auto_merge"] = bool(raw.get("auto_merge", False))
-    return normalized
-
-
-def _read_raw_config_unlocked() -> dict[str, Any]:
-    path = get_config_path()
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"auto_merge": False}
-    return _normalize_global_config(raw)
-
-
-def _save_config_unlocked(data: dict[str, Any]) -> dict[str, Any]:
-    normalized = _normalize_global_config(data)
-    atomic_write_json(get_config_path(), normalized)
-    return normalized
-
-
-def load_global_config() -> dict[str, Any]:
-    """Load global IDD configuration (`~/.config/idd/config.json`) with safe defaults."""
-    with _CONFIG_LOCK:
-        with config_file_lock(get_config_dir() / ".config.lock"):
-            return _read_raw_config_unlocked()
-
-
-def save_global_config(data: dict[str, Any]) -> dict[str, Any]:
-    """Atomically persist global IDD configuration."""
-    with _CONFIG_LOCK:
-        with config_file_lock(get_config_dir() / ".config.lock"):
-            return _save_config_unlocked(data)
-
-
-def get_global_auto_merge() -> bool:
-    """Return the global `auto_merge` switch (default False)."""
-    return bool(load_global_config().get("auto_merge", False))
-
-
-def set_global_auto_merge(enabled: bool) -> dict[str, Any]:
-    """Update and persist the global `auto_merge` switch."""
-    with _CONFIG_LOCK:
-        with config_file_lock(get_config_dir() / ".config.lock"):
-            cfg = _read_raw_config_unlocked()
-            cfg["auto_merge"] = bool(enabled)
-            return _save_config_unlocked(cfg)
 
 
 def _stat_sig(path: Path) -> tuple[int, int, int] | None:
@@ -234,26 +189,6 @@ def _read_ref_oid_fast(common_dir: Path | None, ref_name: str, _depth: int = 0) 
     return False, ""
 
 
-def _resolve_main_worktree_and_list_ro(path: Path) -> tuple[Path | None, list[dict[str, str]]]:
-    """Return `(canonical_main_worktree, all_worktrees)` using a single `git worktree list` call."""
-    target = path.expanduser()
-    if not target.is_dir():
-        return None, []
-    try:
-        worktrees = list_worktrees(target, timeout=10.0)
-    except ValueError:
-        return None, []
-    if not worktrees:
-        return None, []
-    return Path(worktrees[0]["path"]).resolve(), worktrees
-
-
-def resolve_main_worktree_ro(path: Path) -> Path | None:
-    """Return canonical main worktree path if `path` resides inside a Git repository, else None."""
-    main_wt, _ = _resolve_main_worktree_and_list_ro(path)
-    return main_wt
-
-
 def _detect_repo_meta_and_origin_cached(main_worktree: Path) -> tuple[bool, str, Any, str]:
     """Return `(has_origin, default_branch, remote_spec, inferred_forge)` cached by git config/ref signatures."""
     _, common_dir = _resolve_git_dirs_fast(main_worktree)
@@ -292,265 +227,6 @@ def _detect_repo_meta_and_origin_cached(main_worktree: Path) -> tuple[bool, str,
                 _REPO_META_CACHE.clear()
             _REPO_META_CACHE[key] = (sig, val)
     return val
-
-
-# ---------------------------------------------------------------------------
-# Global repository registry (`~/.config/idd/repos.json`)
-# ---------------------------------------------------------------------------
-
-
-def _save_repos_unlocked(entries: list[dict[str, Any]]) -> None:
-    try:
-        atomic_write_json(get_repos_path(), {"repos": entries})
-    except OSError:
-        pass
-
-
-def _read_raw_repos_unlocked() -> list[dict[str, Any]]:
-    path = get_repos_path()
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    items = raw.get("repos") if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
-    if not isinstance(items, list):
-        return []
-    result: list[dict[str, Any]] = []
-    for item in items:
-        if isinstance(item, dict) and isinstance(item.get("path"), str) and item["path"].strip():
-            result.append(item)
-    return result
-
-
-def _copy_repo_init_fields(src: dict[str, Any], dst: dict[str, Any]) -> None:
-    """Copy persisted `repo_init_*` metadata fields from `src` to `dst` when present."""
-    existing_state = src.get("repo_init_state")
-    if isinstance(existing_state, str) and existing_state:
-        dst["repo_init_state"] = existing_state
-    mismatches = src.get("repo_init_mismatches")
-    if isinstance(mismatches, list):
-        cleaned = [str(m) for m in mismatches if isinstance(m, str) and m]
-        if cleaned:
-            dst["repo_init_mismatches"] = cleaned
-    err = src.get("repo_init_error")
-    if isinstance(err, str) and err:
-        dst["repo_init_error"] = err
-
-
-def load_registered_repos(*, prune_missing: bool = True) -> list[dict[str, Any]]:
-    """Load registered repository entries sorted by recency, optionally pruning stale paths."""
-    with _REPOS_LOCK:
-        with config_file_lock(get_config_dir() / ".repos.lock"):
-            raw_items = _read_raw_repos_unlocked()
-            seen: dict[str, dict[str, Any]] = {}
-            dirty = False
-
-            for item in raw_items:
-                raw_path = item["path"].strip()
-                try:
-                    resolved = Path(raw_path).expanduser().resolve()
-                except OSError:
-                    dirty = True
-                    continue
-                key = str(resolved)
-                exists_git = resolved.is_dir() and (resolved / ".git").exists()
-                if prune_missing and not exists_git:
-                    dirty = True
-                    continue
-                ts = float(item.get("last_seen_at") or 0.0)
-                prev = seen.get(key)
-                if prev is not None:
-                    dirty = True
-                    if ts <= float(prev.get("last_seen_at") or 0.0):
-                        continue
-                elif key != raw_path:
-                    dirty = True
-                entry_out: dict[str, Any] = {
-                    "path": key,
-                    "name": str(item.get("name") or resolved.name),
-                    "last_seen_at": ts,
-                }
-                _copy_repo_init_fields(item, entry_out)
-                seen[key] = entry_out
-
-            entries = sorted(seen.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
-            if dirty:
-                _save_repos_unlocked(entries)
-            return entries
-
-
-def register_repo(main_worktree: Path, *, min_touch_interval: float = 0.0) -> dict[str, Any]:
-    """Register or touch a repository main worktree in `repos.json`."""
-    resolved = main_worktree.expanduser().resolve()
-    key = str(resolved)
-    now = time.time()
-    entry: dict[str, Any] = {"path": key, "name": resolved.name, "last_seen_at": now}
-
-    with _REPOS_LOCK:
-        with config_file_lock(get_config_dir() / ".repos.lock"):
-            raw_items = _read_raw_repos_unlocked()
-            by_path: dict[str, dict[str, Any]] = {}
-            needs_cleanup = False
-            for item in raw_items:
-                try:
-                    p = Path(item["path"]).expanduser().resolve()
-                except OSError:
-                    needs_cleanup = True
-                    continue
-                if p.is_dir() and (p / ".git").exists():
-                    p_str = str(p)
-                    if p_str != item["path"] or p_str in by_path:
-                        needs_cleanup = True
-                    rec: dict[str, Any] = {
-                        "path": p_str,
-                        "name": str(item.get("name") or p.name),
-                        "last_seen_at": float(item.get("last_seen_at") or 0.0),
-                    }
-                    _copy_repo_init_fields(item, rec)
-                    by_path[p_str] = rec
-                else:
-                    needs_cleanup = True
-            prev_entry = by_path.get(key)
-            if (
-                prev_entry is not None
-                and not needs_cleanup
-                and min_touch_interval > 0.0
-                and (now - float(prev_entry.get("last_seen_at") or 0.0)) < min_touch_interval
-            ):
-                return dict(prev_entry)
-            if prev_entry:
-                _copy_repo_init_fields(prev_entry, entry)
-            by_path[key] = entry
-            entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
-            _save_repos_unlocked(entries)
-    return entry
-
-
-def get_repo_init_meta(main_worktree: Path) -> dict[str, Any]:
-    """Return persisted repo merge-policy status `{'state', 'mismatches', 'error'}`."""
-    key = str(main_worktree.expanduser().resolve())
-    with _REPOS_LOCK:
-        with config_file_lock(get_config_dir() / ".repos.lock"):
-            raw_items = _read_raw_repos_unlocked()
-        for item in raw_items:
-            try:
-                p = str(Path(item["path"]).expanduser().resolve())
-            except OSError:
-                continue
-            if p == key:
-                raw_state = item.get("repo_init_state")
-                state = raw_state if isinstance(raw_state, str) else ""
-                if state == "prompted":
-                    state = "pending"
-                raw_mismatches = item.get("repo_init_mismatches")
-                mismatches = (
-                    [str(m) for m in raw_mismatches if isinstance(m, str) and m]
-                    if isinstance(raw_mismatches, list)
-                    else []
-                )
-                raw_err = item.get("repo_init_error")
-                error = raw_err if isinstance(raw_err, str) else ""
-                return {"state": state, "mismatches": mismatches, "error": error}
-    return {"state": "", "mismatches": [], "error": ""}
-
-
-def set_repo_init_meta(
-    main_worktree: Path,
-    state: str,
-    *,
-    mismatches: list[str] | None = None,
-    error: str = "",
-) -> None:
-    """Persist `repo_init_state`, `repo_init_mismatches`, and `repo_init_error` in `repos.json`."""
-    resolved = main_worktree.expanduser().resolve()
-    key = str(resolved)
-    now = time.time()
-    normalized = "pending" if state == "prompted" else state
-    with _REPOS_LOCK:
-        with config_file_lock(get_config_dir() / ".repos.lock"):
-            raw_items = _read_raw_repos_unlocked()
-            by_path: dict[str, dict[str, Any]] = {}
-            for item in raw_items:
-                try:
-                    p = Path(item["path"]).expanduser().resolve()
-                except OSError:
-                    continue
-                if p.is_dir() and (p / ".git").exists():
-                    rec: dict[str, Any] = {
-                        "path": str(p),
-                        "name": str(item.get("name") or p.name),
-                        "last_seen_at": float(item.get("last_seen_at") or 0.0),
-                    }
-                    _copy_repo_init_fields(item, rec)
-                    by_path[str(p)] = rec
-            target = by_path.get(key) or {"path": key, "name": resolved.name, "last_seen_at": now}
-            if normalized:
-                target["repo_init_state"] = normalized
-            else:
-                target.pop("repo_init_state", None)
-            if normalized == "aligned" or not normalized:
-                target.pop("repo_init_mismatches", None)
-                target.pop("repo_init_error", None)
-            else:
-                cleaned_mm = [str(m) for m in (mismatches or []) if isinstance(m, str) and m]
-                if cleaned_mm:
-                    target["repo_init_mismatches"] = cleaned_mm
-                else:
-                    target.pop("repo_init_mismatches", None)
-                if error:
-                    target["repo_init_error"] = error
-                else:
-                    target.pop("repo_init_error", None)
-            by_path[key] = target
-            entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
-            _save_repos_unlocked(entries)
-
-
-def get_repo_init_state(main_worktree: Path) -> str:
-    """Return persisted `repo_init_state` ('aligned', 'pending', or '') for a repository."""
-    return str(get_repo_init_meta(main_worktree)["state"])
-
-
-def set_repo_init_state(main_worktree: Path, state: str) -> None:
-    """Persist `repo_init_state` for a repository main worktree in `repos.json`."""
-    set_repo_init_meta(main_worktree, state)
-
-
-def resolve_auto_merge(main_worktree: Path | None = None) -> dict[str, Any]:
-    """Resolve effective global `auto_merge` setting from `~/.config/idd/config.json`."""
-    del main_worktree  # Auto-merge is strictly global; keep optional param for caller compatibility.
-    return {
-        "enabled": bool(get_global_auto_merge()),
-        "source": "global",
-    }
-
-
-def unregister_repo(target: Path) -> bool:
-    """Remove a repository (matched by path or containing main worktree) from `repos.json`."""
-    resolved = target.expanduser().resolve()
-    candidates = {str(resolved)}
-    main_wt = resolve_main_worktree_ro(resolved)
-    if main_wt is not None:
-        candidates.add(str(main_wt))
-
-    with _REPOS_LOCK:
-        with config_file_lock(get_config_dir() / ".repos.lock"):
-            raw_items = _read_raw_repos_unlocked()
-            kept: list[dict[str, Any]] = []
-            removed = False
-            for item in raw_items:
-                try:
-                    p_str = str(Path(item["path"]).expanduser().resolve())
-                except OSError:
-                    p_str = item["path"].strip()
-                if p_str in candidates:
-                    removed = True
-                else:
-                    kept.append(item)
-            if removed:
-                kept.sort(key=lambda r: (-float(r.get("last_seen_at") or 0.0), str(r.get("name", ""))))
-                _save_repos_unlocked(kept)
-            return removed
 
 
 def _probe_gh_cli_status() -> tuple[bool, str]:
@@ -637,12 +313,12 @@ def collect_auth_hosts_status(*, root: Path | None = None, global_mode: bool = T
     saved_hosts = load_hosts_config()
     repo_paths: list[Path] = []
     if not global_mode and root is not None:
-        m = resolve_main_worktree_ro(root)
+        m = resolve_main_worktree(root)
         if m is not None:
             repo_paths.append(m)
     else:
         if root is not None:
-            m = resolve_main_worktree_ro(root)
+            m = resolve_main_worktree(root)
             if m is not None:
                 register_repo(m)
         repo_paths = [Path(rec["path"]) for rec in load_registered_repos(prune_missing=True)]
@@ -1499,7 +1175,7 @@ class ForgeSnapshotCache:
         """Start parallel non-blocking background forge refreshes for valid origin repos."""
         now = time.time()
         for raw_path in repo_paths:
-            main_wt = resolve_main_worktree_ro(raw_path)
+            main_wt = resolve_main_worktree(raw_path)
             if main_wt is None:
                 continue
             has_origin = has_remote_origin(main_wt)
@@ -1999,7 +1675,7 @@ def collect_repo_snapshot(
         main_wt = Path(_prelisted_worktrees[0]["path"]).resolve()
         all_worktrees = _prelisted_worktrees
     else:
-        main_wt, all_worktrees = _resolve_main_worktree_and_list_ro(resolved)
+        main_wt, all_worktrees = main_worktree_and_inventory(resolved)
 
     remote_spec = None
     inferred_forge = "local"
@@ -2266,7 +1942,7 @@ def collect_repo_snapshot(
         if (main_wt is not None and has_origin)
         else {"state": "local", "mismatches": [], "error": ""}
     )
-    auto_merge_meta = resolve_auto_merge(main_wt)
+    auto_merge_meta = {"enabled": get_global_auto_merge(), "source": "global"}
 
     return {
         "repo_name": repo_name,
@@ -2662,7 +2338,7 @@ def collect_global_snapshot(
     """Aggregate live status snapshots across all registered repositories on this machine."""
     prelisted_worktrees: dict[str, list[dict[str, str]]] = {}
     if current_cwd is not None:
-        cur_main, cur_wts = _resolve_main_worktree_and_list_ro(current_cwd)
+        cur_main, cur_wts = main_worktree_and_inventory(current_cwd)
         if cur_main is not None:
             prelisted_worktrees[str(cur_main)] = cur_wts
             register_repo(cur_main, min_touch_interval=60.0 if allow_stale_async else 0.0)

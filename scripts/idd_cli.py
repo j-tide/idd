@@ -21,16 +21,37 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from local_state import atomic_write_json, get_config_dir, get_hosts_path, load_hosts_config, remove_hosts, set_host
+from local_state import (
+    atomic_write_json,
+    get_config_dir,
+    get_config_path,
+    get_global_auto_merge,
+    get_hosts_path,
+    load_hosts_config,
+    remove_hosts,
+    set_global_auto_merge,
+    set_host,
+)
 from command_runner import IddError, run_cmd
 from delivery_summary import build_issue_summaries
-from git_worktrees import default_worktree_root, detect_default_branch, list_worktrees, ref_exists
+from git_worktrees import (
+    default_worktree_root,
+    detect_default_branch,
+    list_worktrees,
+    ref_exists,
+    resolve_main_worktree,
+)
 from repository_lock import MAIN_GIT_LOCK, repo_file_lock
 from worktree_cleanup import cleanup_scope_error, remove_merged_worktree
 from naming import (
-    ALLOWED_TYPES, MAX_ISSUE_SCOPE_LEN,
-    infer_prefix_from_labels, infer_prefix_from_title,
-    slug_source_from_issue_title, slugify, validate_and_format_issue_title, validate_branch_name,
+    ALLOWED_TYPES,
+    MAX_ISSUE_SCOPE_LEN,
+    infer_prefix_from_labels,
+    infer_prefix_from_title,
+    slug_source_from_issue_title,
+    slugify,
+    validate_and_format_issue_title,
+    validate_branch_name,
 )
 from forge import (  # noqa: E402
     ForgeError,
@@ -39,6 +60,7 @@ from forge import (  # noqa: E402
     normalize_host_input,
     verify_host_token,
 )
+import repo_registry
 import monitor  # noqa: E402
 import task_status  # noqa: E402
 from version import get_version  # noqa: E402
@@ -96,7 +118,7 @@ def get_repo_info(cwd: Path, *, register: bool = True) -> RepoInfo:
 
     main_worktree = Path(worktrees[0]["path"]).resolve()
     if register:
-        monitor.register_repo(main_worktree)
+        repo_registry.register_repo(main_worktree)
     top_proc = run_cmd(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"])
     current_worktree = Path(top_proc.stdout.strip()).resolve()
 
@@ -1003,7 +1025,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     use_global = bool(args.global_mode)
     if not use_global and not explicit_root:
-        if monitor.resolve_main_worktree_ro(root) is None and not (root / "TASK").is_dir():
+        if resolve_main_worktree(root) is None and not (root / "TASK").is_dir():
             use_global = True
 
     if use_global:
@@ -1044,7 +1066,7 @@ def cmd_board(args: argparse.Namespace) -> int:
     root: Path | None = None
     if not global_mode:
         root = (args.root or Path.cwd()).resolve()
-        if monitor.resolve_main_worktree_ro(root) is None and not (root / "TASK").is_dir():
+        if resolve_main_worktree(root) is None and not (root / "TASK").is_dir():
             raise IddError(f"当前路径既不是 Git 仓库，也不存在 TASK/ 目录：{root}")
     return board_ui.run_board_server(
         host=args.host,
@@ -1080,7 +1102,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     root: Path | None = None
     if not global_mode:
         root = (args.root or Path.cwd()).resolve()
-        if monitor.resolve_main_worktree_ro(root) is None and not (root / "TASK").is_dir():
+        if resolve_main_worktree(root) is None and not (root / "TASK").is_dir():
             raise IddError(f"当前路径既不是 Git 仓库，也不存在 TASK/ 目录：{root}")
     return monitor.run_watch_loop(
         root=root,
@@ -1098,12 +1120,12 @@ def cmd_repos(args: argparse.Namespace) -> int:
     now = time.time()
 
     if subcmd == "list":
-        entries = monitor.load_registered_repos(prune_missing=True)
-        payload = {"repos_config_path": str(monitor.get_repos_path()), "repos": entries}
+        entries = repo_registry.load_registered_repos(prune_missing=True, required=True)
+        payload = {"repos_config_path": str(repo_registry.get_repos_path()), "repos": entries}
         if args.json:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
-        lines = [f"全局仓库索引：{monitor.get_repos_path()}"]
+        lines = [f"全局仓库索引：{repo_registry.get_repos_path()}"]
         if not entries:
             lines.append("- 暂无已注册仓库（可在仓库内运行 `idd start`、`idd status` 或 `idd repos add .`）。")
         else:
@@ -1121,10 +1143,10 @@ def cmd_repos(args: argparse.Namespace) -> int:
         hints: list[str] = []
         auto_apply = not bool(getattr(args, "no_repo_init", False))
         for raw in args.paths:
-            main_wt = monitor.resolve_main_worktree_ro(Path(raw))
+            main_wt = resolve_main_worktree(Path(raw))
             if main_wt is None:
                 raise IddError(f"路径不是有效的 Git 仓库：{raw}")
-            entry = monitor.register_repo(main_wt)
+            entry = repo_registry.register_repo(main_wt, required=True)
             has_origin = run_cmd(["git", "-C", str(main_wt), "remote", "get-url", "origin"], check=False).returncode == 0
             hint = _maybe_check_first_time_repo_init(main_wt, has_origin=has_origin, auto_apply=auto_apply)
             if hint:
@@ -1143,7 +1165,7 @@ def cmd_repos(args: argparse.Namespace) -> int:
 
     if subcmd == "remove":
         target = Path(args.path)
-        removed = monitor.unregister_repo(target)
+        removed = repo_registry.unregister_repo(target)
         if not removed:
             raise IddError(f"未在全局索引中找到仓库：{args.path}")
         if args.json:
@@ -1153,8 +1175,8 @@ def cmd_repos(args: argparse.Namespace) -> int:
         return 0
 
     if subcmd == "prune":
-        before = monitor.load_registered_repos(prune_missing=False)
-        after = monitor.load_registered_repos(prune_missing=True)
+        before = repo_registry.load_registered_repos(prune_missing=False, required=True)
+        after = repo_registry.load_registered_repos(prune_missing=True, required=True)
         removed_count = max(0, len(before) - len(after))
         if args.json:
             print(json.dumps({"removed_count": removed_count, "remaining": len(after)}, ensure_ascii=False, indent=2))
@@ -1175,7 +1197,7 @@ def _maybe_check_first_time_repo_init(
     """Probe remote merge policy once per repository and auto-apply or mark pending."""
     if not has_origin:
         return None
-    prev_meta = monitor.get_repo_init_meta(main_worktree)
+    prev_meta = repo_registry.get_repo_init_meta(main_worktree)
     if prev_meta["state"] in ("aligned", "pending"):
         return None
     try:
@@ -1186,7 +1208,7 @@ def _maybe_check_first_time_repo_init(
 
     aligned, mismatches = evaluate_repo_init_settings(result)
     if aligned:
-        monitor.set_repo_init_meta(main_worktree, "aligned")
+        repo_registry.set_repo_init_meta(main_worktree, "aligned")
         return None
 
     forge_type = str(result.get("forge") or "github")
@@ -1199,7 +1221,7 @@ def _maybe_check_first_time_repo_init(
     )
 
     if not auto_apply:
-        monitor.set_repo_init_meta(main_worktree, "pending", mismatches=mismatches)
+        repo_registry.set_repo_init_meta(main_worktree, "pending", mismatches=mismatches)
         message = (
             f"💡 首次接管提示：已跳过自动初始化 {forge_name} 仓库线性 Squash 策略（{'、'.join(mismatches)}）。\n"
             f"   已标记为待初始化，可在 `idd ui` 一键执行或稍后运行 `idd repo-init --apply` 锁定{policy_desc}。"
@@ -1217,7 +1239,7 @@ def _maybe_check_first_time_repo_init(
         applied_result = active_forge.repo_init(apply=True)
     except Exception as exc:
         err_msg = str(exc)
-        monitor.set_repo_init_meta(main_worktree, "pending", mismatches=mismatches, error=err_msg)
+        repo_registry.set_repo_init_meta(main_worktree, "pending", mismatches=mismatches, error=err_msg)
         message = (
             f"⚠️ 首次接管自动执行 `idd repo-init --apply` 未完成（{err_msg}）；"
             f"已标记为待初始化，可在 `idd ui` 点击重试或稍后手动运行 `idd repo-init --apply`。"
@@ -1234,7 +1256,7 @@ def _maybe_check_first_time_repo_init(
 
     aligned_after, remaining = evaluate_repo_init_settings(applied_result)
     if aligned_after:
-        monitor.set_repo_init_meta(main_worktree, "aligned")
+        repo_registry.set_repo_init_meta(main_worktree, "aligned")
         return {
             "status": "applied",
             "forge": forge_type,
@@ -1244,7 +1266,7 @@ def _maybe_check_first_time_repo_init(
             "message": f"✅ 首次接管已自动初始化 {forge_name} 仓库线性 Squash 策略与提交模板。",
         }
 
-    monitor.set_repo_init_meta(main_worktree, "pending", mismatches=remaining)
+    repo_registry.set_repo_init_meta(main_worktree, "pending", mismatches=remaining)
     message = (
         f"⚠️ 首次接管已尝试执行 `idd repo-init --apply`，但仍有未对齐项（{'、'.join(remaining)}）；"
         f"已在 `idd ui` 保留待初始化提示，可随时点击重试。"
@@ -1562,7 +1584,6 @@ def cmd_pr(args: argparse.Namespace) -> int:
     if getattr(args, "draft", False) and getattr(args, "auto_merge", False):
         raise IddError("不能同时使用 `--draft` 与 `--auto-merge`。")
 
-    am_cfg = monitor.resolve_auto_merge()
     if getattr(args, "no_auto_merge", False):
         effective_auto_merge = False
         am_source = "cli"
@@ -1570,7 +1591,7 @@ def cmd_pr(args: argparse.Namespace) -> int:
         effective_auto_merge = True
         am_source = "cli"
     else:
-        effective_auto_merge = bool(am_cfg["enabled"])
+        effective_auto_merge = get_global_auto_merge()
         am_source = "global"
 
     forge = get_forge(repo.main_worktree)
@@ -2659,7 +2680,7 @@ def cmd_repo_init(args: argparse.Namespace) -> int:
     forge = get_forge(repo.main_worktree)
     result = forge.repo_init(apply=args.apply)
     aligned, mismatches = evaluate_repo_init_settings(result)
-    monitor.set_repo_init_meta(
+    repo_registry.set_repo_init_meta(
         repo.main_worktree,
         "aligned" if aligned else "pending",
         mismatches=mismatches,
@@ -2700,8 +2721,8 @@ def _parse_auto_merge_action(raw: str) -> str:
 
 def _build_config_payload() -> dict[str, Any]:
     return {
-        "config_path": str(monitor.get_config_path()),
-        "auto_merge": monitor.get_global_auto_merge(),
+        "config_path": str(get_config_path()),
+        "auto_merge": get_global_auto_merge(),
     }
 
 
@@ -2724,26 +2745,26 @@ def cmd_config(args: argparse.Namespace) -> int:
     if subcmd == "auto-merge":
         action = _parse_auto_merge_action(getattr(args, "value", "status"))
         if action == "status":
-            global_am = monitor.get_global_auto_merge()
+            global_am = get_global_auto_merge()
             if use_json:
                 print(json.dumps({
                     "auto_merge": global_am,
-                    "config_path": str(monitor.get_config_path()),
+                    "config_path": str(get_config_path()),
                 }, ensure_ascii=False, indent=2))
             else:
-                print(f"PR/MR 自动准入（auto_merge）：{'开 (on)' if global_am else '关 (off)'}（{monitor.get_config_path()}）")
+                print(f"PR/MR 自动准入（auto_merge）：{'开 (on)' if global_am else '关 (off)'}（{get_config_path()}）")
             return 0
 
         enabled = action == "on"
-        cfg = monitor.set_global_auto_merge(enabled)
+        cfg = set_global_auto_merge(enabled)
         if use_json:
             print(json.dumps({
                 "auto_merge": bool(cfg["auto_merge"]),
-                "config_path": str(monitor.get_config_path()),
+                "config_path": str(get_config_path()),
             }, ensure_ascii=False, indent=2))
         else:
             state_zh = "开启" if cfg["auto_merge"] else "关闭"
-            print(f"已{state_zh}全局 PR/MR 自动准入与自动合入开关（{monitor.get_config_path()}）。")
+            print(f"已{state_zh}全局 PR/MR 自动准入与自动合入开关（{get_config_path()}）。")
         return 0
 
     raise IddError(f"未知 config 子命令：{subcmd}")

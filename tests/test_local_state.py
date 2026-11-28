@@ -14,6 +14,7 @@ from unittest import mock
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import local_state
+import repo_registry
 
 
 class TestLocalState(unittest.TestCase):
@@ -50,7 +51,7 @@ class TestLocalState(unittest.TestCase):
             path = local_state.get_hosts_path()
             original = path.read_bytes()
             with mock.patch.object(local_state.os, "replace", side_effect=OSError("read-only")):
-                with self.assertRaises(local_state.HostConfigError):
+                with self.assertRaises(local_state.LocalStateError):
                     local_state.set_host("new.example", {"forge": "github"})
             self.assertEqual(path.read_bytes(), original)
             self.assertEqual(local_state.load_hosts_config()[other]["custom"], other)
@@ -63,15 +64,15 @@ class TestLocalState(unittest.TestCase):
                 with self.subTest(raw=raw):
                     path.write_bytes(raw)
                     self.assertEqual(local_state.load_hosts_config(), {})
-                    with self.assertRaises(local_state.HostConfigError):
+                    with self.assertRaises(local_state.LocalStateError):
                         local_state.set_host("new.example", {"forge": "gitlab"})
-                    with self.assertRaises(local_state.HostConfigError):
+                    with self.assertRaises(local_state.LocalStateError):
                         local_state.remove_hosts(("existing.example",))
                     self.assertEqual(path.read_bytes(), raw)
             raw = b'{"existing.example":{"custom":"keep"}}'
             path.write_bytes(raw)
             with mock.patch.object(Path, "read_text", side_effect=PermissionError("unreadable")):
-                with self.assertRaises(local_state.HostConfigError):
+                with self.assertRaises(local_state.LocalStateError):
                     local_state.set_host("new.example", {"forge": "gitlab"})
             self.assertEqual(path.read_bytes(), raw)
             path.write_bytes(b"[]")
@@ -84,3 +85,32 @@ class TestLocalState(unittest.TestCase):
             self.assertIn("无法更新主机配置", cmd.stderr)
             self.assertNotIn("Traceback", cmd.stderr)
             self.assertEqual(path.read_bytes(), b"[]")
+
+    def test_settings_and_registry_keep_legacy_data_and_survive_unreadable_files(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": tmp}):
+            repo = Path(tmp).resolve() / "project"
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+            settings = local_state.get_config_path()
+            settings.write_text('{"another_setting": 4}', encoding="utf-8")
+            local_state.set_global_auto_merge(True)
+            self.assertEqual(json.loads(settings.read_text()), {"another_setting": 4, "auto_merge": True})
+            registry = repo_registry.get_repos_path()
+            registry.write_text(json.dumps([{"path": str(repo), "repo_init_state": "prompted"}]))
+            self.assertEqual(repo_registry.load_registered_repos()[0]["path"], str(repo))
+            self.assertEqual(repo_registry.get_repo_init_meta(repo)["state"], "pending")
+            repo_registry.register_repo(repo)
+            self.assertEqual(json.loads(registry.read_text())["repos"][0]["path"], str(repo))
+            for path in (settings, registry):
+                path.write_bytes(b'{"broken":')
+            self.assertFalse(local_state.get_global_auto_merge())
+            with self.assertRaises(local_state.LocalStateError):
+                local_state.set_global_auto_merge(True)
+            self.assertEqual(repo_registry.load_registered_repos(), [])
+            self.assertEqual(repo_registry.register_repo(repo)["path"], str(repo))
+            repo_registry.set_repo_init_meta(repo, "pending")
+            with self.assertRaises(local_state.LocalStateError):
+                repo_registry.register_repo(repo, required=True)
+            with self.assertRaises(local_state.LocalStateError):
+                repo_registry.unregister_repo(repo)
+            for path in (settings, registry):
+                self.assertEqual(path.read_bytes(), b'{"broken":')

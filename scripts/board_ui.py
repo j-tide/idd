@@ -10,7 +10,6 @@ from http.server import BaseHTTPRequestHandler
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import threading
 import time
@@ -30,9 +29,21 @@ from forge import (  # noqa: E402
     normalize_host_input,
     verify_host_token,
 )
-from local_state import HostConfigError, remove_hosts, set_host
-from git_worktrees import default_worktree_root, has_remote_origin
+from local_state import (
+    LocalStateError,
+    get_config_path,
+    get_global_auto_merge,
+    remove_hosts,
+    set_global_auto_merge,
+    set_host,
+)
+from git_worktrees import (
+    default_worktree_root,
+    has_remote_origin,
+    resolve_main_worktree,
+)
 from worktree_cleanup import CleanupResult, inspect_worktree, remove_merged_worktree
+import repo_registry
 import monitor  # noqa: E402
 from local_http import LocalHTTPServer, LocalRequestHandler
 from version import get_version  # noqa: E402
@@ -49,10 +60,10 @@ def _apply_repo_init_for_path(repo_path: Path, *, apply: bool = True) -> dict[st
         result = forge.repo_init(apply=apply)
         aligned, mismatches = evaluate_repo_init_settings(result)
         if aligned:
-            monitor.set_repo_init_meta(resolved, "aligned")
+            repo_registry.set_repo_init_meta(resolved, "aligned")
             state = "aligned"
         else:
-            monitor.set_repo_init_meta(resolved, "pending", mismatches=mismatches, error="")
+            repo_registry.set_repo_init_meta(resolved, "pending", mismatches=mismatches, error="")
             state = "pending"
         return {
             "repo_path": str(resolved),
@@ -67,8 +78,8 @@ def _apply_repo_init_for_path(repo_path: Path, *, apply: bool = True) -> dict[st
         }
     except Exception as exc:
         err_msg = str(exc)
-        prev_meta = monitor.get_repo_init_meta(resolved)
-        monitor.set_repo_init_meta(
+        prev_meta = repo_registry.get_repo_init_meta(resolved)
+        repo_registry.set_repo_init_meta(
             resolved,
             "pending",
             mismatches=list(prev_meta.get("mismatches") or []),
@@ -140,7 +151,7 @@ def _cleanup_single_worktree(
     merged_cache: _MergedChangesCache | None = None,
 ) -> dict[str, object]:
     """Safely remove a single clean, merged worktree directory while preserving its branch."""
-    main = monitor.resolve_main_worktree_ro(repo_path)
+    main = resolve_main_worktree(repo_path)
     if main is None:
         return {"ok": False, "status": "error", "error": f"无效的 Git 仓库路径：{repo_path}"}
     target = worktree_path.expanduser().resolve()
@@ -361,7 +372,7 @@ class BoardRequestHandler(LocalRequestHandler):
     def _target_repos(self) -> list[Path]:
         if not self.global_mode and self.root is not None:
             return [self.root]
-        return [Path(r["path"]) for r in monitor.load_registered_repos(prune_missing=True)]
+        return [Path(r["path"]) for r in repo_registry.load_registered_repos(prune_missing=True)]
 
     def _invalidate_snapshot_cache(self) -> None:
         if self.snapshot_cache is not None:
@@ -392,8 +403,8 @@ class BoardRequestHandler(LocalRequestHandler):
                 HTTPStatus.OK,
                 {
                     "ok": True,
-                    "auto_merge": monitor.get_global_auto_merge(),
-                    "config_path": str(monitor.get_config_path()),
+                    "auto_merge": get_global_auto_merge(),
+                    "config_path": str(get_config_path()),
                 },
             )
             return
@@ -443,7 +454,7 @@ class BoardRequestHandler(LocalRequestHandler):
     def do_POST(self) -> None:
         try:
             self._handle_post()
-        except HostConfigError as exc:
+        except LocalStateError as exc:
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(exc)})
 
     def _handle_post(self) -> None:
@@ -506,7 +517,7 @@ class BoardRequestHandler(LocalRequestHandler):
                 has_origin = has_remote_origin(resolved_repo)
                 if not has_origin or not _repo_matches_host(resolved_repo, host_key):
                     continue
-                if monitor.get_repo_init_meta(resolved_repo)["state"] == "aligned":
+                if repo_registry.get_repo_init_meta(resolved_repo)["state"] == "aligned":
                     continue
                 repo_init_results.append(
                     _apply_repo_init_for_path(resolved_repo, apply=auto_repo_init)
@@ -541,7 +552,7 @@ class BoardRequestHandler(LocalRequestHandler):
                     has_origin = has_remote_origin(rp)
                     if not has_origin:
                         continue
-                    if monitor.get_repo_init_meta(rp)["state"] == "aligned":
+                    if repo_registry.get_repo_init_meta(rp)["state"] == "aligned":
                         continue
                     results.append(_apply_repo_init_for_path(rp, apply=True))
             else:
@@ -610,7 +621,7 @@ class BoardRequestHandler(LocalRequestHandler):
             if not isinstance(raw_enabled, bool):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "enabled 必须为布尔值"})
                 return
-            cfg = monitor.set_global_auto_merge(raw_enabled)
+            cfg = set_global_auto_merge(raw_enabled)
             self._invalidate_snapshot_cache()
             self._send_json(
                 HTTPStatus.OK,
@@ -618,7 +629,7 @@ class BoardRequestHandler(LocalRequestHandler):
                     "ok": True,
                     "scope": "global",
                     "auto_merge": bool(cfg["auto_merge"]),
-                    "config_path": str(monitor.get_config_path()),
+                    "config_path": str(get_config_path()),
                 },
             )
             return
@@ -686,7 +697,7 @@ def run_board_server(
             if not global_mode and root is not None:
                 cache.warm_async([root], force_refresh=False)
             else:
-                repos = [Path(r["path"]) for r in monitor.load_registered_repos(prune_missing=True)]
+                repos = [Path(r["path"]) for r in repo_registry.load_registered_repos(prune_missing=True)]
                 cache.warm_async(repos, force_refresh=False)
         threading.Thread(target=_warm_on_boot, daemon=True).start()
     merged_cache = _MergedChangesCache(ttl_seconds=60.0)

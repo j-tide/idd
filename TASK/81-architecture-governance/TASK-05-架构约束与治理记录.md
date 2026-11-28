@@ -2,7 +2,7 @@
 
 - Issue: #81
 - Status: planned
-- Depends on: TASK-02, TASK-03, TASK-04, TASK-06, TASK-07, TASK-08, TASK-09, TASK-10, TASK-11
+- Depends on: TASK-02, TASK-03, TASK-04, TASK-06, TASK-07, TASK-08, TASK-09, TASK-10, TASK-11, TASK-12
 - Test: tests/test_architecture.py, .github/workflows/ci.yml
 
 ## 任务范围

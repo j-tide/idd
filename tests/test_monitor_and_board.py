@@ -34,6 +34,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from local_http import LocalHTTPServer
 import board_ui  # noqa: E402
+import repo_registry
 import monitor  # noqa: E402
 
 
@@ -566,7 +567,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                 os.environ.pop("GITLAB_TOKEN", None)
                 os.environ.pop("GITLAB_PRIVATE_TOKEN", None)
                 for rec_repo in (repo1, repo2):
-                    monitor.register_repo(rec_repo)
+                    repo_registry.register_repo(rec_repo)
 
                 cache = monitor.ForgeSnapshotCache(ttl_seconds=30.0)
                 t0 = time.perf_counter()
@@ -627,7 +628,7 @@ class TestMonitorAndBoard(unittest.TestCase):
             sub_env.pop("GITLAB_PRIVATE_TOKEN", None)
             sub_env.pop("IDD_FORGE", None)
             with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                monitor.register_repo(repo)
+                repo_registry.register_repo(repo)
 
             proc = subprocess.Popen(
                 [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--no-open"],
@@ -1001,7 +1002,7 @@ class TestMonitorAndBoard(unittest.TestCase):
             sub_env.pop("GITLAB_PRIVATE_TOKEN", None)
             sub_env.pop("IDD_FORGE", None)
             with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                monitor.register_repo(repo)
+                repo_registry.register_repo(repo)
 
             proc = subprocess.Popen(
                 [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--no-open"],
@@ -1112,7 +1113,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                     "squash_commit_template": "%{title}",
                 })
                 with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                    monitor.set_repo_init_meta(repo, "")
+                    repo_registry.set_repo_init_meta(repo, "")
 
                 req_save_auto = urllib.request.Request(
                     f"{base_url}/api/auth/save",
@@ -1379,7 +1380,7 @@ class TestMonitorAndBoard(unittest.TestCase):
             for key in ("GITLAB_TOKEN", "GITLAB_PRIVATE_TOKEN", "IDD_FORGE"):
                 sub_env.pop(key, None)
             with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                monitor.register_repo(repo)
+                repo_registry.register_repo(repo)
 
             proc = subprocess.Popen(
                 [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--no-open"],
@@ -1630,7 +1631,7 @@ class TestMonitorAndBoard(unittest.TestCase):
             sub_env = dict(env)
             sub_env["PYTHONUNBUFFERED"] = "1"
             with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                monitor.register_repo(repo)
+                repo_registry.register_repo(repo)
 
             proc = subprocess.Popen(
                 [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--local-only", "--no-open"],
@@ -2724,7 +2725,7 @@ class TestMonitorAndBoard(unittest.TestCase):
             repo, origin, gh_state_file, env = _create_repo_harness(root / "h", "demo", cfg, issues=issues)
 
             with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                monitor.register_repo(repo)
+                repo_registry.register_repo(repo)
 
             # Create 3 worktrees and land them so they have merged PRs with matching headRefOid
             wt_clean1 = Path(json.loads(self._run(env, repo, "start", "10", "--slug", "clean-one", "--json").stdout)["worktree"])
@@ -3615,10 +3616,10 @@ class TestMonitorAndBoard(unittest.TestCase):
 
                 # 4) register_repo respects min_touch_interval to avoid rewriting repos.json every poll
                 repos_file = cfg / "repos.json"
-                monitor.register_repo(repo)
+                repo_registry.register_repo(repo)
                 mtime_before = repos_file.stat().st_mtime_ns
                 time.sleep(0.02)
-                monitor.register_repo(repo, min_touch_interval=60.0)
+                repo_registry.register_repo(repo, min_touch_interval=60.0)
                 self.assertEqual(repos_file.stat().st_mtime_ns, mtime_before)
 
     def test_board_snapshot_coalescer_merges_concurrent_requests_and_invalidates(self) -> None:
@@ -3879,10 +3880,10 @@ console.log(JSON.stringify(delays));
                 "import os, sys\n"
                 "from pathlib import Path\n"
                 "sys.path.insert(0, sys.argv[1])\n"
-                "import monitor\n"
+                "import repo_registry\n"
                 "repo = Path(sys.argv[2])\n"
-                "monitor.register_repo(repo)\n"
-                "monitor.set_repo_init_meta(repo, 'aligned')\n"
+                "repo_registry.register_repo(repo)\n"
+                "repo_registry.set_repo_init_meta(repo, 'aligned')\n"
             )
             env = dict(os.environ)
             env["IDD_CONFIG_DIR"] = str(cfg)
@@ -3901,7 +3902,7 @@ console.log(JSON.stringify(delays));
                 self.assertEqual(proc.returncode, 0, err or out)
 
             with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                entries = monitor.load_registered_repos(prune_missing=True)
+                entries = repo_registry.load_registered_repos(prune_missing=True)
             paths = {e["path"]: e for e in entries}
             self.assertEqual(len(paths), len(repos))
             for r in repos:

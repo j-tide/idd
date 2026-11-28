@@ -11,6 +11,7 @@ except ImportError:
 import json
 import os
 from pathlib import Path
+from typing import Any
 import stat
 import tempfile
 import threading
@@ -29,16 +30,20 @@ def get_hosts_path() -> Path:
     return get_config_dir() / "hosts.json"
 
 
-class HostConfigError(IddError):
-    """A host change could not be applied to the existing configuration."""
+class LocalStateError(IddError):
+    """A persistent state change could not be completed."""
+
+
+def read_json_file(path: Path, missing: Any) -> Any:
+    """Use the missing value only when the file does not exist."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return missing
 
 
 def _read_hosts(path: Path) -> dict[str, dict[str, str]]:
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return {}
-    data = json.loads(raw)
+    data = read_json_file(path, {})
     if not isinstance(data, dict):
         raise ValueError("主机配置的顶层必须是 JSON 对象")
     return data
@@ -94,7 +99,7 @@ def _host_transaction() -> Iterator[dict[str, dict[str, str]]]:
         with _HOSTS_LOCK, config_file_lock(path.with_name(".hosts.lock")):
             yield _read_hosts(path)
     except (OSError, ValueError) as exc:
-        raise HostConfigError(f"无法更新主机配置 {path}：{exc}") from exc
+        raise LocalStateError(f"无法更新主机配置 {path}：{exc}") from exc
 
 
 def _write_hosts(hosts: dict[str, dict[str, str]]) -> None:
@@ -125,3 +130,35 @@ def remove_hosts(candidates: Iterable[str], *, first_only: bool = False) -> bool
         if removed:
             _write_hosts(hosts)
         return removed
+
+_CONFIG_LOCK = threading.Lock()
+
+
+def get_config_path() -> Path:
+    return get_config_dir() / "config.json"
+
+
+def _read_global_config() -> dict[str, Any]:
+    data = read_json_file(get_config_path(), {})
+    if not isinstance(data, dict):
+        raise ValueError("全局配置的顶层必须是 JSON 对象")
+    return data
+
+
+def get_global_auto_merge() -> bool:
+    with _CONFIG_LOCK, config_file_lock(get_config_dir() / ".config.lock"):
+        try:
+            return bool(_read_global_config().get("auto_merge", False))
+        except (OSError, ValueError):
+            return False
+
+
+def set_global_auto_merge(enabled: bool) -> dict[str, Any]:
+    try:
+        with _CONFIG_LOCK, config_file_lock(get_config_dir() / ".config.lock"):
+            config = _read_global_config()
+            config["auto_merge"] = bool(enabled)
+            atomic_write_json(get_config_path(), config)
+    except (OSError, ValueError) as exc:
+        raise LocalStateError(f"无法更新全局配置 {get_config_path()}：{exc}") from exc
+    return config

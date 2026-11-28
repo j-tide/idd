@@ -68,3 +68,23 @@ def detect_default_branch(repo: Path, has_origin: bool, *, timeout: float | None
         if has_origin and ref_exists(repo, f"refs/remotes/origin/{branch}", timeout=timeout):
             return branch
     return "main"
+
+
+def main_worktree_and_inventory(path: Path) -> tuple[Path | None, list[dict[str, str]]]:
+    """Return `(canonical_main_worktree, all_worktrees)` using a single `git worktree list` call."""
+    target = path.expanduser()
+    if not target.is_dir():
+        return None, []
+    try:
+        worktrees = list_worktrees(target, timeout=10.0)
+    except ValueError:
+        return None, []
+    if not worktrees:
+        return None, []
+    return Path(worktrees[0]["path"]).resolve(), worktrees
+
+
+def resolve_main_worktree(path: Path) -> Path | None:
+    """Return canonical main worktree path if `path` resides inside a Git repository, else None."""
+    main_wt, _ = main_worktree_and_inventory(path)
+    return main_wt
