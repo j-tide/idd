@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 try:
     import fcntl
@@ -34,7 +34,7 @@ from forge import (
     inspect_remote_origin,
     load_hosts_config,
 )
-from git_worktrees import list_worktrees
+from git_worktrees import detect_default_branch, has_remote_origin, list_worktrees, read_git
 import task_status
 
 
@@ -149,19 +149,6 @@ def set_global_auto_merge(enabled: bool) -> dict[str, Any]:
             return _save_config_unlocked(cfg)
 
 
-def _run_git_ro(cwd: Path, args: list[str], *, timeout: float = 10.0) -> subprocess.CompletedProcess[str] | None:
-    """Run a read-only git command with `--no-optional-locks` to avoid index lock contention."""
-    try:
-        return subprocess.run(
-            ["git", "--no-optional-locks", "-c", "core.quotePath=false", "-C", str(cwd), *args],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except _IGNORED_GIT_ERROR:
-        return None
-
-
 def _stat_sig(path: Path) -> tuple[int, int, int] | None:
     """Return lightweight `(mtime_ns, size, ino)` signature for cache invalidation."""
     try:
@@ -189,7 +176,7 @@ def _resolve_git_dirs_fast(wt_path: Path) -> tuple[Path | None, Path | None]:
         git_dir = None
 
     if git_dir is None:
-        proc = _run_git_ro(wt_path, ["rev-parse", "--git-dir", "--git-common-dir"])
+        proc = read_git(wt_path, ["rev-parse", "--git-dir", "--git-common-dir"])
         if proc is None or proc.returncode != 0:
             return None, None
         lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
@@ -214,6 +201,21 @@ def _resolve_git_dirs_fast(wt_path: Path) -> tuple[Path | None, Path | None]:
     except OSError:
         pass
     return git_dir, git_dir
+
+
+def active_worktree_fingerprint(paths: tuple[Path, ...]) -> tuple[object, ...]:
+    sigs: list[object] = []
+    for wt in paths:
+        git_dir, _ = _resolve_git_dirs_fast(wt)
+        sigs.append(
+            (
+                _stat_sig(wt),
+                _stat_sig(wt / "TASK"),
+                _stat_sig(git_dir / "index") if git_dir is not None else None,
+                _stat_sig(git_dir / "HEAD") if git_dir is not None else None,
+            )
+        )
+    return tuple(sigs)
 
 
 def _load_packed_refs_fast(common_dir: Path) -> dict[str, str]:
@@ -287,26 +289,6 @@ def resolve_main_worktree_ro(path: Path) -> Path | None:
     return main_wt
 
 
-def _detect_repo_meta_ro(main_worktree: Path) -> tuple[bool, str]:
-    """Return (has_origin, default_branch) using read-only git commands."""
-    rem = _run_git_ro(main_worktree, ["remote"])
-    remotes = {line.strip() for line in rem.stdout.splitlines() if line.strip()} if rem and rem.returncode == 0 else set()
-    has_origin = "origin" in remotes
-    if has_origin:
-        sym = _run_git_ro(main_worktree, ["symbolic-ref", "refs/remotes/origin/HEAD"])
-        if sym and sym.returncode == 0 and sym.stdout.strip().startswith("refs/remotes/origin/"):
-            return True, sym.stdout.strip()[len("refs/remotes/origin/"):]
-    for candidate in ("main", "master"):
-        p1 = _run_git_ro(main_worktree, ["show-ref", "--verify", "--quiet", f"refs/heads/{candidate}"])
-        if p1 and p1.returncode == 0:
-            return has_origin, candidate
-        if has_origin:
-            p2 = _run_git_ro(main_worktree, ["show-ref", "--verify", "--quiet", f"refs/remotes/origin/{candidate}"])
-            if p2 and p2.returncode == 0:
-                return has_origin, candidate
-    return has_origin, "main"
-
-
 def _detect_repo_meta_and_origin_cached(main_worktree: Path) -> tuple[bool, str, Any, str]:
     """Return `(has_origin, default_branch, remote_spec, inferred_forge)` cached by git config/ref signatures."""
     _, common_dir = _resolve_git_dirs_fast(main_worktree)
@@ -332,7 +314,8 @@ def _detect_repo_meta_and_origin_cached(main_worktree: Path) -> tuple[bool, str,
         sig = ()
         key = ""
 
-    has_origin, default_branch = _detect_repo_meta_ro(main_worktree)
+    has_origin = has_remote_origin(main_worktree)
+    default_branch = detect_default_branch(main_worktree, has_origin, timeout=10.0)
     remote_spec = None
     inferred_forge = "local"
     if has_origin:
@@ -614,17 +597,7 @@ def unregister_repo(target: Path) -> bool:
             return removed
 
 
-_GH_CLI_CACHE: dict[str, Any] = {"checked_at": 0.0, "logged_in": False, "username": ""}
-_GH_CLI_LOCK = threading.Lock()
-_GH_CLI_INFLIGHT = False
-
-
-def _check_gh_cli_status(ttl: float = 30.0) -> tuple[bool, str]:
-    global _GH_CLI_INFLIGHT
-    now = time.time()
-    with _GH_CLI_LOCK:
-        if (now - float(_GH_CLI_CACHE.get("checked_at") or 0.0)) < ttl:
-            return bool(_GH_CLI_CACHE.get("logged_in")), str(_GH_CLI_CACHE.get("username") or "")
+def _probe_gh_cli_status() -> tuple[bool, str]:
     ok = False
     username = ""
     if shutil.which("gh"):
@@ -638,42 +611,59 @@ def _check_gh_cli_status(ttl: float = 30.0) -> tuple[bool, str]:
                     username = m.group(1).strip()
         except _IGNORED_GIT_ERROR:
             ok = False
-    with _GH_CLI_LOCK:
-        _GH_CLI_CACHE["checked_at"] = time.time()
-        _GH_CLI_CACHE["logged_in"] = ok
-        _GH_CLI_CACHE["username"] = username
-        _GH_CLI_INFLIGHT = False
     return ok, username
 
 
-def _get_gh_cli_status_nonblocking(ttl: float = 30.0) -> tuple[bool, str]:
-    """Return cached `gh auth status` immediately and refresh stale cache on a background thread."""
-    global _GH_CLI_INFLIGHT
-    now = time.time()
-    with _GH_CLI_LOCK:
-        checked_at = float(_GH_CLI_CACHE.get("checked_at") or 0.0)
-        logged_in = bool(_GH_CLI_CACHE.get("logged_in"))
-        username = str(_GH_CLI_CACHE.get("username") or "")
-        if (now - checked_at) < ttl:
-            return logged_in, username
-        if not _GH_CLI_INFLIGHT:
-            _GH_CLI_INFLIGHT = True
+class GitHubCliAuthStatus:
+    """Share one platform identity probe between synchronous and polling callers."""
 
-            def _bg_probe() -> None:
-                try:
-                    _check_gh_cli_status(ttl=ttl)
-                finally:
-                    with _GH_CLI_LOCK:
-                        global _GH_CLI_INFLIGHT
-                        _GH_CLI_INFLIGHT = False
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._value = (False, "")
+        self._checked_at: float | None = None
+        self._inflight: Future[tuple[bool, str]] | None = None
 
-            threading.Thread(target=_bg_probe, daemon=True).start()
-        return logged_in, username
+    def invalidate(self) -> None:
+        with self._lock:
+            self._checked_at = None
+            self._inflight = None
+
+    def get(self, *, background: bool = False, ttl: float = 30.0) -> tuple[bool, str]:
+        with self._lock:
+            cached = self._value
+            if self._checked_at is not None and time.monotonic() - self._checked_at < ttl:
+                return cached
+            probe = self._inflight
+            start = probe is None
+            if probe is None:
+                probe = Future()
+                self._inflight = probe
+
+        if start:
+            if background:
+                threading.Thread(target=self._refresh, args=(probe,), daemon=True).start()
+            else:
+                self._refresh(probe)
+        return cached if background else probe.result()
+
+    def _refresh(self, probe: Future[tuple[bool, str]]) -> None:
+        try:
+            value = _probe_gh_cli_status()
+        except Exception as exc:
+            with self._lock:
+                if self._inflight is probe:
+                    self._inflight = None
+            probe.set_exception(exc)
+            return
+        with self._lock:
+            if self._inflight is probe:
+                self._value = value
+                self._checked_at = time.monotonic()
+                self._inflight = None
+        probe.set_result(value)
 
 
-def _check_gh_cli_logged_in(ttl: float = 30.0) -> bool:
-    ok, _ = _check_gh_cli_status(ttl=ttl)
-    return ok
+github_cli_auth = GitHubCliAuthStatus()
 
 
 def _mask_token(tok: str) -> str:
@@ -772,7 +762,7 @@ def collect_auth_hosts_status(*, root: Path | None = None, global_mode: bool = T
                 auth_source = "env"
             else:
                 if gh_status is None:
-                    gh_status = _check_gh_cli_status()
+                    gh_status = github_cli_auth.get()
                 gh_logged_in, gh_username = gh_status
                 if gh_logged_in and (host_key == "github.com" or host_key.endswith(".github.com")):
                     configured = True
@@ -985,7 +975,7 @@ def _get_commit_info_cached(
     last_commit_sha = ""
     last_commit_ts = 0.0
     last_commit_subject = ""
-    log_proc = _run_git_ro(wt_path, ["log", "-1", "--format=%h%x1f%ct%x1f%s"])
+    log_proc = read_git(wt_path, ["log", "-1", "--format=%h%x1f%ct%x1f%s"])
     if log_proc and log_proc.returncode == 0 and log_proc.stdout.strip():
         parts = log_proc.stdout.strip().split("\x1f", 2)
         if len(parts) >= 2:
@@ -1028,14 +1018,14 @@ def _inspect_remote_sync_ro(
         return result
 
     if has_origin is None:
-        rem = _run_git_ro(wt_path, ["remote"])
+        rem = read_git(wt_path, ["remote"])
         remotes = {line.strip() for line in rem.stdout.splitlines() if line.strip()} if rem and rem.returncode == 0 else set()
         has_origin = "origin" in remotes
     if not has_origin:
         return result
 
     if not branch:
-        br_proc = _run_git_ro(wt_path, ["branch", "--show-current"])
+        br_proc = read_git(wt_path, ["branch", "--show-current"])
         branch = br_proc.stdout.strip() if br_proc and br_proc.returncode == 0 else ""
     if not branch or branch == "(detached)":
         return result
@@ -1043,7 +1033,7 @@ def _inspect_remote_sync_ro(
     if upstream_hint is not None:
         upstream = upstream_hint
     else:
-        up_proc = _run_git_ro(wt_path, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+        up_proc = read_git(wt_path, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
         upstream = up_proc.stdout.strip() if up_proc and up_proc.returncode == 0 else ""
     result["upstream"] = upstream
     if branch != default_branch and upstream == f"origin/{default_branch}":
@@ -1063,7 +1053,7 @@ def _inspect_remote_sync_ro(
     origin_ref = f"refs/remotes/origin/{branch}"
     rem_exists, rem_oid = _read_ref_oid_fast(common_dir, origin_ref)
     if rem_exists is None:
-        rem_ref_proc = _run_git_ro(wt_path, ["show-ref", "--verify", "--quiet", origin_ref])
+        rem_ref_proc = read_git(wt_path, ["show-ref", "--verify", "--quiet", origin_ref])
         rem_exists = bool(rem_ref_proc and rem_ref_proc.returncode == 0)
 
     if rem_exists:
@@ -1073,7 +1063,7 @@ def _inspect_remote_sync_ro(
             result["unpushed_commits"] = 0
             result["remote_state"] = "synced"
             return result
-        lr_proc = _run_git_ro(wt_path, ["rev-list", "--left-right", "--count", f"{origin_ref}...HEAD"])
+        lr_proc = read_git(wt_path, ["rev-list", "--left-right", "--count", f"{origin_ref}...HEAD"])
         if lr_proc and lr_proc.returncode == 0 and lr_proc.stdout.strip():
             counts = lr_proc.stdout.strip().split()
             if len(counts) == 2 and counts[0].isdigit() and counts[1].isdigit():
@@ -1086,13 +1076,13 @@ def _inspect_remote_sync_ro(
         base_ref = f"refs/remotes/origin/{default_branch}"
         base_exists, base_oid = _read_ref_oid_fast(common_dir, base_ref)
         if base_exists is None:
-            base_ref_proc = _run_git_ro(wt_path, ["show-ref", "--verify", "--quiet", base_ref])
+            base_ref_proc = read_git(wt_path, ["show-ref", "--verify", "--quiet", base_ref])
             base_exists = bool(base_ref_proc and base_ref_proc.returncode == 0)
         if base_exists:
             if head_oid and base_oid and head_oid == base_oid:
                 result["unpushed_commits"] = 0
             elif head_oid != "(initial)":
-                ahead_proc = _run_git_ro(wt_path, ["rev-list", "--count", f"{base_ref}..HEAD"])
+                ahead_proc = read_git(wt_path, ["rev-list", "--count", f"{base_ref}..HEAD"])
                 if ahead_proc and ahead_proc.returncode == 0 and ahead_proc.stdout.strip().isdigit():
                     result["unpushed_commits"] = int(ahead_proc.stdout.strip())
 
@@ -1189,7 +1179,7 @@ def inspect_worktree_pulse(
 
     if wt_path.is_dir():
         git_dir, common_dir = _resolve_git_dirs_fast(wt_path)
-        st_proc = _run_git_ro(wt_path, ["status", "--porcelain=v2", "--branch", "-uall"])
+        st_proc = read_git(wt_path, ["status", "--porcelain=v2", "--branch", "-uall"])
         if st_proc and st_proc.returncode == 0:
             (
                 head_oid,
@@ -1213,9 +1203,9 @@ def inspect_worktree_pulse(
     insertions = 0
     deletions = 0
     if wt_path.is_dir() and modified_count > 0:
-        diff_proc = _run_git_ro(wt_path, ["diff", "HEAD", "--shortstat"])
+        diff_proc = read_git(wt_path, ["diff", "HEAD", "--shortstat"])
         if diff_proc is None or diff_proc.returncode != 0:
-            diff_proc = _run_git_ro(wt_path, ["diff", "--shortstat"])
+            diff_proc = read_git(wt_path, ["diff", "--shortstat"])
         if diff_proc and diff_proc.returncode == 0:
             ins_m = re.search(r"(\d+)\s+insertion", diff_proc.stdout)
             del_m = re.search(r"(\d+)\s+deletion", diff_proc.stdout)
@@ -1555,7 +1545,7 @@ class ForgeSnapshotCache:
             main_wt = resolve_main_worktree_ro(raw_path)
             if main_wt is None:
                 continue
-            has_origin, _ = _detect_repo_meta_ro(main_wt)
+            has_origin = has_remote_origin(main_wt)
             if not has_origin:
                 continue
             key = str(main_wt.resolve())
@@ -1791,7 +1781,7 @@ def _extract_task_dirs_from_paths(lines: list[str], *, strip_porcelain: bool) ->
 
 
 def _get_worktree_dirty_task_dirs(wt_path: Path) -> set[str]:
-    st_proc = _run_git_ro(wt_path, ["status", "--porcelain=v1", "--", "TASK"])
+    st_proc = read_git(wt_path, ["status", "--porcelain=v1", "--", "TASK"])
     if st_proc and st_proc.returncode == 0 and st_proc.stdout.strip():
         return _extract_task_dirs_from_paths(st_proc.stdout.splitlines(), strip_porcelain=True)
     return set()
@@ -1831,10 +1821,10 @@ def _get_worktree_base_task_dirs(wt_path: Path, default_branch: str) -> set[str]
                 return set(cached)
     result: set[str] = set()
     for base_ref in (default_branch, f"origin/{default_branch}"):
-        mb_proc = _run_git_ro(wt_path, ["merge-base", base_ref, "HEAD"])
+        mb_proc = read_git(wt_path, ["merge-base", base_ref, "HEAD"])
         if mb_proc and mb_proc.returncode == 0 and mb_proc.stdout.strip():
             mb_sha = mb_proc.stdout.strip()
-            tree_proc = _run_git_ro(wt_path, ["ls-tree", "-d", "--name-only", f"{mb_sha}:TASK"])
+            tree_proc = read_git(wt_path, ["ls-tree", "-d", "--name-only", f"{mb_sha}:TASK"])
             if tree_proc and tree_proc.returncode == 0 and tree_proc.stdout.strip():
                 result = {line.strip() for line in tree_proc.stdout.splitlines() if line.strip()}
             break
@@ -1864,7 +1854,7 @@ def _get_worktree_touched_task_dirs(
                     return touched | cached
         committed: set[str] = set()
         for base_ref in (default_branch, f"origin/{default_branch}"):
-            diff_proc = _run_git_ro(wt_path, ["diff", "--name-only", f"{base_ref}...HEAD", "--", "TASK"])
+            diff_proc = read_git(wt_path, ["diff", "--name-only", f"{base_ref}...HEAD", "--", "TASK"])
             if diff_proc and diff_proc.returncode == 0:
                 committed = _extract_task_dirs_from_paths(diff_proc.stdout.splitlines(), strip_porcelain=False)
                 break
@@ -1902,7 +1892,7 @@ def _collect_all_worktrees_ro(
             return [], [], False, ""
         branch = wt.get("branch", "")
         is_main = wt_path == main_resolved
-        entries, warnings, matched = task_status._collect_from_task_root(  # noqa: SLF001
+        entries, warnings, matched = task_status.collect_task_entries(
             task_root,
             issue_filter,
             open_only,
@@ -2348,6 +2338,13 @@ def collect_repo_snapshot(
     }
 
 
+def summarize_repo(snap: dict[str, Any]) -> dict[str, Any]:
+    """Compute the same counters for one repository in either terminal or browser views."""
+    return _compute_global_summary(
+        [snap], snap.get("issues") or [], snap.get("local_only_items") or [], snap.get("orphan_changes") or [],
+    )
+
+
 def _compute_global_summary(
     repos: list[dict[str, Any]],
     all_issues: list[dict[str, Any]],
@@ -2497,7 +2494,7 @@ def _build_forge_connections(
     saved_hosts = load_hosts_config()
     has_gitlab_env = bool(os.environ.get("GITLAB_TOKEN", "").strip() or os.environ.get("GITLAB_PRIVATE_TOKEN", "").strip())
     has_github_env = bool(os.environ.get("GH_TOKEN", "").strip() or os.environ.get("GITHUB_TOKEN", "").strip())
-    gh_ok, gh_user = _get_gh_cli_status_nonblocking() if allow_stale_async else _check_gh_cli_status()
+    gh_ok, gh_user = github_cli_auth.get(background=allow_stale_async)
 
     def _resolve_host_auth(fg: str, host_key: str, saved_entry: dict[str, str] | None) -> tuple[bool, str, str]:
         saved_tok = str((saved_entry or {}).get("token") or "").strip()
@@ -2805,12 +2802,7 @@ def collect_scope_snapshot(
             allow_stale_async=allow_stale_async,
             register=True,
         )
-        summary = _compute_global_summary(
-            [snap],
-            snap["issues"],
-            snap["local_only_items"],
-            snap["orphan_changes"],
-        )
+        summary = summarize_repo(snap)
         auth_alerts, warnings = _dedupe_auth_alerts([snap])
         return {
             "global": False,

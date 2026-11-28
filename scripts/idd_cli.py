@@ -25,7 +25,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from command_runner import IddError, run_cmd
-from git_worktrees import default_worktree_root, list_worktrees
+from git_worktrees import default_worktree_root, detect_default_branch, list_worktrees, ref_exists
 from repository_lock import MAIN_GIT_LOCK, repo_file_lock
 from worktree_cleanup import cleanup_scope_error, remove_merged_worktree
 from naming import (
@@ -44,9 +44,7 @@ from forge import (  # noqa: E402
     save_hosts_config,
     verify_host_token,
 )
-import board_ui  # noqa: E402
 import monitor  # noqa: E402
-import preview_ui  # noqa: E402
 import task_status  # noqa: E402
 from version import get_version  # noqa: E402
 
@@ -131,7 +129,7 @@ def get_repo_info(cwd: Path, *, register: bool = True) -> RepoInfo:
     remotes = {line.strip() for line in remotes_proc.stdout.splitlines() if line.strip()}
     has_origin = "origin" in remotes
 
-    default_branch = _detect_default_branch(main_worktree, has_origin)
+    default_branch = detect_default_branch(main_worktree, has_origin)
     env_root = os.environ.get("IDD_WORKTREE_ROOT", "").strip()
     if env_root:
         worktree_root = Path(env_root).expanduser().resolve()
@@ -148,32 +146,9 @@ def get_repo_info(cwd: Path, *, register: bool = True) -> RepoInfo:
     )
 
 
-def _detect_default_branch(main_worktree: Path, has_origin: bool) -> str:
-    if has_origin:
-        sym = run_cmd(
-            ["git", "-C", str(main_worktree), "symbolic-ref", "refs/remotes/origin/HEAD"],
-            check=False,
-        )
-        if sym.returncode == 0 and sym.stdout.strip():
-            ref = sym.stdout.strip()
-            if ref.startswith("refs/remotes/origin/"):
-                return ref[len("refs/remotes/origin/"):]
-    for candidate in ("main", "master"):
-        if _ref_exists(main_worktree, f"refs/heads/{candidate}") or (
-            has_origin and _ref_exists(main_worktree, f"refs/remotes/origin/{candidate}")
-        ):
-            return candidate
-    return "main"
-
-
-def _ref_exists(repo_dir: Path, ref: str) -> bool:
-    proc = run_cmd(["git", "-C", str(repo_dir), "show-ref", "--verify", "--quiet", ref], check=False)
-    return proc.returncode == 0
-
-
 def _resolve_base_ref(repo: RepoInfo, base_branch: str | None = None) -> str:
     branch = base_branch or repo.default_branch
-    if repo.has_origin and _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
+    if repo.has_origin and ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
         return f"origin/{branch}"
     return branch
 
@@ -1917,12 +1892,7 @@ def _render_global_status(snapshot: dict[str, Any], *, use_color: bool) -> str:
 
 def _render_single_repo_status(snap: dict[str, Any], *, use_color: bool) -> str:
     width = _status_line_width()
-    summary = monitor._compute_global_summary(  # noqa: SLF001
-        [snap],
-        snap.get("issues") or [],
-        snap.get("local_only_items") or [],
-        snap.get("orphan_changes") or [],
-    )
+    summary = monitor.summarize_repo(snap)
     forge_badge = _style_forge_badge(str(snap.get("forge") or "local"), use_color)
     pretty_repo_path = _pretty_path(Path(str(snap.get("repo_path") or "")))
     default_branch = str(snap.get("default_branch") or "main")
@@ -1989,6 +1959,8 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_board(args: argparse.Namespace) -> int:
+    import board_ui
+
     global_mode = not args.current_only and args.root is None
     root: Path | None = None
     if not global_mode:
@@ -2008,6 +1980,8 @@ def cmd_board(args: argparse.Namespace) -> int:
 
 
 def cmd_preview(args: argparse.Namespace) -> int:
+    import preview_ui
+
     try:
         return preview_ui.run_preview_server(
             targets=list(args.targets),
@@ -2253,7 +2227,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         newly_pushed = False
         push_warning = ""
         if repo.has_origin:
-            remote_exists = _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}")
+            remote_exists = ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}")
             if not remote_exists and not args.no_push:
                 pushed, push_warning = _push_feature_branch(wt_path, branch, default_branch=repo.default_branch)
                 if pushed:
@@ -2363,9 +2337,9 @@ def cmd_start(args: argparse.Namespace) -> int:
         if wt_path.exists():
             raise IddError(f"目标目录已存在但未注册为 Git 工作树：{wt_path}")
 
-        if _ref_exists(repo.main_worktree, f"refs/heads/{branch}"):
+        if ref_exists(repo.main_worktree, f"refs/heads/{branch}"):
             run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", str(wt_path), branch])
-        elif repo.has_origin and _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
+        elif repo.has_origin and ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
             run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "-b", branch, str(wt_path), f"origin/{branch}"])
         else:
             run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "--no-track", "-b", branch, str(wt_path), base_ref])
@@ -4112,7 +4086,7 @@ def _check_skill_repo_uninstall_safety(skill_dir: Path) -> list[str]:
         text=True,
     )
     upstream = upstream_proc.stdout.strip() if upstream_proc.returncode == 0 else ""
-    if not upstream and _ref_exists(skill_dir, "refs/remotes/origin/main"):
+    if not upstream and ref_exists(skill_dir, "refs/remotes/origin/main"):
         upstream = "origin/main"
 
     if upstream:

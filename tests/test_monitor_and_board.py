@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import errno
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
@@ -1127,6 +1128,34 @@ class TestMonitorAndBoard(unittest.TestCase):
                 gl_server.shutdown()
                 gl_server.server_close()
 
+    def test_auth_refresh_cannot_overwrite_a_new_identity_after_invalidation(self) -> None:
+        auth = monitor.GitHubCliAuthStatus()
+        started = threading.Event()
+        release = threading.Event()
+
+        def probe():
+            if not started.is_set():
+                started.set()
+                if not release.wait(timeout=5):
+                    raise TimeoutError("old probe was not released")
+                return True, "previous"
+            return True, "current"
+
+        with mock.patch.object(monitor, "_probe_gh_cli_status", side_effect=probe) as query:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                old = pool.submit(auth.get)
+                try:
+                    self.assertTrue(started.wait(timeout=5))
+                    self.assertEqual(auth.get(background=True), (False, ""))
+                    self.assertEqual(query.call_count, 1)
+                    auth.invalidate()
+                    self.assertEqual(auth.get(), (True, "current"))
+                finally:
+                    release.set()
+                self.assertEqual(old.result(timeout=5), (True, "previous"))
+            self.assertEqual(auth.get(), (True, "current"))
+            self.assertEqual(query.call_count, 2)
+
     def test_forge_connections_states_and_gh_username_parsing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfg = Path(tmp) / "config"
@@ -1137,7 +1166,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                     os.environ.pop(key, None)
 
                 # 1. `gh auth status` username parsing (modern "account X" and legacy "as X")
-                monitor._GH_CLI_CACHE["checked_at"] = 0.0
+                monitor.github_cli_auth.invalidate()
                 fake_proc_new = subprocess.CompletedProcess(
                     ["gh", "auth", "status"],
                     0,
@@ -1148,11 +1177,11 @@ class TestMonitorAndBoard(unittest.TestCase):
                     mock.patch.object(monitor.shutil, "which", return_value="/usr/bin/gh"),
                     mock.patch.object(monitor.subprocess, "run", return_value=fake_proc_new),
                 ):
-                    ok, user = monitor._check_gh_cli_status(ttl=30.0)
+                    ok, user = monitor.github_cli_auth.get(ttl=30.0)
                     self.assertTrue(ok)
                     self.assertEqual(user, "j-tide")
 
-                monitor._GH_CLI_CACHE["checked_at"] = 0.0
+                monitor.github_cli_auth.invalidate()
                 fake_proc_old = subprocess.CompletedProcess(
                     ["gh", "auth", "status"],
                     0,
@@ -1163,12 +1192,12 @@ class TestMonitorAndBoard(unittest.TestCase):
                     mock.patch.object(monitor.shutil, "which", return_value="/usr/bin/gh"),
                     mock.patch.object(monitor.subprocess, "run", return_value=fake_proc_old),
                 ):
-                    ok, user = monitor._check_gh_cli_status(ttl=30.0)
+                    ok, user = monitor.github_cli_auth.get(ttl=30.0)
                     self.assertTrue(ok)
                     self.assertEqual(user, "octocat")
 
                 # 2. `_build_forge_connections` across states
-                with mock.patch.object(monitor, "_check_gh_cli_status", return_value=(False, "")):
+                with mock.patch.object(monitor.github_cli_auth, "get", return_value=(False, "")):
                     empty_conns = monitor._build_forge_connections([], local_only=False)
                     self.assertEqual(empty_conns["github"]["status"], "unconfigured")
                     self.assertEqual(empty_conns["gitlab"]["status"], "unconfigured")
@@ -3480,7 +3509,7 @@ class TestMonitorAndBoard(unittest.TestCase):
             subprocess.run(["git", "-C", str(wt_idle), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
 
             # 1) Cold clean worktree pulse uses <= 2 git subprocesses; warm HEAD cache uses <= 1
-            with mock.patch.object(monitor, "_run_git_ro", wraps=monitor._run_git_ro) as spy_git:
+            with mock.patch.object(monitor, "read_git", wraps=monitor.read_git) as spy_git:
                 pulse1 = monitor.inspect_worktree_pulse(
                     wt_idle,
                     branch=idle_branch,
@@ -3492,7 +3521,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                 self.assertEqual(pulse1["dirty_count"], 0)
                 self.assertLessEqual(spy_git.call_count, 2)
 
-            with mock.patch.object(monitor, "_run_git_ro", wraps=monitor._run_git_ro) as spy_git_warm:
+            with mock.patch.object(monitor, "read_git", wraps=monitor.read_git) as spy_git_warm:
                 pulse2 = monitor.inspect_worktree_pulse(
                     wt_idle,
                     branch=idle_branch,

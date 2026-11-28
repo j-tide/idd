@@ -115,7 +115,7 @@ def read_task(path: Path, task_root: Path) -> dict:
     }
 
 
-def _collect_from_task_root(
+def collect_task_entries(
     task_root: Path,
     issue_filter: str | None,
     open_only: bool,
@@ -159,7 +159,7 @@ def _collect_from_task_root(
 
 def collect(task_root: Path, issue_filter: str | None, open_only: bool) -> dict:
     """Collect task status under a single TASK/ directory."""
-    entries, warnings, matched = _collect_from_task_root(task_root, issue_filter, open_only)
+    entries, warnings, matched = collect_task_entries(task_root, issue_filter, open_only)
     if issue_filter is not None and not matched:
         raise ValueError(f"没有匹配的 Issue 目录：{issue_filter}")
     return {"issues": entries, "warnings": warnings}
@@ -178,7 +178,7 @@ def collect_all_worktrees(repo_root: Path, issue_filter: str | None, open_only: 
         task_root = wt_path / "TASK"
         if not task_root.is_dir():
             continue
-        entries, warnings, matched = _collect_from_task_root(
+        entries, warnings, matched = collect_task_entries(
             task_root,
             issue_filter,
             open_only,

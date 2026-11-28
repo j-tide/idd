@@ -33,7 +33,7 @@ from forge import (  # noqa: E402
     save_hosts_config,
     verify_host_token,
 )
-from git_worktrees import default_worktree_root
+from git_worktrees import default_worktree_root, has_remote_origin
 from worktree_cleanup import CleanupResult, inspect_worktree, remove_merged_worktree
 import monitor  # noqa: E402
 from version import get_version  # noqa: E402
@@ -7976,21 +7976,6 @@ def _extract_active_worktrees_from_snapshot(snapshot: object) -> tuple[Path, ...
     return tuple(seen)
 
 
-def _compute_active_worktrees_fp(paths: tuple[Path, ...]) -> tuple[object, ...]:
-    sigs: list[object] = []
-    for wt in paths:
-        git_dir, _ = monitor._resolve_git_dirs_fast(wt)  # noqa: SLF001
-        sigs.append(
-            (
-                monitor._stat_sig(wt),  # noqa: SLF001
-                monitor._stat_sig(wt / "TASK"),  # noqa: SLF001
-                monitor._stat_sig(git_dir / "index") if git_dir is not None else None,  # noqa: SLF001
-                monitor._stat_sig(git_dir / "HEAD") if git_dir is not None else None,  # noqa: SLF001
-            )
-        )
-    return tuple(sigs)
-
-
 class _SnapshotCoalescer:
     """Thread-safe short-TTL JSON snapshot cache with singleflight request coalescing."""
 
@@ -8035,7 +8020,7 @@ class _SnapshotCoalescer:
                 cached_payload = None
 
         if cached_payload is not None:
-            if not watched or _compute_active_worktrees_fp(watched) == expected_fp:
+            if not watched or monitor.active_worktree_fingerprint(watched) == expected_fp:
                 return cached_payload
 
         with self._lock:
@@ -8065,7 +8050,7 @@ class _SnapshotCoalescer:
             snap_obj = producer()
             body = json.dumps(snap_obj, ensure_ascii=False).encode("utf-8")
             watched_paths = _extract_active_worktrees_from_snapshot(snap_obj)
-            watched_fp = _compute_active_worktrees_fp(watched_paths) if watched_paths else ()
+            watched_fp = monitor.active_worktree_fingerprint(watched_paths) if watched_paths else ()
         except BaseException as exc:
             if own_slot is not None:
                 own_slot.error = exc
@@ -8172,7 +8157,7 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
             self.snapshot_cache.invalidate()
 
     def _refresh_cached_repos(self, *, timeout: float = 2.0) -> None:
-        monitor._GH_CLI_CACHE["checked_at"] = 0.0  # noqa: SLF001
+        monitor.github_cli_auth.invalidate()
         monitor.invalidate_monitor_caches()
         self._invalidate_snapshot_cache()
         if self.local_only:
@@ -8303,7 +8288,7 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
             repo_init_results: list[dict[str, object]] = []
             for repo_path in self._target_repos():
                 resolved_repo = repo_path.expanduser().resolve()
-                has_origin, _ = monitor._detect_repo_meta_ro(resolved_repo)  # noqa: SLF001
+                has_origin = has_remote_origin(resolved_repo)
                 if not has_origin or not _repo_matches_host(resolved_repo, host_key):
                     continue
                 if monitor.get_repo_init_meta(resolved_repo)["state"] == "aligned":
@@ -8338,7 +8323,7 @@ class BoardRequestHandler(BaseHTTPRequestHandler):
             results: list[dict[str, object]] = []
             if apply_all:
                 for rp in target_repos:
-                    has_origin, _ = monitor._detect_repo_meta_ro(rp)  # noqa: SLF001
+                    has_origin = has_remote_origin(rp)
                     if not has_origin:
                         continue
                     if monitor.get_repo_init_meta(rp)["state"] == "aligned":
