@@ -32,6 +32,7 @@ from test_idd_cli import FAKE_GH_SCRIPT, IDD_BIN, SCRIPTS_DIR, parse_skill_versi
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from local_http import LocalHTTPServer
 import board_ui  # noqa: E402
 import monitor  # noqa: E402
 
@@ -876,7 +877,7 @@ class TestMonitorAndBoard(unittest.TestCase):
         self.assertTrue(handler_500_broken.close_connection)
 
     def test_board_server_handle_error_suppresses_disconnects_only(self) -> None:
-        server = board_ui.BoardHTTPServer(("127.0.0.1", 0), board_ui.BoardRequestHandler, bind_and_activate=False)
+        server = LocalHTTPServer(("127.0.0.1", 0), board_ui.BoardRequestHandler, bind_and_activate=False)
         try:
             for exc in (
                 BrokenPipeError("broken"),
@@ -3666,7 +3667,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                     version="0.0.4",
                     snapshot_cache=snap_cache,
                 )
-                server = board_ui.BoardHTTPServer(("127.0.0.1", 0), handler_cls)
+                server = LocalHTTPServer(("127.0.0.1", 0), handler_cls)
                 port = server.server_address[1]
                 srv_thread = threading.Thread(target=server.serve_forever, daemon=True)
                 srv_thread.start()

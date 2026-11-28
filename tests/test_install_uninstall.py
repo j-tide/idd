@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
+import urllib.request
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -116,6 +118,26 @@ class TestInstallAndUninstall(unittest.TestCase):
                 cwd=skill_dir, env=ver_env, capture_output=True, text=True, check=True,
             )
             self.assertEqual(json.loads(status.stdout)["repo_path"], str(skill_dir))
+
+            sample = tmp_path / "example.html"
+            sample.write_text("<title>example</title>", encoding="utf-8")
+            for command, args, marker in (
+                ("board", ["--local-only"], "IDD 实时开发监控看板"),
+                ("preview", [str(sample)], 'id="compareBtn"'),
+            ):
+                with self.subTest(command=command), subprocess.Popen(
+                    [str(cli_link), command, *args, "--host", "127.0.0.1", "--port", "0", "--no-open"],
+                    env=ver_env, cwd=skill_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                ) as server:
+                    try:
+                        banner = server.stdout.readline()
+                        url = re.search(r"http://127\.0\.0\.1:\d+", banner)
+                        self.assertIsNotNone(url, banner)
+                        with urllib.request.urlopen(url.group(), timeout=5) as response:
+                            self.assertIn(marker, response.read().decode("utf-8"))
+                    finally:
+                        server.terminate()
+                        server.communicate(timeout=5)
 
             # Re-running when BIN_DIR is already on PATH omits PATH export warning
             env_with_bin = dict(env)

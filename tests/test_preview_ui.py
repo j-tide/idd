@@ -22,6 +22,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from local_http import LocalHTTPServer
 import preview_ui  # noqa: E402
 
 
@@ -32,10 +33,10 @@ class TestPreviewUI(unittest.TestCase):
         *,
         title: str | None = None,
         compare: bool = False,
-    ) -> tuple[preview_ui.PreviewHTTPServer, str]:
+    ) -> tuple[LocalHTTPServer, str]:
         registry = preview_ui.PreviewRegistry(targets, title=title, compare_default=compare)
         handler_cls = partial(preview_ui.PreviewRequestHandler, registry=registry, version="0.0.3-test")
-        server = preview_ui.PreviewHTTPServer(("127.0.0.1", 0), handler_cls)  # type: ignore[arg-type]
+        server = LocalHTTPServer(("127.0.0.1", 0), handler_cls)  # type: ignore[arg-type]
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(lambda: (server.shutdown(), server.server_close(), thread.join(timeout=2)))
