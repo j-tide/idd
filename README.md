@@ -253,6 +253,8 @@ feat · fix · refactor · perf · docs · test · ci · chore
 
 ## 开发测试与发版
 
+维护命令、看板或持久化行为时，可按模块查找修改位置和验证入口。[架构地图与维护决策](references/architecture.md)
+
 零外部依赖，使用 Python 3 标准库直接运行全部单元测试，并以 [SKILL.md](SKILL.md) 中的 `metadata.version` 作为唯一版本源：
 
 ```bash

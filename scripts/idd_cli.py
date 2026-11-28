@@ -4,44 +4,64 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 from dataclasses import dataclass
-try:
-    import fcntl
-except ImportError:
-    fcntl = None  # type: ignore[assignment]
 import json
 import os
 from pathlib import Path
 import re
-import shlex
 import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 import time
-from typing import Any, Iterator
+from typing import Any
 import unicodedata
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from local_state import (
+    atomic_write_json,
+    get_config_dir,
+    get_config_path,
+    get_global_auto_merge,
+    get_hosts_path,
+    load_hosts_config,
+    remove_hosts,
+    set_global_auto_merge,
+    set_host,
+)
+from command_runner import IddError, run_cmd
+from delivery_summary import build_issue_summaries
+from git_worktrees import (
+    default_worktree_root,
+    detect_default_branch,
+    list_worktrees,
+    ref_exists,
+    resolve_main_worktree,
+)
+from repository_lock import MAIN_GIT_LOCK, repo_file_lock
+from worktree_cleanup import cleanup_scope_error, remove_merged_worktree
+from naming import (
+    ALLOWED_TYPES,
+    MAX_ISSUE_SCOPE_LEN,
+    infer_prefix_from_labels,
+    infer_prefix_from_title,
+    slug_source_from_issue_title,
+    slugify,
+    validate_and_format_issue_title,
+    validate_branch_name,
+)
 from forge import (  # noqa: E402
     ForgeError,
     evaluate_repo_init_settings,
-    get_config_dir,
     get_forge,
-    get_hosts_path,
-    load_hosts_config,
     normalize_host_input,
-    save_hosts_config,
     verify_host_token,
 )
-import board_ui  # noqa: E402
+import repo_registry
 import monitor  # noqa: E402
-import preview_ui  # noqa: E402
 import task_status  # noqa: E402
 from version import get_version  # noqa: E402
 
@@ -55,54 +75,10 @@ LAND_MERGE_RETRY_DELAY_SECONDS = 1.5
 CI_WAIT_GRACE_SECONDS = 5.0
 CI_WAIT_POLL_INTERVAL_SECONDS = 5.0
 CI_WAIT_TIMEOUT_SECONDS = 1800.0
-LAND_LOCK_POLL_INTERVAL_SECONDS = 0.05
-LAND_LOCK_DEFAULT_TIMEOUT_SECONDS = 0.0
 LAND_MAX_REBASE_ATTEMPTS = 3
-
-ALLOWED_TYPES = ("feat", "fix", "refactor", "perf", "docs", "test", "ci", "chore")
-MAX_ISSUE_SCOPE_LEN = 16
-ISSUE_SCOPE_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-CONVENTIONAL_TITLE_RE = re.compile(
-    rf"^({'|'.join(ALLOWED_TYPES)})(\([^)\r\n]+\))?(!)?[:：]\s*(.+)$",
-    re.IGNORECASE,
-)
-EMPTY_SCOPE_PREFIX_RE = re.compile(
-    rf"^({'|'.join(ALLOWED_TYPES)})\(\s*\)(!)?[:：]\s*(.*)$",
-    re.IGNORECASE,
-)
-ISSUE_BRANCH_RE = re.compile(r"^(feat|fix|refactor|perf|docs|test|ci|chore)/(\d+)-[a-z0-9]+(?:-[a-z0-9]+)*$")
-LOCAL_BRANCH_RE = re.compile(r"^(feat|fix|refactor|perf|docs|test|ci|chore)/[a-z0-9]+(?:-[a-z0-9]+)*$")
-FORBIDDEN_PREFIXES = {
-    "codex",
-    "claude",
-    "agy",
-    "antigravity",
-    "cursor",
-    "copilot",
-    "ai",
-    "feature",
-    "bugfix",
-    "hotfix",
-    "tmp",
-    "temp",
-    "wip",
-    "dev",
-}
 
 PROGRESS_START = "<!-- idd:progress:start -->"
 PROGRESS_END = "<!-- idd:progress:end -->"
-PROGRESS_RE = re.compile(
-    r"^[ \t]*" + re.escape(PROGRESS_START) + r"[ \t]*$.*?^[ \t]*" + re.escape(PROGRESS_END) + r"[ \t]*$",
-    re.DOTALL | re.MULTILINE,
-)
-
-
-class IddError(Exception):
-    """Expected CLI error carrying an explicit exit code."""
-
-    def __init__(self, message: str, exit_code: int = 1) -> None:
-        super().__init__(message)
-        self.exit_code = exit_code
 
 
 @dataclass(frozen=True)
@@ -115,45 +91,6 @@ class RepoInfo:
     default_branch: str
     worktree_root: Path
     has_origin: bool
-
-
-def run_cmd(
-    args: list[str],
-    *,
-    cwd: Path | None = None,
-    check: bool = True,
-    input_text: str | None = None,
-    env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """Run a subprocess capturing UTF-8 output; raise IddError on failure when check=True."""
-    try:
-        proc = subprocess.run(
-            args,
-            cwd=str(cwd) if cwd else None,
-            capture_output=True,
-            text=True,
-            input=input_text,
-            env=env,
-        )
-    except FileNotFoundError as exc:
-        raise IddError(f"找不到可执行文件 `{args[0]}`，请确认已安装并在 PATH 中。") from exc
-    if check and proc.returncode != 0:
-        detail = proc.stderr.strip() or proc.stdout.strip() or f"退出码 {proc.returncode}"
-        raise IddError(f"命令 `{' '.join(args)}` 执行失败：{detail}")
-    return proc
-
-
-@contextmanager
-def temp_markdown_file(content: str) -> Iterator[Path]:
-    """Write content to a temporary UTF-8 file and remove it on exit."""
-    fd, raw_path = tempfile.mkstemp(prefix="idd-", suffix=".md")
-    path = Path(raw_path)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        yield path
-    finally:
-        path.unlink(missing_ok=True)
 
 
 def parse_issue_ref(ref: str) -> int | None:
@@ -170,74 +107,10 @@ def parse_issue_ref(ref: str) -> int | None:
     return None
 
 
-def slugify(text: str, fallback: str) -> str:
-    """Convert text to lowercase ASCII kebab-case (max 40 chars), returning fallback if empty."""
-    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    if len(slug) > 40:
-        slug = slug[:40].strip("-")
-    return slug or fallback
-
-
-def _suggest_branch_name(branch: str, issue_number: int | None = None) -> str:
-    """Compute a valid `<type>/<issue#>-<slug>` or `<type>/<slug>` suggestion for an invalid branch."""
-    prefix_map = {
-        "feature": "feat",
-        "bugfix": "fix",
-        "hotfix": "fix",
-        "bug": "fix",
-    }
-    if "/" in branch:
-        raw_prefix, raw_tail = branch.split("/", 1)
-        raw_prefix_l = raw_prefix.lower()
-        suggested_type = prefix_map.get(raw_prefix_l, raw_prefix_l if raw_prefix_l in ALLOWED_TYPES else "feat")
-    else:
-        raw_tail = branch
-        suggested_type = "feat"
-
-    if issue_number is not None:
-        tail_no_num = re.sub(rf"^{issue_number}(?:-|$)", "", raw_tail)
-        clean_slug = slugify(tail_no_num, "task")
-        return f"{suggested_type}/{issue_number}-{clean_slug}"
-    clean_slug = slugify(raw_tail, "task")
-    return f"{suggested_type}/{clean_slug}"
-
-
-def validate_branch_name(
-    branch: str,
-    issue_number: int | None = None,
-    worktree: Path | None = None,
-) -> None:
-    """Enforce 8-type branch naming and reject tool/alias prefixes without modifying Git hooks."""
-    if not branch or branch == "(detached)":
-        raise IddError("当前处于游离 HEAD（detached），请先切换到规范分支（如 `feat/<issue#>-<slug>`）。")
-
-    prefix_part = branch.split("/", 1)[0].lower() if "/" in branch else ""
-    if prefix_part in FORBIDDEN_PREFIXES:
-        reason = f"禁止使用 `{prefix_part}/` 前缀"
-    elif issue_number is not None:
-        m = ISSUE_BRANCH_RE.fullmatch(branch)
-        if m and int(m.group(2)) == issue_number:
-            return
-        reason = f"绑定 Issue #{issue_number} 的分支须匹配 `<type>/{issue_number}-<slug>`"
-    else:
-        if LOCAL_BRANCH_RE.fullmatch(branch):
-            return
-        reason = "分支须匹配 `<type>/<slug>`（kebab-case 小写字母数字）"
-
-    suggested = _suggest_branch_name(branch, issue_number)
-    rename_cmd = f"git -C {worktree} branch -m {branch} {suggested}" if worktree else f"git branch -m {branch} {suggested}"
-    allowed_str = " | ".join(ALLOWED_TYPES)
-    raise IddError(
-        f"分支名 `{branch}` 不符合 IDD 规范（{reason}）。\n"
-        f"允许的分支前缀：{allowed_str}\n"
-        f"请先重命名分支再继续：{rename_cmd}"
-    )
-
-
 def get_repo_info(cwd: Path, *, register: bool = True) -> RepoInfo:
     """Resolve main/current worktrees, branches, origin presence, and managed worktree root."""
     try:
-        worktrees = task_status.list_git_worktrees(cwd)
+        worktrees = list_worktrees(cwd)
     except ValueError as exc:
         raise IddError(str(exc)) from exc
     if not worktrees:
@@ -245,7 +118,7 @@ def get_repo_info(cwd: Path, *, register: bool = True) -> RepoInfo:
 
     main_worktree = Path(worktrees[0]["path"]).resolve()
     if register:
-        monitor.register_repo(main_worktree)
+        repo_registry.register_repo(main_worktree)
     top_proc = run_cmd(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"])
     current_worktree = Path(top_proc.stdout.strip()).resolve()
 
@@ -256,12 +129,12 @@ def get_repo_info(cwd: Path, *, register: bool = True) -> RepoInfo:
     remotes = {line.strip() for line in remotes_proc.stdout.splitlines() if line.strip()}
     has_origin = "origin" in remotes
 
-    default_branch = _detect_default_branch(main_worktree, has_origin)
+    default_branch = detect_default_branch(main_worktree, has_origin)
     env_root = os.environ.get("IDD_WORKTREE_ROOT", "").strip()
     if env_root:
         worktree_root = Path(env_root).expanduser().resolve()
     else:
-        worktree_root = main_worktree.parent / f"{main_worktree.name}-worktrees"
+        worktree_root = default_worktree_root(main_worktree)
 
     return RepoInfo(
         main_worktree=main_worktree,
@@ -273,165 +146,16 @@ def get_repo_info(cwd: Path, *, register: bool = True) -> RepoInfo:
     )
 
 
-def _detect_default_branch(main_worktree: Path, has_origin: bool) -> str:
-    if has_origin:
-        sym = run_cmd(
-            ["git", "-C", str(main_worktree), "symbolic-ref", "refs/remotes/origin/HEAD"],
-            check=False,
-        )
-        if sym.returncode == 0 and sym.stdout.strip():
-            ref = sym.stdout.strip()
-            if ref.startswith("refs/remotes/origin/"):
-                return ref[len("refs/remotes/origin/"):]
-    for candidate in ("main", "master"):
-        if _ref_exists(main_worktree, f"refs/heads/{candidate}") or (
-            has_origin and _ref_exists(main_worktree, f"refs/remotes/origin/{candidate}")
-        ):
-            return candidate
-    return "main"
-
-
-def _ref_exists(repo_dir: Path, ref: str) -> bool:
-    proc = run_cmd(["git", "-C", str(repo_dir), "show-ref", "--verify", "--quiet", ref], check=False)
-    return proc.returncode == 0
-
-
 def _resolve_base_ref(repo: RepoInfo, base_branch: str | None = None) -> str:
     branch = base_branch or repo.default_branch
-    if repo.has_origin and _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
+    if repo.has_origin and ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
         return f"origin/{branch}"
     return branch
 
 
-_ACTIVE_REPO_LOCKS: set[Path] = set()
-
-
-def _resolve_git_common_dir(repo_dir: Path) -> Path:
-    """Resolve the shared `.git` common directory for lock placement across worktrees."""
-    proc = run_cmd(["git", "-C", str(repo_dir), "rev-parse", "--git-common-dir"], check=False)
-    raw = proc.stdout.strip() if proc.returncode == 0 else ""
-    if not raw:
-        return (repo_dir / ".git").resolve()
-    candidate = Path(raw)
-    if not candidate.is_absolute():
-        candidate = repo_dir / candidate
-    return candidate.resolve()
-
-
-def _read_lock_owner_info(lock_path: Path) -> dict[str, Any]:
-    try:
-        raw = lock_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return {}
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _format_lock_holder(owner: dict[str, Any]) -> str:
-    parts: list[str] = []
-    branch = str(owner.get("branch") or "").strip()
-    cmd = str(owner.get("command") or "").strip()
-    pid = owner.get("pid")
-    if branch:
-        parts.append(f"分支 `{branch}`")
-    if cmd:
-        parts.append(cmd)
-    if pid:
-        parts.append(f"PID {pid}")
-    return "，".join(parts) if parts else "另一会话"
-
-
-@contextmanager
-def _repo_file_lock(
-    main_worktree: Path,
-    lock_name: str,
-    *,
-    owner_info: dict[str, Any] | None = None,
-    wait_prefix: str = "",
-    timeout_env: str | None = None,
-) -> Iterator[Path]:
-    """Acquire a reentrant cross-process exclusive repository lock under git-common-dir."""
-    common_dir = _resolve_git_common_dir(main_worktree)
-    common_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = (common_dir / lock_name).resolve()
-    if lock_path in _ACTIVE_REPO_LOCKS or fcntl is None:
-        yield lock_path
-        return
-
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
-    handle = os.fdopen(fd, "r+", encoding="utf-8")
-    acquired = False
-    try:
-        waited = False
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            acquired = True
-        except BlockingIOError:
-            waited = True
-            holder = _format_lock_holder(_read_lock_owner_info(lock_path))
-            if wait_prefix:
-                print(f"⏳ {wait_prefix}：当前正被 {holder} 占用，排队等待中...", flush=True)
-            timeout = (
-                _get_float_env(timeout_env, LAND_LOCK_DEFAULT_TIMEOUT_SECONDS, minimum=0.0)
-                if timeout_env
-                else 0.0
-            )
-            if timeout <= 0.0:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-                acquired = True
-            else:
-                deadline = time.monotonic() + timeout
-                while True:
-                    try:
-                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        acquired = True
-                        break
-                    except BlockingIOError:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0.0:
-                            latest_holder = _format_lock_holder(_read_lock_owner_info(lock_path))
-                            raise IddError(
-                                f"等待 {wait_prefix or lock_name} 超时（{timeout:.1f}s），当前持锁者：{latest_holder}。",
-                                exit_code=3,
-                            )
-                        time.sleep(min(LAND_LOCK_POLL_INTERVAL_SECONDS, remaining))
-        if waited and wait_prefix:
-            print(f"🔓 已获取 {wait_prefix} 锁，继续执行...", flush=True)
-
-        payload = dict(owner_info or {})
-        payload["pid"] = os.getpid()
-        payload["started_at"] = round(time.time(), 3)
-        handle.seek(0)
-        handle.truncate()
-        handle.write(json.dumps(payload, ensure_ascii=False))
-        handle.flush()
-
-        _ACTIVE_REPO_LOCKS.add(lock_path)
-        yield lock_path
-    finally:
-        _ACTIVE_REPO_LOCKS.discard(lock_path)
-        if acquired:
-            try:
-                handle.seek(0)
-                handle.truncate()
-                handle.flush()
-            except OSError:
-                pass
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except OSError:
-                pass
-        handle.close()
-
-
 def find_worktree_for_target(main_worktree: Path, target: str) -> dict[str, str] | None:
     """Locate an existing worktree matching an issue number or issue slug."""
-    worktrees = task_status.list_git_worktrees(main_worktree)
+    worktrees = list_worktrees(main_worktree)
     issue_num = parse_issue_ref(target)
     main_resolved = main_worktree.resolve()
 
@@ -569,918 +293,6 @@ def _resolve_target_worktree(repo: RepoInfo, target: str | None) -> tuple[Path, 
 
     issue_dir, issue_num = _infer_issue_dir_and_number(wt_path, branch, target)
     return wt_path, branch, issue_dir, issue_num
-
-
-def _parse_task_markdown_details(path: Path) -> dict[str, str]:
-    """Extract fallback Test command/outcome info from a TASK markdown body."""
-    info = {"command": "", "outcome": "", "notes": "", "latest_result": ""}
-    if not path.is_file():
-        return info
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("- Command:") and not info["command"]:
-            info["command"] = stripped[len("- Command:"):].strip()
-        elif stripped.startswith("- Outcome:") and not info["outcome"]:
-            info["outcome"] = stripped[len("- Outcome:"):].strip()
-        elif stripped.startswith("- Notes:") and not info["notes"]:
-            info["notes"] = stripped[len("- Notes:"):].strip()
-        elif stripped.startswith("|") and "---" not in stripped and "日期 / 修订" not in stripped:
-            cells = [c.strip() for c in stripped.strip("|").split("|")]
-            if len(cells) >= 3 and cells[1]:
-                info["latest_result"] = f"{cells[1]} — {cells[2]}"
-    return info
-
-
-def _collect_commit_task_records(worktree: Path, issue_dir: str, base_ref: str) -> list[dict[str, Any]]:
-    """Read git commits since merge-base and extract Task/Test metadata."""
-    check_ref = run_cmd(["git", "-C", str(worktree), "rev-parse", "--verify", base_ref], check=False)
-    if check_ref.returncode != 0:
-        return []
-
-    mb = run_cmd(["git", "-C", str(worktree), "merge-base", base_ref, "HEAD"], check=False)
-    if mb.returncode != 0 or not mb.stdout.strip():
-        return []
-    base_sha = mb.stdout.strip()
-    log_proc = run_cmd(
-        ["git", "-C", str(worktree), "log", "--reverse", "--format=%H%x1f%s%x1f%b%x1e", f"{base_sha}..HEAD"],
-        check=False,
-    )
-    if log_proc.returncode != 0:
-        return []
-
-    records: list[dict[str, Any]] = []
-    for raw_entry in log_proc.stdout.split("\x1e"):
-        entry = raw_entry.strip("\n")
-        if not entry.strip():
-            continue
-        parts = entry.split("\x1f")
-        if len(parts) < 3:
-            continue
-        sha, subject, body = parts[0].strip(), parts[1].strip(), parts[2]
-        commit_type = ""
-        change_desc = subject
-        type_match = re.match(r"^([a-z]+)(?:\([^)]+\))?:\s*(.+)$", subject)
-        if type_match:
-            commit_type, change_desc = type_match.group(1), type_match.group(2).strip()
-
-        task_id = ""
-        test_lines: list[str] = []
-        extra_lines: list[str] = []
-        for raw_line in body.splitlines():
-            line = raw_line.strip()
-            if line.startswith("Task:"):
-                val = line[len("Task:"):].strip()
-                m = re.search(r"(TASK-\d+)", val)
-                if m and (issue_dir in val or val.startswith("TASK-")):
-                    task_id = m.group(1)
-            elif line.startswith("Test:"):
-                val = line[len("Test:"):].strip()
-                if val:
-                    test_lines.append(val)
-            elif line.startswith(("Refs:", "Closes:", "Fixes:", "Co-authored-by:", "Signed-off-by:")):
-                continue
-            elif line:
-                extra_lines.append(raw_line.rstrip())
-            elif extra_lines and extra_lines[-1] != "":
-                extra_lines.append("")
-        while extra_lines and extra_lines[-1] == "":
-            extra_lines.pop()
-
-        records.append(
-            {
-                "sha": sha,
-                "type": commit_type,
-                "subject": subject,
-                "change": change_desc,
-                "task_id": task_id,
-                "test": "; ".join(test_lines),
-                "tests": test_lines,
-                "extra": "\n".join(extra_lines).strip(),
-            }
-        )
-    return records
-
-
-def _wrap_inline_code(text: str) -> str:
-    """Wrap command text in a safe CommonMark inline code span."""
-    cleaned = _unwrap_inline_code(text)
-    if not cleaned:
-        return ""
-    runs = re.findall(r"`+", cleaned)
-    max_ticks = max((len(r) for r in runs), default=0)
-    fence = "`" * (max_ticks + 1)
-    if cleaned.startswith("`") or cleaned.endswith("`"):
-        return f"{fence} {cleaned} {fence}"
-    return f"{fence}{cleaned}{fence}"
-
-
-def _unwrap_inline_code(text: str) -> str:
-    """Strip matching outer CommonMark inline code backticks if present."""
-    cleaned = text.strip()
-    if not cleaned.startswith("`"):
-        return cleaned
-    open_match = re.match(r"^(`+)", cleaned)
-    if not open_match:
-        return cleaned
-    fence = open_match.group(1)
-    fence_len = len(fence)
-    for m in re.finditer(r"`+", cleaned[fence_len:]):
-        if len(m.group(0)) == fence_len:
-            end_pos = fence_len + m.end()
-            if end_pos == len(cleaned):
-                inner = cleaned[fence_len : fence_len + m.start()].strip()
-                if inner:
-                    return inner
-            break
-    return cleaned
-
-
-def _extract_single_paren_note(rem: str) -> str | None:
-    """Return inner text when rem is one balanced parenthetical note without backticks."""
-    if not rem or "`" in rem:
-        return None
-    if not ((rem.startswith("(") and rem.endswith(")")) or (rem.startswith("（") and rem.endswith("）"))):
-        return None
-    depth = 0
-    for idx, ch in enumerate(rem):
-        if ch in ("(", "（"):
-            depth += 1
-        elif ch in (")", "）"):
-            depth -= 1
-            if depth < 0:
-                return None
-            if depth == 0 and idx != len(rem) - 1:
-                return None
-    if depth != 0:
-        return None
-    return rem[1:-1].strip()
-
-
-def _unwrap_inline_code_with_note(text: str) -> tuple[str, str]:
-    """Unwrap outer inline code ticks and peel a trailing parenthetical annotation if present."""
-    cleaned = text.strip()
-    if cleaned.startswith("`"):
-        open_match = re.match(r"^(`+)", cleaned)
-        if open_match:
-            fence_len = len(open_match.group(1))
-            for m in re.finditer(r"`+", cleaned[fence_len:]):
-                if len(m.group(0)) == fence_len:
-                    inner = cleaned[fence_len : fence_len + m.start()].strip()
-                    rem = cleaned[fence_len + m.end() :].strip()
-                    if inner:
-                        if not rem:
-                            return inner, ""
-                        note = _extract_single_paren_note(rem)
-                        if note is not None:
-                            return inner, note
-                    break
-
-    paren_match = re.match(r"^(.*?)\s+([（(][^()（）]+[）)])$", cleaned)
-    if paren_match:
-        cmd_part = paren_match.group(1).strip()
-        raw_note = paren_match.group(2).strip()
-        note = raw_note[1:-1].strip()
-        if (
-            cmd_part
-            and note
-            and not cmd_part.endswith("$")
-            and (
-                (raw_note.startswith("（") and raw_note.endswith("）"))
-                or bool(re.search(r"[\u4e00-\u9fff]", note))
-                or bool(re.match(r"^(?:ci|all|full|local|smoke)\b", note, re.IGNORECASE))
-            )
-        ):
-            return _unwrap_inline_code(cmd_part), note
-
-    return cleaned, ""
-
-
-_COMPLETED_CHECK_END_RE = re.compile(
-    r"(?:\b(?:passed|failed|skipped|errors?|ok|pass|fail)|(?:通过|失败|跳过|无错误))$",
-    re.IGNORECASE,
-)
-_TRAILING_STATUS_RE = re.compile(
-    r"^(.+?)\s+(passed|failed|skipped|ok|通过|失败)$",
-    re.IGNORECASE,
-)
-_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
-
-_UV_VALUE_FLAGS = {
-    "--extra",
-    "--with",
-    "--group",
-    "--python",
-    "--directory",
-    "--project",
-    "-p",
-    "-C",
-    "--package",
-    "--only-group",
-}
-_UV_BOOL_FLAGS = {
-    "--offline",
-    "--locked",
-    "--frozen",
-    "--no-sync",
-    "--dev",
-    "--no-dev",
-    "--isolated",
-    "--quiet",
-    "-q",
-    "--all-extras",
-    "--no-editable",
-}
-_PYTEST_VALUE_FLAGS = {
-    "-o",
-    "-k",
-    "-m",
-    "-c",
-    "-n",
-    "-W",
-    "-r",
-    "--tb",
-    "--maxfail",
-    "--rootdir",
-    "--junitxml",
-    "--cov",
-    "--cov-report",
-    "--ignore",
-    "--deselect",
-    "--color",
-    "--durations",
-    "--capture",
-    "--log-level",
-    "--asyncio-mode",
-    "--confcutdir",
-}
-_PYTEST_BOOL_FLAGS = {
-    "-q",
-    "--quiet",
-    "-v",
-    "--verbose",
-    "-vv",
-    "-vvv",
-    "-x",
-    "--exitfirst",
-    "-s",
-    "-l",
-    "--showlocals",
-    "--lf",
-    "--last-failed",
-    "--ff",
-    "--failed-first",
-    "--nf",
-    "--new-first",
-    "--no-header",
-    "--no-summary",
-    "--no-cov",
-    "--strict-markers",
-    "--strict-config",
-    "--full-trace",
-}
-_JS_VALUE_FLAGS = {
-    "--maxWorkers",
-    "--filter",
-    "--reporter",
-    "--testNamePattern",
-    "--testPathPattern",
-    "-t",
-    "--config",
-    "-c",
-    "-C",
-    "--dir",
-    "--prefix",
-}
-_JS_BOOL_FLAGS = {
-    "--run",
-    "--watch",
-    "--silent",
-    "--if-present",
-    "--",
-    "-w",
-    "-s",
-    "--passWithNoTests",
-    "--coverage",
-}
-
-
-def _looks_like_completed_check(text: str) -> bool:
-    """Return True if a semicolon-separated fragment already ends with a check verdict."""
-    return bool(_COMPLETED_CHECK_END_RE.search(text.strip()))
-
-
-def _split_top_level_semicolons(cleaned: str) -> list[str]:
-    """Split on `; ` only outside parentheses and inline backtick spans."""
-    parts: list[str] = []
-    buf: list[str] = []
-    in_ticks = 0
-    paren_depth = 0
-    i = 0
-    n = len(cleaned)
-    while i < n:
-        ch = cleaned[i]
-        if ch == "`":
-            j = i
-            while j < n and cleaned[j] == "`":
-                j += 1
-            run = cleaned[i:j]
-            run_len = j - i
-            if in_ticks == 0:
-                in_ticks = run_len
-            elif run_len == in_ticks:
-                in_ticks = 0
-            buf.append(run)
-            i = j
-            continue
-        if in_ticks == 0:
-            if ch in ("(", "（"):
-                paren_depth += 1
-            elif ch in (")", "）"):
-                paren_depth = max(0, paren_depth - 1)
-            elif ch == ";" and paren_depth == 0 and i + 1 < n and cleaned[i + 1].isspace():
-                seg = "".join(buf).strip()
-                if seg:
-                    parts.append(seg)
-                buf.clear()
-                i += 1
-                while i < n and cleaned[i].isspace():
-                    i += 1
-                continue
-        buf.append(ch)
-        i += 1
-    tail = "".join(buf).strip()
-    if tail:
-        parts.append(tail)
-    return parts
-
-
-def _split_test_segments(cleaned: str) -> list[str]:
-    """Split multi-check Test strings on `; ` while preserving compound shell commands."""
-    parts = _split_top_level_semicolons(cleaned)
-    if len(parts) <= 1:
-        return parts
-
-    segments: list[str] = []
-    buf: list[str] = []
-    idx = 0
-    while idx < len(parts):
-        part = parts[idx]
-        if " — " in part:
-            buf.append(part)
-            segments.append("; ".join(buf))
-            buf.clear()
-        elif not buf and _looks_like_completed_check(part):
-            segments.append(part)
-        elif not buf and not any(" — " in later or _looks_like_completed_check(later) for later in parts[idx:]):
-            segments.append("; ".join(parts[idx:]))
-            break
-        elif not buf and not any(" — " in later for later in parts[idx + 1:]):
-            segments.append(part)
-        else:
-            buf.append(part)
-        idx += 1
-    if buf:
-        segments.append("; ".join(buf))
-    return segments
-
-
-def _is_file_target(target: str) -> bool:
-    base = target.rstrip("/").rsplit("/", 1)[-1]
-    return "." in base and not target.endswith("/")
-
-
-def _format_targets_struct(prefix: str, targets: list[str], *, raw_cmd: str) -> dict[str, Any]:
-    if not targets:
-        return {"code": prefix, "target_code": "", "meta": "", "simplified": prefix != raw_cmd}
-    if len(targets) == 1:
-        target = targets[0]
-        joined = f"{prefix} {target}"
-        if _is_file_target(target) and (len(joined) > 48 or target.count("/") >= 3):
-            base = target.rstrip("/").rsplit("/", 1)[-1]
-            return {"code": prefix, "target_code": base, "meta": "", "simplified": True}
-        if not _is_file_target(target) and len(joined) > 55 and target.count("/") >= 3:
-            segs = [s for s in target.split("/") if s]
-            short_dir = ".../" + "/".join(segs[-2:]) + ("/" if target.endswith("/") else "")
-            return {"code": prefix, "target_code": short_dir, "meta": "", "simplified": True}
-        return {"code": joined, "target_code": "", "meta": "", "simplified": joined != raw_cmd}
-    if len(targets) == 2:
-        joined = f"{prefix} {targets[0]} {targets[1]}"
-        if len(joined) <= 55:
-            return {"code": joined, "target_code": "", "meta": "", "simplified": joined != raw_cmd}
-    unit = "测试文件" if all(_is_file_target(t) for t in targets) else "测试目标"
-    return {"code": prefix, "target_code": "", "meta": f"{len(targets)} 个{unit}", "simplified": True}
-
-
-def _collect_positional_targets(
-    args: list[str],
-    *,
-    value_flags: set[str],
-    bool_flags: set[str],
-    skip_r_prefix: bool = False,
-) -> list[str]:
-    targets: list[str] = []
-    i = 0
-    while i < len(args):
-        tok = args[i]
-        if tok in bool_flags:
-            i += 1
-            continue
-        if tok in value_flags:
-            i += 2
-            continue
-        if skip_r_prefix and tok.startswith("-r") and len(tok) > 2:
-            i += 1
-            continue
-        if tok.startswith("-"):
-            i += 1
-            continue
-        targets.append(tok)
-        i += 1
-    return targets
-
-
-def _summarize_single_part_struct(raw_cmd: str) -> dict[str, Any]:
-    """Shorten a single shell command (no `&&`) into structured code + optional meta."""
-    cleaned = _unwrap_inline_code(raw_cmd)
-    if not cleaned:
-        return {"code": "", "target_code": "", "meta": "", "simplified": False}
-    try:
-        tokens = shlex.split(cleaned)
-    except ValueError:
-        tokens = cleaned.split()
-    if not tokens:
-        return {"code": cleaned, "target_code": "", "meta": "", "simplified": False}
-
-    while tokens and _ENV_ASSIGN_RE.match(tokens[0]):
-        tokens.pop(0)
-
-    changed = True
-    while changed and tokens:
-        changed = False
-        head = tokens[0]
-        head_base = Path(head).name
-        if head_base == "uv" and len(tokens) >= 2 and tokens[1] == "run":
-            tokens = tokens[2:]
-            while tokens:
-                tok = tokens[0]
-                if tok in _UV_BOOL_FLAGS or any(tok.startswith(f"{f}=") for f in _UV_VALUE_FLAGS):
-                    tokens.pop(0)
-                elif tok in _UV_VALUE_FLAGS and len(tokens) >= 2:
-                    tokens = tokens[2:]
-                else:
-                    break
-            changed = True
-        elif head_base in ("poetry", "pipenv", "pdm", "hatch") and len(tokens) >= 2 and tokens[1] == "run":
-            tokens = tokens[2:]
-            changed = True
-        elif head_base in ("corepack", "npx", "pnpx", "bunx"):
-            tokens = tokens[1:]
-            changed = True
-        elif head_base in ("python", "python3", "py") and len(tokens) >= 3 and tokens[1] == "-m":
-            tokens = tokens[2:]
-            changed = True
-
-    if not tokens:
-        return {"code": cleaned, "target_code": "", "meta": "", "simplified": False}
-
-    cmd = Path(tokens[0]).name
-    rest = tokens[1:]
-
-    if cmd == "pytest":
-        targets = _collect_positional_targets(
-            rest,
-            value_flags=_PYTEST_VALUE_FLAGS,
-            bool_flags=_PYTEST_BOOL_FLAGS,
-            skip_r_prefix=True,
-        )
-        return _format_targets_struct("pytest", targets, raw_cmd=cleaned)
-
-    if cmd == "unittest":
-        if rest and rest[0] == "discover":
-            start_dir = ""
-            i = 1
-            while i < len(rest):
-                tok = rest[i]
-                if tok in ("-s", "--start-directory") and i + 1 < len(rest):
-                    start_dir = rest[i + 1]
-                    i += 2
-                elif tok.startswith("--start-directory="):
-                    start_dir = tok.split("=", 1)[1]
-                    i += 1
-                elif tok in ("-p", "--pattern", "-t", "--top-level-directory") and i + 1 < len(rest):
-                    i += 2
-                else:
-                    i += 1
-            code = f"unittest {start_dir}" if start_dir else "unittest discover"
-            return {"code": code, "target_code": "", "meta": "", "simplified": code != cleaned}
-        targets = _collect_positional_targets(
-            rest,
-            value_flags={"-k"},
-            bool_flags={"-v", "--verbose", "-q", "--quiet", "-f", "--failfast", "-b", "--buffer", "-c", "--catch"},
-        )
-        return _format_targets_struct("unittest", targets, raw_cmd=cleaned)
-
-    if cmd in ("pnpm", "npm", "yarn", "bun"):
-        idx = 0
-        script = ""
-        while idx < len(rest):
-            tok = rest[idx]
-            if tok == "run" or tok in ("-s", "--silent", "--if-present", "-w", "--workspace-root"):
-                idx += 1
-            elif tok in ("-C", "--dir", "--prefix", "--filter"):
-                idx += 2
-            elif tok.startswith("-"):
-                idx += 1
-            else:
-                script = tok
-                idx += 1
-                break
-        if script:
-            targets = _collect_positional_targets(
-                rest[idx:],
-                value_flags=_JS_VALUE_FLAGS,
-                bool_flags=_JS_BOOL_FLAGS,
-            )
-            return _format_targets_struct(f"{cmd} {script}", targets, raw_cmd=cleaned)
-
-    if cmd in ("vitest", "jest", "mocha"):
-        args = rest[1:] if (cmd == "vitest" and rest and rest[0] == "run") else rest
-        targets = _collect_positional_targets(
-            args,
-            value_flags=_JS_VALUE_FLAGS,
-            bool_flags=_JS_BOOL_FLAGS,
-        )
-        return _format_targets_struct(cmd, targets, raw_cmd=cleaned)
-
-    if cmd == "go" and rest and rest[0] == "test":
-        targets = _collect_positional_targets(
-            rest[1:],
-            value_flags={"-run", "-skip", "-count", "-timeout", "-tags", "-coverprofile"},
-            bool_flags={"-v", "-race", "-cover", "-short", "-json"},
-        )
-        return _format_targets_struct("go test", targets, raw_cmd=cleaned)
-
-    if cmd == "cargo" and rest and rest[0] == "test":
-        targets = _collect_positional_targets(
-            rest[1:],
-            value_flags={"-p", "--package", "--test", "--bin", "--features"},
-            bool_flags={"--workspace", "--all-targets", "--lib", "--quiet", "-q", "--nocapture", "--"},
-        )
-        return _format_targets_struct("cargo test", targets, raw_cmd=cleaned)
-
-    if tokens != cleaned.split() and len(tokens) == 1:
-        return {"code": tokens[0], "target_code": "", "meta": "", "simplified": tokens[0] != cleaned}
-    if len(cleaned) > 80 and len(tokens) >= 4:
-        trailing_files: list[str] = []
-        for tok in reversed(tokens):
-            if _is_file_target(tok):
-                trailing_files.append(tok)
-            else:
-                break
-        if len(trailing_files) >= 3:
-            prefix_tokens = tokens[: len(tokens) - len(trailing_files)]
-            return {
-                "code": " ".join(prefix_tokens),
-                "target_code": "",
-                "meta": f"{len(trailing_files)} 个文件",
-                "simplified": True,
-            }
-    return {"code": cleaned, "target_code": "", "meta": "", "simplified": False}
-
-
-def _format_part_markdown(part: dict[str, Any]) -> str:
-    code = _wrap_inline_code(str(part.get("code", "")))
-    target_code = str(part.get("target_code", ""))
-    meta = str(part.get("meta", ""))
-    if target_code:
-        return f"{code}（{_wrap_inline_code(target_code)}）"
-    if meta:
-        return f"{code}（{meta}）"
-    return code
-
-
-def _format_part_plain(part: dict[str, Any]) -> str:
-    code = str(part.get("code", ""))
-    target_code = str(part.get("target_code", ""))
-    meta = str(part.get("meta", ""))
-    if target_code:
-        return f"{code} ({target_code})"
-    if meta:
-        return f"{code} ({meta})"
-    return code
-
-
-def _summarize_command_struct(raw_cmd: str, note: str = "") -> dict[str, Any]:
-    """Produce structured Markdown and plain-text labels for a validation command."""
-    cleaned = raw_cmd.strip()
-    if not cleaned:
-        return {"raw_cmd": "", "md_label": "", "label": "", "simplified": False}
-    if " && " in cleaned:
-        raw_parts = [_unwrap_inline_code(p) for p in cleaned.split(" && ") if p.strip()]
-    else:
-        raw_parts = [_unwrap_inline_code(cleaned)]
-    raw_parts = [p for p in raw_parts if p]
-    if not raw_parts:
-        return {"raw_cmd": "", "md_label": "", "label": "", "simplified": False}
-
-    parts_struct = [_summarize_single_part_struct(p) for p in raw_parts]
-    md_label = "、".join(_format_part_markdown(p) for p in parts_struct)
-    plain_label = " && ".join(_format_part_plain(p) for p in parts_struct)
-    if note:
-        md_label = f"{md_label}（{note}）"
-        plain_label = f"{plain_label} ({note})"
-    clean_raw = " && ".join(raw_parts)
-    simplified = any(bool(p.get("simplified")) for p in parts_struct)
-    return {
-        "raw_cmd": clean_raw,
-        "md_label": md_label,
-        "label": plain_label,
-        "simplified": simplified,
-    }
-
-
-def _parse_test_entries(test_text: str) -> list[dict[str, Any]]:
-    """Parse Test summary text into structured entries with optional simplified labels."""
-    cleaned = test_text.strip()
-    if not cleaned or cleaned in ("未记录", "未在提交中记录"):
-        return [{"raw_cmd": "", "md_label": "", "label": "", "result": cleaned or "未记录", "simplified": False}]
-
-    entries: list[dict[str, Any]] = []
-    for seg in _split_test_segments(cleaned):
-        if " — " in seg:
-            raw_cmd_part, res_part = seg.split(" — ", 1)
-            raw_cmd, note = _unwrap_inline_code_with_note(raw_cmd_part)
-            summary = _summarize_command_struct(raw_cmd, note) if raw_cmd else {
-                "raw_cmd": "",
-                "md_label": "",
-                "label": "",
-                "simplified": False,
-            }
-            entries.append(
-                {
-                    "raw_cmd": summary["raw_cmd"],
-                    "md_label": summary["md_label"],
-                    "label": summary["label"],
-                    "result": res_part.strip(),
-                    "simplified": summary["simplified"],
-                }
-            )
-            continue
-
-        trailing = _TRAILING_STATUS_RE.match(seg)
-        if trailing:
-            prefix, note = _unwrap_inline_code_with_note(trailing.group(1))
-            status = trailing.group(2)
-            if (
-                prefix
-                and re.search(r"[A-Za-z_./:-]", prefix)
-                and prefix.lower() not in {"all", "tests", "all tests"}
-                and not re.fullmatch(r"\d+(?:\s+\w+)?", prefix)
-            ):
-                summary = _summarize_command_struct(prefix, note)
-                entries.append(
-                    {
-                        "raw_cmd": summary["raw_cmd"] if summary["simplified"] else "",
-                        "md_label": summary["md_label"],
-                        "label": summary["label"],
-                        "result": status,
-                        "simplified": summary["simplified"],
-                    }
-                )
-                continue
-
-        entries.append({"raw_cmd": "", "md_label": "", "label": "", "result": seg, "simplified": False})
-    return entries
-
-
-def _format_entry_markdown(entry: dict[str, Any]) -> str:
-    md_label = str(entry.get("md_label") or "")
-    if not md_label and entry.get("label"):
-        md_label = _wrap_inline_code(str(entry["label"]))
-    result = str(entry.get("result", ""))
-    if md_label and result:
-        return f"{md_label} — {result}"
-    return md_label or result
-
-
-def _format_entry_plain(entry: dict[str, Any]) -> str:
-    label = str(entry.get("label", ""))
-    result = str(entry.get("result", ""))
-    if label and result:
-        return f"{label} — {result}"
-    return label or result
-
-
-def _format_test_summary_line(test_text: str) -> str:
-    """Format a Markdown Test summary block with split checks and concise labels."""
-    entries = _parse_test_entries(test_text)
-    if len(entries) <= 1:
-        item = _format_entry_markdown(entries[0])
-        return f"- **Test:** {item}"
-    lines = ["**Test:**", ""]
-    for entry in entries:
-        lines.append(f"- {_format_entry_markdown(entry)}")
-    return "\n".join(lines)
-
-
-def _format_test_summary_plain(test_text: str) -> str:
-    """Format a zero-Markdown plain-text Test block for Squash Commit messages."""
-    entries = _parse_test_entries(test_text)
-    if len(entries) <= 1:
-        return f"Test: {_format_entry_plain(entries[0])}"
-    lines = ["Test:"]
-    for entry in entries:
-        lines.append(f"- {_format_entry_plain(entry)}")
-    return "\n".join(lines)
-
-
-def _escape_md_table_cell(text: str) -> str:
-    """Normalize newlines and escape pipe characters for GFM/GitLab Markdown table cells."""
-    collapsed = re.sub(r"\s*\r?\n\s*", " ", text.strip())
-    return collapsed.replace("|", "\\|")
-
-
-def _format_change_item(tid: str, change: str, extra: str) -> str:
-    """Format a compact task bullet with optional indented commit body notes."""
-    head = f"- **{tid}** {change}"
-    if not extra:
-        return head
-    indented = "\n".join(f"  {line}" if line else "" for line in extra.splitlines())
-    return f"{head}\n\n{indented}"
-
-
-def _format_plain_task_block(tid: str, change: str, extra: str, plain_test: str) -> str:
-    """Format a compact zero-Markdown plain-text TASK block without internal blank lines."""
-    lines = [f"{tid}: {change}"]
-    if extra:
-        lines.extend(line.rstrip() for line in extra.splitlines() if line.strip())
-    if plain_test:
-        lines.append(plain_test)
-    return "\n".join(lines)
-
-
-def _format_conventional_title(default_type: str, raw_title: str) -> str:
-    """Ensure a PR / Squash commit title has a single normalized Conventional Commit prefix."""
-    cleaned = raw_title.strip()
-    match = CONVENTIONAL_TITLE_RE.match(cleaned)
-    if match:
-        prefix_type = match.group(1).lower()
-        scope = match.group(2) or ""
-        bang = match.group(3) or ""
-        subject = match.group(4).strip()
-        return f"{prefix_type}{scope}{bang}: {subject}"
-    return f"{default_type}: {cleaned}"
-
-
-def build_issue_summaries(
-    worktree: Path,
-    issue_dir: str,
-    issue_number: int | None,
-    base_ref: str,
-    issue_title: str | None = None,
-    branch: str = "",
-) -> tuple[str, str, str]:
-    """Generate (suggested_title, pr_markdown_body, commit_plain_body) from TASKs and commits."""
-    task_dir = worktree / "TASK" / issue_dir
-    tasks: list[dict[str, Any]] = []
-    if task_dir.is_dir():
-        for path in sorted(task_dir.glob("TASK-*.md")):
-            if path.is_file() and re.match(r"^TASK-\d+(?:-|\.md)", path.name):
-                parsed = task_status.read_task(path, worktree / "TASK")
-                parsed["_details"] = _parse_task_markdown_details(path)
-                tasks.append(parsed)
-
-    commits = _collect_commit_task_records(worktree, issue_dir, base_ref)
-    commit_by_task: dict[str, dict[str, Any]] = {}
-    for rec in commits:
-        if rec["task_id"]:
-            commit_by_task[rec["task_id"]] = rec
-
-    commit_types = [c["type"] for c in commits if c["type"] and c["type"] != "chore"]
-    dominant_type = commit_types[0] if commit_types else "feat"
-
-    first_change = ""
-    change_items: list[str] = []
-    has_extra_details = False
-    verification_rows: list[str] = []
-    plain_blocks: list[str] = []
-    detailed_commands: list[tuple[str, str]] = []
-    seen_commands: set[tuple[str, str]] = set()
-
-    def _append_task_block(tid: str, change: str, extra: str, test_text: str) -> None:
-        nonlocal has_extra_details
-        change_items.append(_format_change_item(tid, change, extra))
-        if extra:
-            has_extra_details = True
-
-        entries = _parse_test_entries(test_text)
-        for idx, entry in enumerate(entries):
-            task_cell = tid if idx == 0 else ""
-            check_cell = _escape_md_table_cell(str(entry.get("md_label") or "")) or "—"
-            result_cell = _escape_md_table_cell(str(entry.get("result") or "")) or "—"
-            verification_rows.append(f"| {task_cell} | {check_cell} | {result_cell} |")
-            raw_cmd = str(entry.get("raw_cmd", ""))
-            if entry.get("simplified") and raw_cmd:
-                pair = (tid, raw_cmd)
-                if pair not in seen_commands:
-                    seen_commands.add(pair)
-                    detailed_commands.append(pair)
-
-        plain_test = _format_test_summary_plain(test_text)
-        plain_blocks.append(_format_plain_task_block(tid, change, extra, plain_test))
-
-    if tasks:
-        for task in tasks:
-            tid = task["id"]
-            commit_rec = commit_by_task.get(tid, {})
-            details = task["_details"]
-            raw_title = re.sub(rf"^{re.escape(tid)}[：:\s]+", "", task["title"]).strip()
-            change = commit_rec.get("change") or raw_title or task["title"]
-            if not first_change:
-                first_change = change
-            test_text = (
-                commit_rec.get("test")
-                or details.get("latest_result")
-                or (f"{details['command']} — {details['outcome']}" if details.get("command") else "")
-                or (
-                    f"{task['test']} — {details['outcome'] or task['status']}"
-                    if task.get("test") and task["test"] not in ("未记录", "未在提交中记录")
-                    else "未记录"
-                )
-            )
-            _append_task_block(tid, change, str(commit_rec.get("extra", "")), test_text)
-    elif commits:
-        for idx, rec in enumerate(commits, start=1):
-            if rec["subject"].startswith("chore: 清理已汇总的任务记录"):
-                continue
-            tid = rec["task_id"] or f"TASK-{idx:02d}"
-            change = rec["change"]
-            if not first_change:
-                first_change = change
-            _append_task_block(tid, change, str(rec["extra"]), rec["test"] or "未在提交中记录")
-
-    if issue_title:
-        suggested_title = _format_conventional_title(dominant_type, issue_title)
-    elif len(tasks) == 1:
-        only_change = first_change or issue_dir
-        suggested_title = _format_conventional_title(dominant_type, only_change)
-    elif len(commits) == 1 and commits[0]["change"]:
-        suggested_title = _format_conventional_title(dominant_type, commits[0]["change"])
-    else:
-        suggested_title = f"{dominant_type}: 完成 {issue_dir}"
-
-    if issue_number is not None and f"(#{issue_number})" not in suggested_title:
-        suggested_title = f"{suggested_title} (#{issue_number})"
-
-    header_lines = [f"Closes #{issue_number}"] if issue_number is not None else [f"Branch: {branch or issue_dir}"]
-    header = "\n".join(header_lines)
-
-    pr_parts = [header]
-    if change_items:
-        joiner = "\n\n" if has_extra_details else "\n"
-        pr_parts.append("## 变更内容\n\n" + joiner.join(change_items))
-    if verification_rows:
-        table_lines = ["| 任务 | 验证项 | 结果 |", "| --- | --- | --- |", *verification_rows]
-        pr_parts.append("## 验证记录\n\n" + "\n".join(table_lines))
-    if detailed_commands:
-        detail_lines = ["<details>", "<summary>完整验证命令</summary>", ""]
-        for tid, raw_cmd in detailed_commands:
-            detail_lines.append(f"- **{tid}:** {_wrap_inline_code(raw_cmd)}")
-        detail_lines.extend(["", "</details>"])
-        pr_parts.append("\n".join(detail_lines))
-
-    commit_parts = [header]
-    if plain_blocks:
-        commit_parts.extend(plain_blocks)
-
-    return suggested_title, "\n\n".join(pr_parts) + "\n", "\n\n".join(commit_parts) + "\n"
-
-
-def build_issue_summary(
-    worktree: Path,
-    issue_dir: str,
-    issue_number: int | None,
-    base_ref: str,
-    issue_title: str | None = None,
-    branch: str = "",
-    *,
-    fmt: str = "markdown",
-) -> tuple[str, str]:
-    """Generate (suggested_title, body) in either 'markdown' (PR/MR) or 'plain' (commit) format."""
-    title, pr_body, commit_body = build_issue_summaries(
-        worktree,
-        issue_dir,
-        issue_number,
-        base_ref,
-        issue_title=issue_title,
-        branch=branch,
-    )
-    if fmt == "markdown":
-        return title, pr_body
-    if fmt == "plain":
-        return title, commit_body
-    raise ValueError(f"Unsupported summary format: {fmt}")
 
 
 def build_progress_block(tasks: list[dict[str, Any]]) -> str:
@@ -2181,12 +993,7 @@ def _render_global_status(snapshot: dict[str, Any], *, use_color: bool) -> str:
 
 def _render_single_repo_status(snap: dict[str, Any], *, use_color: bool) -> str:
     width = _status_line_width()
-    summary = monitor._compute_global_summary(  # noqa: SLF001
-        [snap],
-        snap.get("issues") or [],
-        snap.get("local_only_items") or [],
-        snap.get("orphan_changes") or [],
-    )
+    summary = monitor.summarize_repo(snap)
     forge_badge = _style_forge_badge(str(snap.get("forge") or "local"), use_color)
     pretty_repo_path = _pretty_path(Path(str(snap.get("repo_path") or "")))
     default_branch = str(snap.get("default_branch") or "main")
@@ -2218,7 +1025,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     use_global = bool(args.global_mode)
     if not use_global and not explicit_root:
-        if monitor.resolve_main_worktree_ro(root) is None and not (root / "TASK").is_dir():
+        if resolve_main_worktree(root) is None and not (root / "TASK").is_dir():
             use_global = True
 
     if use_global:
@@ -2253,11 +1060,13 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_board(args: argparse.Namespace) -> int:
+    import board_ui
+
     global_mode = not args.current_only and args.root is None
     root: Path | None = None
     if not global_mode:
         root = (args.root or Path.cwd()).resolve()
-        if monitor.resolve_main_worktree_ro(root) is None and not (root / "TASK").is_dir():
+        if resolve_main_worktree(root) is None and not (root / "TASK").is_dir():
             raise IddError(f"当前路径既不是 Git 仓库，也不存在 TASK/ 目录：{root}")
     return board_ui.run_board_server(
         host=args.host,
@@ -2272,6 +1081,8 @@ def cmd_board(args: argparse.Namespace) -> int:
 
 
 def cmd_preview(args: argparse.Namespace) -> int:
+    import preview_ui
+
     try:
         return preview_ui.run_preview_server(
             targets=list(args.targets),
@@ -2291,7 +1102,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     root: Path | None = None
     if not global_mode:
         root = (args.root or Path.cwd()).resolve()
-        if monitor.resolve_main_worktree_ro(root) is None and not (root / "TASK").is_dir():
+        if resolve_main_worktree(root) is None and not (root / "TASK").is_dir():
             raise IddError(f"当前路径既不是 Git 仓库，也不存在 TASK/ 目录：{root}")
     return monitor.run_watch_loop(
         root=root,
@@ -2309,12 +1120,12 @@ def cmd_repos(args: argparse.Namespace) -> int:
     now = time.time()
 
     if subcmd == "list":
-        entries = monitor.load_registered_repos(prune_missing=True)
-        payload = {"repos_config_path": str(monitor.get_repos_path()), "repos": entries}
+        entries = repo_registry.load_registered_repos(required=True)
+        payload = {"repos_config_path": str(repo_registry.get_repos_path()), "repos": entries}
         if args.json:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
-        lines = [f"全局仓库索引：{monitor.get_repos_path()}"]
+        lines = [f"全局仓库索引：{repo_registry.get_repos_path()}"]
         if not entries:
             lines.append("- 暂无已注册仓库（可在仓库内运行 `idd start`、`idd status` 或 `idd repos add .`）。")
         else:
@@ -2332,10 +1143,10 @@ def cmd_repos(args: argparse.Namespace) -> int:
         hints: list[str] = []
         auto_apply = not bool(getattr(args, "no_repo_init", False))
         for raw in args.paths:
-            main_wt = monitor.resolve_main_worktree_ro(Path(raw))
+            main_wt = resolve_main_worktree(Path(raw))
             if main_wt is None:
                 raise IddError(f"路径不是有效的 Git 仓库：{raw}")
-            entry = monitor.register_repo(main_wt)
+            entry = repo_registry.register_repo(main_wt, required=True)
             has_origin = run_cmd(["git", "-C", str(main_wt), "remote", "get-url", "origin"], check=False).returncode == 0
             hint = _maybe_check_first_time_repo_init(main_wt, has_origin=has_origin, auto_apply=auto_apply)
             if hint:
@@ -2354,7 +1165,7 @@ def cmd_repos(args: argparse.Namespace) -> int:
 
     if subcmd == "remove":
         target = Path(args.path)
-        removed = monitor.unregister_repo(target)
+        removed = repo_registry.unregister_repo(target)
         if not removed:
             raise IddError(f"未在全局索引中找到仓库：{args.path}")
         if args.json:
@@ -2364,13 +1175,11 @@ def cmd_repos(args: argparse.Namespace) -> int:
         return 0
 
     if subcmd == "prune":
-        before = monitor.load_registered_repos(prune_missing=False)
-        after = monitor.load_registered_repos(prune_missing=True)
-        removed_count = max(0, len(before) - len(after))
+        removed_count, remaining = repo_registry.prune_registered_repos()
         if args.json:
-            print(json.dumps({"removed_count": removed_count, "remaining": len(after)}, ensure_ascii=False, indent=2))
+            print(json.dumps({"removed_count": removed_count, "remaining": remaining}, ensure_ascii=False, indent=2))
         else:
-            print(f"已清理 {removed_count} 个失效仓库记录，当前保留 {len(after)} 个活跃仓库。")
+            print(f"已清理 {removed_count} 个失效仓库记录，当前保留 {remaining} 个活跃仓库。")
         return 0
 
     raise IddError(f"未知 repos 子命令：{subcmd}")
@@ -2386,7 +1195,7 @@ def _maybe_check_first_time_repo_init(
     """Probe remote merge policy once per repository and auto-apply or mark pending."""
     if not has_origin:
         return None
-    prev_meta = monitor.get_repo_init_meta(main_worktree)
+    prev_meta = repo_registry.get_repo_init_meta(main_worktree)
     if prev_meta["state"] in ("aligned", "pending"):
         return None
     try:
@@ -2397,7 +1206,7 @@ def _maybe_check_first_time_repo_init(
 
     aligned, mismatches = evaluate_repo_init_settings(result)
     if aligned:
-        monitor.set_repo_init_meta(main_worktree, "aligned")
+        repo_registry.set_repo_init_meta(main_worktree, "aligned")
         return None
 
     forge_type = str(result.get("forge") or "github")
@@ -2410,7 +1219,7 @@ def _maybe_check_first_time_repo_init(
     )
 
     if not auto_apply:
-        monitor.set_repo_init_meta(main_worktree, "pending", mismatches=mismatches)
+        repo_registry.set_repo_init_meta(main_worktree, "pending", mismatches=mismatches)
         message = (
             f"💡 首次接管提示：已跳过自动初始化 {forge_name} 仓库线性 Squash 策略（{'、'.join(mismatches)}）。\n"
             f"   已标记为待初始化，可在 `idd ui` 一键执行或稍后运行 `idd repo-init --apply` 锁定{policy_desc}。"
@@ -2428,7 +1237,7 @@ def _maybe_check_first_time_repo_init(
         applied_result = active_forge.repo_init(apply=True)
     except Exception as exc:
         err_msg = str(exc)
-        monitor.set_repo_init_meta(main_worktree, "pending", mismatches=mismatches, error=err_msg)
+        repo_registry.set_repo_init_meta(main_worktree, "pending", mismatches=mismatches, error=err_msg)
         message = (
             f"⚠️ 首次接管自动执行 `idd repo-init --apply` 未完成（{err_msg}）；"
             f"已标记为待初始化，可在 `idd ui` 点击重试或稍后手动运行 `idd repo-init --apply`。"
@@ -2445,7 +1254,7 @@ def _maybe_check_first_time_repo_init(
 
     aligned_after, remaining = evaluate_repo_init_settings(applied_result)
     if aligned_after:
-        monitor.set_repo_init_meta(main_worktree, "aligned")
+        repo_registry.set_repo_init_meta(main_worktree, "aligned")
         return {
             "status": "applied",
             "forge": forge_type,
@@ -2455,7 +1264,7 @@ def _maybe_check_first_time_repo_init(
             "message": f"✅ 首次接管已自动初始化 {forge_name} 仓库线性 Squash 策略与提交模板。",
         }
 
-    monitor.set_repo_init_meta(main_worktree, "pending", mismatches=remaining)
+    repo_registry.set_repo_init_meta(main_worktree, "pending", mismatches=remaining)
     message = (
         f"⚠️ 首次接管已尝试执行 `idd repo-init --apply`，但仍有未对齐项（{'、'.join(remaining)}）；"
         f"已在 `idd ui` 保留待初始化提示，可随时点击重试。"
@@ -2468,103 +1277,6 @@ def _maybe_check_first_time_repo_init(
         "command": "idd repo-init --apply",
         "message": message,
     }
-
-
-def _validate_issue_scope(raw_scope: str) -> str:
-    """Validate and normalize an optional short Issue scope token (<= 16 chars, kebab-case)."""
-    cleaned = raw_scope.strip().lower()
-    if not cleaned:
-        raise IddError("Issue 标题括号中的 scope 不能为空；不需要作用域时请省略括号。")
-    if len(cleaned) > MAX_ISSUE_SCOPE_LEN or not ISSUE_SCOPE_RE.fullmatch(cleaned):
-        raise IddError(
-            f"Issue 标题括号中的 scope `{raw_scope.strip()}` 不符合规范。\n"
-            f"括号内容必须简短：仅允许单个小写英文/数字/连字符标识（`a-z0-9-`，最多 {MAX_ISSUE_SCOPE_LEN} 字符），"
-            "不含空格、逗号、斜杠或中文（如 `sync`、`land`、`repo-init`）；跨模块改动请直接省略括号。"
-        )
-    return cleaned
-
-
-def validate_and_format_issue_title(
-    raw_title: str,
-    *,
-    issue_type: str | None = None,
-    scope: str | None = None,
-    raw: bool = False,
-) -> str:
-    """Validate and normalize an Issue title against `<type>(<scope>): <subject>` rules."""
-    cleaned = raw_title.strip()
-    if not cleaned:
-        raise IddError("Issue 标题不能为空。")
-    if "\n" in cleaned or "\r" in cleaned:
-        raise IddError("Issue 标题必须为单行文本。")
-
-    if raw:
-        if issue_type is not None or scope is not None:
-            raise IddError("`--raw` 不能与 `--type` 或 `--scope` 同时使用。")
-        return cleaned
-
-    norm_type: str | None = None
-    if issue_type is not None:
-        norm_type = issue_type.strip().lower()
-        if norm_type not in ALLOWED_TYPES:
-            raise IddError(f"非法的 Issue 类型 `{issue_type}`，允许值：{' | '.join(ALLOWED_TYPES)}")
-
-    norm_scope: str | None = _validate_issue_scope(scope) if scope is not None else None
-
-    if EMPTY_SCOPE_PREFIX_RE.match(cleaned):
-        _validate_issue_scope("")
-
-    match = CONVENTIONAL_TITLE_RE.match(cleaned)
-    if match:
-        parsed_type = match.group(1).lower()
-        raw_scope_group = match.group(2)
-        parsed_scope = _validate_issue_scope(raw_scope_group[1:-1]) if raw_scope_group else None
-        bang = match.group(3) or ""
-        subject = match.group(4).strip()
-        if not subject:
-            raise IddError("Issue 标题冒号后的描述不能为空。")
-        if norm_type is not None and norm_type != parsed_type:
-            raise IddError(f"传入的 `--type {norm_type}` 与标题前缀 `{parsed_type}` 冲突。")
-        if norm_scope is not None and parsed_scope is not None and norm_scope != parsed_scope:
-            raise IddError(f"传入的 `--scope {norm_scope}` 与标题括号中的 `{parsed_scope}` 冲突。")
-        final_type = norm_type or parsed_type
-        final_scope = norm_scope or parsed_scope
-        scope_part = f"({final_scope})" if final_scope else ""
-        return f"{final_type}{scope_part}{bang}: {subject}"
-
-    if norm_type is not None:
-        scope_part = f"({norm_scope})" if norm_scope else ""
-        return f"{norm_type}{scope_part}: {cleaned}"
-
-    allowed_str = " | ".join(ALLOWED_TYPES)
-    raise IddError(
-        f"Issue 标题 `{cleaned}` 不符合 IDD 命名规范。\n"
-        "请使用 `<type>: <简明描述>` 或 `<type>(<scope>): <简明描述>`（建议 ≤ 50 字符，不重复类型动词）。\n"
-        f"允许的 `<type>`：{allowed_str}\n"
-        f"可选 `(<scope>)` 须简短：单个小写英文/数字/连字符标识（≤ {MAX_ISSUE_SCOPE_LEN} 字符，如 `sync`、`land`）。\n"
-        "示例：`idd issue create --title \"fix(sync): 避免误匹配行内标记\"`\n"
-        "或自动拼接：`idd issue create --type fix --scope sync --title \"避免误匹配行内标记\"`\n"
-        "若确需使用非规范标题，请显式传入 `--raw`。"
-    )
-
-
-def _infer_prefix_from_title(title: str) -> str | None:
-    """Extract standard `<type>` prefix from a Conventional-style Issue title."""
-    match = CONVENTIONAL_TITLE_RE.match(title.strip())
-    if not match:
-        return None
-    return match.group(1).lower()
-
-
-def _slug_source_from_issue_title(title: str) -> str:
-    """Strip Conventional `<type>:` prefix when deriving a worktree/branch slug."""
-    cleaned = title.strip()
-    match = CONVENTIONAL_TITLE_RE.match(cleaned)
-    if not match:
-        return cleaned
-    scope = (match.group(2) or "").strip("()").strip()
-    subject = match.group(4).strip()
-    return f"{scope} {subject}".strip() if scope else subject
 
 
 def cmd_issue_create(args: argparse.Namespace) -> int:
@@ -2600,25 +1312,6 @@ def cmd_issue_create(args: argparse.Namespace) -> int:
     return 0
 
 
-def _infer_prefix_from_labels(labels: set[str]) -> str:
-    """Map Issue labels to one of the 8 standard branch/commit types."""
-    if labels & {"bug", "fix", "bugfix"}:
-        return "fix"
-    if "refactor" in labels:
-        return "refactor"
-    if labels & {"perf", "performance"}:
-        return "perf"
-    if labels & {"docs", "documentation"}:
-        return "docs"
-    if labels & {"test", "testing"}:
-        return "test"
-    if "ci" in labels:
-        return "ci"
-    if labels & {"chore", "dependencies"}:
-        return "chore"
-    return "feat"
-
-
 def cmd_start(args: argparse.Namespace) -> int:
     repo = get_repo_info(Path.cwd())
     existing = find_worktree_for_target(repo.main_worktree, args.target)
@@ -2633,7 +1326,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         newly_pushed = False
         push_warning = ""
         if repo.has_origin:
-            remote_exists = _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}")
+            remote_exists = ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}")
             if not remote_exists and not args.no_push:
                 pushed, push_warning = _push_feature_branch(wt_path, branch, default_branch=repo.default_branch)
                 if pushed:
@@ -2708,10 +1401,10 @@ def cmd_start(args: argparse.Namespace) -> int:
         forge_for_hint = forge
         issue_data = forge.get_issue(issue_num)
         issue_title = str(issue_data.get("title", ""))
-        slug = slugify(args.slug, "") if args.slug else slugify(_slug_source_from_issue_title(issue_title), "task")
+        slug = slugify(args.slug, "") if args.slug else slugify(slug_source_from_issue_title(issue_title), "task")
         issue_dir = f"{issue_num}-{slug}"
         labels = {str(lbl).lower() for lbl in issue_data.get("labels", [])}
-        prefix = args.prefix or _infer_prefix_from_title(issue_title) or _infer_prefix_from_labels(labels)
+        prefix = args.prefix or infer_prefix_from_title(issue_title) or infer_prefix_from_labels(labels)
         branch = f"{prefix}/{issue_dir}"
     else:
         raw_target = args.target.strip()
@@ -2728,9 +1421,9 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     validate_branch_name(branch, issue_num)
 
-    with _repo_file_lock(
+    with repo_file_lock(
         repo.main_worktree,
-        "idd-main-git.lock",
+        MAIN_GIT_LOCK,
         owner_info={"command": "start", "branch": branch},
     ):
         if repo.has_origin:
@@ -2743,9 +1436,9 @@ def cmd_start(args: argparse.Namespace) -> int:
         if wt_path.exists():
             raise IddError(f"目标目录已存在但未注册为 Git 工作树：{wt_path}")
 
-        if _ref_exists(repo.main_worktree, f"refs/heads/{branch}"):
+        if ref_exists(repo.main_worktree, f"refs/heads/{branch}"):
             run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", str(wt_path), branch])
-        elif repo.has_origin and _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
+        elif repo.has_origin and ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
             run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "-b", branch, str(wt_path), f"origin/{branch}"])
         else:
             run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "--no-track", "-b", branch, str(wt_path), base_ref])
@@ -2889,7 +1582,6 @@ def cmd_pr(args: argparse.Namespace) -> int:
     if getattr(args, "draft", False) and getattr(args, "auto_merge", False):
         raise IddError("不能同时使用 `--draft` 与 `--auto-merge`。")
 
-    am_cfg = monitor.resolve_auto_merge()
     if getattr(args, "no_auto_merge", False):
         effective_auto_merge = False
         am_source = "cli"
@@ -2897,7 +1589,7 @@ def cmd_pr(args: argparse.Namespace) -> int:
         effective_auto_merge = True
         am_source = "cli"
     else:
-        effective_auto_merge = bool(am_cfg["enabled"])
+        effective_auto_merge = get_global_auto_merge()
         am_source = "global"
 
     forge = get_forge(repo.main_worktree)
@@ -2906,7 +1598,7 @@ def cmd_pr(args: argparse.Namespace) -> int:
     issue_data = forge.get_issue(issue_num, check=False) if issue_num is not None else None
     issue_title = issue_data.get("title") if issue_data else None
 
-    suggested_title, body = build_issue_summary(
+    suggested_title, body, _ = build_issue_summaries(
         wt_path,
         issue_dir or branch,
         issue_num,
@@ -3575,12 +2267,12 @@ def _execute_land(
     issue_data: dict[str, Any] | None = None
     verified_tip: str | None = None
 
-    with _repo_file_lock(
+    with repo_file_lock(
         repo.main_worktree,
         "idd-land.lock",
         owner_info={"command": lock_cmd, "branch": branch},
         wait_prefix=f"仓库 `{repo.main_worktree.name}` 合入队列",
-        timeout_env="IDD_LAND_LOCK_TIMEOUT",
+        timeout=_get_float_env("IDD_LAND_LOCK_TIMEOUT", 0.0),
     ):
         for attempt in range(max_attempts):
             change_lookup = forge.get_change(branch=branch, check=False)
@@ -3881,9 +2573,9 @@ def _execute_land(
         # Step G: Retain branches & worktree by default; optionally remove worktree; fast-forward main
         in_removed_wt = False
         main_sha = ""
-        with _repo_file_lock(
+        with repo_file_lock(
             repo.main_worktree,
-            "idd-main-git.lock",
+            MAIN_GIT_LOCK,
             owner_info={"command": "land-post", "branch": branch},
         ):
             if rm_worktree:
@@ -3941,53 +2633,32 @@ def cmd_land(args: argparse.Namespace) -> int:
 def cmd_cleanup(args: argparse.Namespace) -> int:
     repo = get_repo_info(Path.cwd())
     forge = get_forge(repo.main_worktree)
-    worktrees = task_status.list_git_worktrees(repo.main_worktree)
-    main_resolved = repo.main_worktree.resolve()
-    allowed_prefixes = tuple(f"{t}/" for t in ALLOWED_TYPES)
-
+    worktrees = list_worktrees(repo.main_worktree)
     removed: list[str] = []
     skipped_dirty: list[str] = []
     skipped_unmerged: list[str] = []
 
     for wt in worktrees:
-        wt_path = Path(wt["path"]).resolve()
+        path = Path(wt["path"]).resolve()
         branch = wt.get("branch", "")
-        if wt_path == main_resolved or not branch or branch == "(detached)":
+        if cleanup_scope_error(repo.main_worktree, path, branch, repo.worktree_root):
             continue
-        under_managed_root = repo.worktree_root == wt_path.parent
-        feature_branch = branch.startswith(allowed_prefixes)
-        if not (under_managed_root or feature_branch):
+        merged = forge.list_changes(state="merged", head_branch=branch, limit=10)
+        if not isinstance(merged, list) or not merged:
             continue
-
-        merged_changes = forge.list_changes(state="merged", head_branch=branch, limit=10)
-        if not isinstance(merged_changes, list) or not merged_changes:
-            continue
-
-        dirty = run_cmd(["git", "-C", str(wt_path), "status", "--porcelain"], check=False).stdout.strip()
-        if dirty:
-            skipped_dirty.append(f"{wt_path} ({branch})")
-            continue
-
-        local_head = run_cmd(["git", "-C", str(wt_path), "rev-parse", "HEAD"]).stdout.strip()
-        matching = next(
-            (c for c in merged_changes if c.get("headRefOid") and c.get("headRefOid") == local_head),
-            None,
+        result = remove_merged_worktree(
+            repo.main_worktree, path, branch, repo.worktree_root, merged,
+            ref_prefix=f"{forge.mr_label} {forge.mr_prefix}", dry_run=args.dry_run,
         )
-        if not matching:
-            skipped_unmerged.append(f"{wt_path} ({branch} @ {local_head[:7]})")
-            continue
-
-        ref = f"{forge.mr_label} {forge.mr_prefix}{matching['number']}"
-        if args.dry_run:
-            removed.append(f"[dry-run] 将仅移除工作树目录 {wt_path}（保留分支 {branch}）— {ref}")
-        else:
-            with _repo_file_lock(
-                repo.main_worktree,
-                "idd-main-git.lock",
-                owner_info={"command": "cleanup", "branch": branch},
-            ):
-                run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
-            removed.append(f"已移除工作树目录 {wt_path}（保留分支 {branch}）— {ref}")
+        if result.status in ("removed", "dry_run"):
+            action = "[dry-run] 将仅移除" if args.dry_run else "已移除"
+            removed.append(f"{action}工作树目录 {path}（保留分支 {branch}）— {result.ref}")
+        elif result.status == "skipped_dirty":
+            skipped_dirty.append(f"{path} ({branch})")
+        elif result.status == "skipped_unmerged" and result.head:
+            skipped_unmerged.append(f"{path} ({branch} @ {result.head[:7]})")
+        elif result.status == "error":
+            raise IddError(result.message)
 
     lines = list(removed)
     if skipped_dirty:
@@ -4007,7 +2678,7 @@ def cmd_repo_init(args: argparse.Namespace) -> int:
     forge = get_forge(repo.main_worktree)
     result = forge.repo_init(apply=args.apply)
     aligned, mismatches = evaluate_repo_init_settings(result)
-    monitor.set_repo_init_meta(
+    repo_registry.set_repo_init_meta(
         repo.main_worktree,
         "aligned" if aligned else "pending",
         mismatches=mismatches,
@@ -4048,8 +2719,8 @@ def _parse_auto_merge_action(raw: str) -> str:
 
 def _build_config_payload() -> dict[str, Any]:
     return {
-        "config_path": str(monitor.get_config_path()),
-        "auto_merge": monitor.get_global_auto_merge(),
+        "config_path": str(get_config_path()),
+        "auto_merge": get_global_auto_merge(),
     }
 
 
@@ -4072,26 +2743,26 @@ def cmd_config(args: argparse.Namespace) -> int:
     if subcmd == "auto-merge":
         action = _parse_auto_merge_action(getattr(args, "value", "status"))
         if action == "status":
-            global_am = monitor.get_global_auto_merge()
+            global_am = get_global_auto_merge()
             if use_json:
                 print(json.dumps({
                     "auto_merge": global_am,
-                    "config_path": str(monitor.get_config_path()),
+                    "config_path": str(get_config_path()),
                 }, ensure_ascii=False, indent=2))
             else:
-                print(f"PR/MR 自动准入（auto_merge）：{'开 (on)' if global_am else '关 (off)'}（{monitor.get_config_path()}）")
+                print(f"PR/MR 自动准入（auto_merge）：{'开 (on)' if global_am else '关 (off)'}（{get_config_path()}）")
             return 0
 
         enabled = action == "on"
-        cfg = monitor.set_global_auto_merge(enabled)
+        cfg = set_global_auto_merge(enabled)
         if use_json:
             print(json.dumps({
                 "auto_merge": bool(cfg["auto_merge"]),
-                "config_path": str(monitor.get_config_path()),
+                "config_path": str(get_config_path()),
             }, ensure_ascii=False, indent=2))
         else:
             state_zh = "开启" if cfg["auto_merge"] else "关闭"
-            print(f"已{state_zh}全局 PR/MR 自动准入与自动合入开关（{monitor.get_config_path()}）。")
+            print(f"已{state_zh}全局 PR/MR 自动准入与自动合入开关（{get_config_path()}）。")
         return 0
 
     raise IddError(f"未知 config 子命令：{subcmd}")
@@ -4106,9 +2777,7 @@ def cmd_auth(args: argparse.Namespace) -> int:
         if not args.no_verify:
             username = verify_host_token(forge_type, api_base, args.token)
             user_info = f"（已校验用户：{username}）"
-        hosts = load_hosts_config()
-        hosts[host_key] = {"forge": forge_type, "api_url": api_base, "token": args.token}
-        save_hosts_config(hosts)
+        set_host(host_key, {"forge": forge_type, "api_url": api_base, "token": args.token})
         print(f"已保存 {forge_type} 主机凭据：{host_key} ({api_base}) {user_info}\n配置文件：{get_hosts_path()}")
         return 0
 
@@ -4132,11 +2801,9 @@ def cmd_auth(args: argparse.Namespace) -> int:
 
     if subcmd == "logout":
         host_key, _ = normalize_host_input(args.host)
-        hosts = load_hosts_config()
-        removed = hosts.pop(host_key, None) or hosts.pop(host_key.split(":", 1)[0], None)
+        removed = remove_hosts((host_key, host_key.split(":", 1)[0]), first_only=True)
         if not removed:
             raise IddError(f"未找到主机 `{args.host}` 的保存凭据。")
-        save_hosts_config(hosts)
         print(f"已移除主机 `{host_key}` 的凭据。")
         return 0
 
@@ -4197,17 +2864,8 @@ def _load_update_state() -> dict[str, Any]:
 
 
 def _save_update_state(state: dict[str, Any]) -> None:
-    path = get_update_state_path()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(prefix="state-", suffix=".tmp", dir=str(path.parent))
-        tmp_path = Path(tmp_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(state, handle, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, path)
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        atomic_write_json(get_update_state_path(), state)
     except OSError:
         pass
 
@@ -4513,7 +3171,7 @@ def _check_skill_repo_uninstall_safety(skill_dir: Path) -> list[str]:
         text=True,
     )
     upstream = upstream_proc.stdout.strip() if upstream_proc.returncode == 0 else ""
-    if not upstream and _ref_exists(skill_dir, "refs/remotes/origin/main"):
+    if not upstream and ref_exists(skill_dir, "refs/remotes/origin/main"):
         upstream = "origin/main"
 
     if upstream:

@@ -22,6 +22,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from local_http import LocalHTTPServer, load_page_template
 import preview_ui  # noqa: E402
 
 
@@ -32,10 +33,10 @@ class TestPreviewUI(unittest.TestCase):
         *,
         title: str | None = None,
         compare: bool = False,
-    ) -> tuple[preview_ui.PreviewHTTPServer, str]:
+    ) -> tuple[LocalHTTPServer, str]:
         registry = preview_ui.PreviewRegistry(targets, title=title, compare_default=compare)
         handler_cls = partial(preview_ui.PreviewRequestHandler, registry=registry, version="0.0.3-test")
-        server = preview_ui.PreviewHTTPServer(("127.0.0.1", 0), handler_cls)  # type: ignore[arg-type]
+        server = LocalHTTPServer(("127.0.0.1", 0), handler_cls)  # type: ignore[arg-type]
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(lambda: (server.shutdown(), server.server_close(), thread.join(timeout=2)))
@@ -220,6 +221,18 @@ class TestPreviewUI(unittest.TestCase):
         self.assertNotEqual(err_proc.returncode, 0)
         combined = err_proc.stdout + err_proc.stderr
         self.assertIn("找不到预览目标文件或目录", combined)
+
+    def test_both_ui_templates_inline_one_motion_definition(self) -> None:
+        web = Path(preview_ui.__file__).parent / "web"
+        properties = (web / "motion-properties.css.inc").read_text(encoding="utf-8")
+        self.assertIn("--ease-spring:", properties)
+        self.assertIn("--dur-layout:", properties)
+        for page in ("board.html", "preview.html"):
+            source = (web / page).read_text(encoding="utf-8")
+            self.assertNotIn("--ease-spring:", source)
+            rendered = load_page_template(page)
+            self.assertEqual(rendered.count(properties), 1)
+            self.assertNotIn("/* IDD shared motion properties */", rendered)
 
     def test_preview_motion_tokens_direct_manipulation_and_state_contracts(self) -> None:
         html_doc = preview_ui.PREVIEW_HTML

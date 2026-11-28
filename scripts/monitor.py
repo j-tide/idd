@@ -3,23 +3,16 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
-try:
-    import fcntl
-except ImportError:
-    fcntl = None  # type: ignore[assignment]
-import json
+from concurrent.futures import Future, ThreadPoolExecutor
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
-from typing import Any, Iterator
+from typing import Any
 import urllib.parse
 
 from forge import (
@@ -28,17 +21,33 @@ from forge import (
     build_issue_web_url,
     build_repo_web_url,
     evaluate_repo_init_settings,
-    get_config_dir,
     get_forge,
-    get_hosts_path,
     inspect_remote_origin,
+)
+from local_state import (
+    get_config_path,
+    get_global_auto_merge,
+    get_hosts_path,
     load_hosts_config,
+)
+from repo_registry import (
+    get_repo_init_meta,
+    get_repos_path,
+    load_registered_repos,
+    register_repo,
+    set_repo_init_meta,
+)
+from git_worktrees import (
+    detect_default_branch,
+    has_remote_origin,
+    list_worktrees,
+    main_worktree_and_inventory,
+    read_git,
+    resolve_main_worktree,
 )
 import task_status
 
 
-_REPOS_LOCK = threading.Lock()
-_CONFIG_LOCK = threading.Lock()
 _IGNORED_GIT_ERROR = (OSError, subprocess.SubprocessError)
 _CACHE_LOCK = threading.Lock()
 _PACKED_REFS_CACHE: dict[str, tuple[tuple[int, int, int] | None, dict[str, str]]] = {}
@@ -58,135 +67,6 @@ def invalidate_monitor_caches() -> None:
         _REPO_META_CACHE.clear()
         _WORKTREE_PULSE_CACHE.clear()
         _TASK_GIT_META_CACHE.clear()
-
-
-def get_repos_path() -> Path:
-    """Return path to the global active-repository registry JSON file."""
-    return get_config_dir() / "repos.json"
-
-
-def get_config_path() -> Path:
-    """Return path to the global IDD settings JSON file."""
-    return get_config_dir() / "config.json"
-
-
-def _normalize_global_config(raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, dict):
-        return {"auto_merge": False}
-    normalized = dict(raw)
-    normalized["auto_merge"] = bool(raw.get("auto_merge", False))
-    return normalized
-
-
-def _read_raw_config_unlocked() -> dict[str, Any]:
-    path = get_config_path()
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"auto_merge": False}
-    return _normalize_global_config(raw)
-
-
-def _save_config_unlocked(data: dict[str, Any]) -> dict[str, Any]:
-    normalized = _normalize_global_config(data)
-    path = get_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix="config-", suffix=".tmp", dir=str(path.parent))
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(normalized, handle, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, path)
-    finally:
-        tmp_path.unlink(missing_ok=True)
-    return normalized
-
-
-@contextmanager
-def _file_lock(lock_path: Path) -> Iterator[None]:
-    """Acquire an advisory cross-process exclusive file lock when supported by the OS."""
-    if fcntl is None:
-        yield
-        return
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except OSError:
-                pass
-
-
-def load_global_config() -> dict[str, Any]:
-    """Load global IDD configuration (`~/.config/idd/config.json`) with safe defaults."""
-    with _CONFIG_LOCK:
-        with _file_lock(get_config_dir() / ".config.lock"):
-            return _read_raw_config_unlocked()
-
-
-def save_global_config(data: dict[str, Any]) -> dict[str, Any]:
-    """Atomically persist global IDD configuration."""
-    with _CONFIG_LOCK:
-        with _file_lock(get_config_dir() / ".config.lock"):
-            return _save_config_unlocked(data)
-
-
-def get_global_auto_merge() -> bool:
-    """Return the global `auto_merge` switch (default False)."""
-    return bool(load_global_config().get("auto_merge", False))
-
-
-def set_global_auto_merge(enabled: bool) -> dict[str, Any]:
-    """Update and persist the global `auto_merge` switch."""
-    with _CONFIG_LOCK:
-        with _file_lock(get_config_dir() / ".config.lock"):
-            cfg = _read_raw_config_unlocked()
-            cfg["auto_merge"] = bool(enabled)
-            return _save_config_unlocked(cfg)
-
-
-def _run_git_ro(cwd: Path, args: list[str], *, timeout: float = 10.0) -> subprocess.CompletedProcess[str] | None:
-    """Run a read-only git command with `--no-optional-locks` to avoid index lock contention."""
-    try:
-        return subprocess.run(
-            ["git", "--no-optional-locks", "-c", "core.quotePath=false", "-C", str(cwd), *args],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except _IGNORED_GIT_ERROR:
-        return None
-
-
-def list_git_worktrees_ro(repo_root: Path) -> list[dict[str, str]]:
-    """List git worktrees using `--no-optional-locks`."""
-    proc = _run_git_ro(repo_root, ["worktree", "list", "--porcelain"])
-    if proc is None or proc.returncode != 0:
-        detail = proc.stderr.strip() if proc else ""
-        raise ValueError(detail or f"无法列出 Git 工作树：{repo_root}")
-    worktrees: list[dict[str, str]] = []
-    current: dict[str, str] = {}
-    for line in proc.stdout.splitlines():
-        if not line.strip():
-            if current.get("path"):
-                worktrees.append(current)
-            current = {}
-            continue
-        if line.startswith("worktree "):
-            current["path"] = line[len("worktree "):].strip()
-        elif line.startswith("branch "):
-            ref = line[len("branch "):].strip()
-            if ref.startswith("refs/heads/"):
-                ref = ref[len("refs/heads/"):]
-            current["branch"] = ref
-        elif line == "detached":
-            current.setdefault("branch", "(detached)")
-    if current.get("path"):
-        worktrees.append(current)
-    return worktrees
 
 
 def _stat_sig(path: Path) -> tuple[int, int, int] | None:
@@ -216,7 +96,7 @@ def _resolve_git_dirs_fast(wt_path: Path) -> tuple[Path | None, Path | None]:
         git_dir = None
 
     if git_dir is None:
-        proc = _run_git_ro(wt_path, ["rev-parse", "--git-dir", "--git-common-dir"])
+        proc = read_git(wt_path, ["rev-parse", "--git-dir", "--git-common-dir"])
         if proc is None or proc.returncode != 0:
             return None, None
         lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
@@ -241,6 +121,21 @@ def _resolve_git_dirs_fast(wt_path: Path) -> tuple[Path | None, Path | None]:
     except OSError:
         pass
     return git_dir, git_dir
+
+
+def active_worktree_fingerprint(paths: tuple[Path, ...]) -> tuple[object, ...]:
+    sigs: list[object] = []
+    for wt in paths:
+        git_dir, _ = _resolve_git_dirs_fast(wt)
+        sigs.append(
+            (
+                _stat_sig(wt),
+                _stat_sig(wt / "TASK"),
+                _stat_sig(git_dir / "index") if git_dir is not None else None,
+                _stat_sig(git_dir / "HEAD") if git_dir is not None else None,
+            )
+        )
+    return tuple(sigs)
 
 
 def _load_packed_refs_fast(common_dir: Path) -> dict[str, str]:
@@ -294,46 +189,6 @@ def _read_ref_oid_fast(common_dir: Path | None, ref_name: str, _depth: int = 0) 
     return False, ""
 
 
-def _resolve_main_worktree_and_list_ro(path: Path) -> tuple[Path | None, list[dict[str, str]]]:
-    """Return `(canonical_main_worktree, all_worktrees)` using a single `git worktree list` call."""
-    target = path.expanduser()
-    if not target.is_dir():
-        return None, []
-    try:
-        worktrees = list_git_worktrees_ro(target)
-    except ValueError:
-        return None, []
-    if not worktrees:
-        return None, []
-    return Path(worktrees[0]["path"]).resolve(), worktrees
-
-
-def resolve_main_worktree_ro(path: Path) -> Path | None:
-    """Return canonical main worktree path if `path` resides inside a Git repository, else None."""
-    main_wt, _ = _resolve_main_worktree_and_list_ro(path)
-    return main_wt
-
-
-def _detect_repo_meta_ro(main_worktree: Path) -> tuple[bool, str]:
-    """Return (has_origin, default_branch) using read-only git commands."""
-    rem = _run_git_ro(main_worktree, ["remote"])
-    remotes = {line.strip() for line in rem.stdout.splitlines() if line.strip()} if rem and rem.returncode == 0 else set()
-    has_origin = "origin" in remotes
-    if has_origin:
-        sym = _run_git_ro(main_worktree, ["symbolic-ref", "refs/remotes/origin/HEAD"])
-        if sym and sym.returncode == 0 and sym.stdout.strip().startswith("refs/remotes/origin/"):
-            return True, sym.stdout.strip()[len("refs/remotes/origin/"):]
-    for candidate in ("main", "master"):
-        p1 = _run_git_ro(main_worktree, ["show-ref", "--verify", "--quiet", f"refs/heads/{candidate}"])
-        if p1 and p1.returncode == 0:
-            return has_origin, candidate
-        if has_origin:
-            p2 = _run_git_ro(main_worktree, ["show-ref", "--verify", "--quiet", f"refs/remotes/origin/{candidate}"])
-            if p2 and p2.returncode == 0:
-                return has_origin, candidate
-    return has_origin, "main"
-
-
 def _detect_repo_meta_and_origin_cached(main_worktree: Path) -> tuple[bool, str, Any, str]:
     """Return `(has_origin, default_branch, remote_spec, inferred_forge)` cached by git config/ref signatures."""
     _, common_dir = _resolve_git_dirs_fast(main_worktree)
@@ -359,7 +214,8 @@ def _detect_repo_meta_and_origin_cached(main_worktree: Path) -> tuple[bool, str,
         sig = ()
         key = ""
 
-    has_origin, default_branch = _detect_repo_meta_ro(main_worktree)
+    has_origin = has_remote_origin(main_worktree)
+    default_branch = detect_default_branch(main_worktree, has_origin, timeout=10.0)
     remote_spec = None
     inferred_forge = "local"
     if has_origin:
@@ -373,285 +229,7 @@ def _detect_repo_meta_and_origin_cached(main_worktree: Path) -> tuple[bool, str,
     return val
 
 
-# ---------------------------------------------------------------------------
-# Global repository registry (`~/.config/idd/repos.json`)
-# ---------------------------------------------------------------------------
-
-
-def _save_repos_unlocked(entries: list[dict[str, Any]]) -> None:
-    path = get_repos_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(prefix="repos-", suffix=".tmp", dir=str(path.parent))
-        tmp_path = Path(tmp_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump({"repos": entries}, handle, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, path)
-        finally:
-            tmp_path.unlink(missing_ok=True)
-    except OSError:
-        pass
-
-
-def _read_raw_repos_unlocked() -> list[dict[str, Any]]:
-    path = get_repos_path()
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    items = raw.get("repos") if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
-    if not isinstance(items, list):
-        return []
-    result: list[dict[str, Any]] = []
-    for item in items:
-        if isinstance(item, dict) and isinstance(item.get("path"), str) and item["path"].strip():
-            result.append(item)
-    return result
-
-
-def _copy_repo_init_fields(src: dict[str, Any], dst: dict[str, Any]) -> None:
-    """Copy persisted `repo_init_*` metadata fields from `src` to `dst` when present."""
-    existing_state = src.get("repo_init_state")
-    if isinstance(existing_state, str) and existing_state:
-        dst["repo_init_state"] = existing_state
-    mismatches = src.get("repo_init_mismatches")
-    if isinstance(mismatches, list):
-        cleaned = [str(m) for m in mismatches if isinstance(m, str) and m]
-        if cleaned:
-            dst["repo_init_mismatches"] = cleaned
-    err = src.get("repo_init_error")
-    if isinstance(err, str) and err:
-        dst["repo_init_error"] = err
-
-
-def load_registered_repos(*, prune_missing: bool = True) -> list[dict[str, Any]]:
-    """Load registered repository entries sorted by recency, optionally pruning stale paths."""
-    with _REPOS_LOCK:
-        with _file_lock(get_config_dir() / ".repos.lock"):
-            raw_items = _read_raw_repos_unlocked()
-            seen: dict[str, dict[str, Any]] = {}
-            dirty = False
-
-            for item in raw_items:
-                raw_path = item["path"].strip()
-                try:
-                    resolved = Path(raw_path).expanduser().resolve()
-                except OSError:
-                    dirty = True
-                    continue
-                key = str(resolved)
-                exists_git = resolved.is_dir() and (resolved / ".git").exists()
-                if prune_missing and not exists_git:
-                    dirty = True
-                    continue
-                ts = float(item.get("last_seen_at") or 0.0)
-                prev = seen.get(key)
-                if prev is not None:
-                    dirty = True
-                    if ts <= float(prev.get("last_seen_at") or 0.0):
-                        continue
-                elif key != raw_path:
-                    dirty = True
-                entry_out: dict[str, Any] = {
-                    "path": key,
-                    "name": str(item.get("name") or resolved.name),
-                    "last_seen_at": ts,
-                }
-                _copy_repo_init_fields(item, entry_out)
-                seen[key] = entry_out
-
-            entries = sorted(seen.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
-            if dirty:
-                _save_repos_unlocked(entries)
-            return entries
-
-
-def register_repo(main_worktree: Path, *, min_touch_interval: float = 0.0) -> dict[str, Any]:
-    """Register or touch a repository main worktree in `repos.json`."""
-    resolved = main_worktree.expanduser().resolve()
-    key = str(resolved)
-    now = time.time()
-    entry: dict[str, Any] = {"path": key, "name": resolved.name, "last_seen_at": now}
-
-    with _REPOS_LOCK:
-        with _file_lock(get_config_dir() / ".repos.lock"):
-            raw_items = _read_raw_repos_unlocked()
-            by_path: dict[str, dict[str, Any]] = {}
-            needs_cleanup = False
-            for item in raw_items:
-                try:
-                    p = Path(item["path"]).expanduser().resolve()
-                except OSError:
-                    needs_cleanup = True
-                    continue
-                if p.is_dir() and (p / ".git").exists():
-                    p_str = str(p)
-                    if p_str != item["path"] or p_str in by_path:
-                        needs_cleanup = True
-                    rec: dict[str, Any] = {
-                        "path": p_str,
-                        "name": str(item.get("name") or p.name),
-                        "last_seen_at": float(item.get("last_seen_at") or 0.0),
-                    }
-                    _copy_repo_init_fields(item, rec)
-                    by_path[p_str] = rec
-                else:
-                    needs_cleanup = True
-            prev_entry = by_path.get(key)
-            if (
-                prev_entry is not None
-                and not needs_cleanup
-                and min_touch_interval > 0.0
-                and (now - float(prev_entry.get("last_seen_at") or 0.0)) < min_touch_interval
-            ):
-                return dict(prev_entry)
-            if prev_entry:
-                _copy_repo_init_fields(prev_entry, entry)
-            by_path[key] = entry
-            entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
-            _save_repos_unlocked(entries)
-    return entry
-
-
-def get_repo_init_meta(main_worktree: Path) -> dict[str, Any]:
-    """Return persisted repo merge-policy status `{'state', 'mismatches', 'error'}`."""
-    key = str(main_worktree.expanduser().resolve())
-    with _REPOS_LOCK:
-        with _file_lock(get_config_dir() / ".repos.lock"):
-            raw_items = _read_raw_repos_unlocked()
-        for item in raw_items:
-            try:
-                p = str(Path(item["path"]).expanduser().resolve())
-            except OSError:
-                continue
-            if p == key:
-                raw_state = item.get("repo_init_state")
-                state = raw_state if isinstance(raw_state, str) else ""
-                if state == "prompted":
-                    state = "pending"
-                raw_mismatches = item.get("repo_init_mismatches")
-                mismatches = (
-                    [str(m) for m in raw_mismatches if isinstance(m, str) and m]
-                    if isinstance(raw_mismatches, list)
-                    else []
-                )
-                raw_err = item.get("repo_init_error")
-                error = raw_err if isinstance(raw_err, str) else ""
-                return {"state": state, "mismatches": mismatches, "error": error}
-    return {"state": "", "mismatches": [], "error": ""}
-
-
-def set_repo_init_meta(
-    main_worktree: Path,
-    state: str,
-    *,
-    mismatches: list[str] | None = None,
-    error: str = "",
-) -> None:
-    """Persist `repo_init_state`, `repo_init_mismatches`, and `repo_init_error` in `repos.json`."""
-    resolved = main_worktree.expanduser().resolve()
-    key = str(resolved)
-    now = time.time()
-    normalized = "pending" if state == "prompted" else state
-    with _REPOS_LOCK:
-        with _file_lock(get_config_dir() / ".repos.lock"):
-            raw_items = _read_raw_repos_unlocked()
-            by_path: dict[str, dict[str, Any]] = {}
-            for item in raw_items:
-                try:
-                    p = Path(item["path"]).expanduser().resolve()
-                except OSError:
-                    continue
-                if p.is_dir() and (p / ".git").exists():
-                    rec: dict[str, Any] = {
-                        "path": str(p),
-                        "name": str(item.get("name") or p.name),
-                        "last_seen_at": float(item.get("last_seen_at") or 0.0),
-                    }
-                    _copy_repo_init_fields(item, rec)
-                    by_path[str(p)] = rec
-            target = by_path.get(key) or {"path": key, "name": resolved.name, "last_seen_at": now}
-            if normalized:
-                target["repo_init_state"] = normalized
-            else:
-                target.pop("repo_init_state", None)
-            if normalized == "aligned" or not normalized:
-                target.pop("repo_init_mismatches", None)
-                target.pop("repo_init_error", None)
-            else:
-                cleaned_mm = [str(m) for m in (mismatches or []) if isinstance(m, str) and m]
-                if cleaned_mm:
-                    target["repo_init_mismatches"] = cleaned_mm
-                else:
-                    target.pop("repo_init_mismatches", None)
-                if error:
-                    target["repo_init_error"] = error
-                else:
-                    target.pop("repo_init_error", None)
-            by_path[key] = target
-            entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
-            _save_repos_unlocked(entries)
-
-
-def get_repo_init_state(main_worktree: Path) -> str:
-    """Return persisted `repo_init_state` ('aligned', 'pending', or '') for a repository."""
-    return str(get_repo_init_meta(main_worktree)["state"])
-
-
-def set_repo_init_state(main_worktree: Path, state: str) -> None:
-    """Persist `repo_init_state` for a repository main worktree in `repos.json`."""
-    set_repo_init_meta(main_worktree, state)
-
-
-def resolve_auto_merge(main_worktree: Path | None = None) -> dict[str, Any]:
-    """Resolve effective global `auto_merge` setting from `~/.config/idd/config.json`."""
-    del main_worktree  # Auto-merge is strictly global; keep optional param for caller compatibility.
-    return {
-        "enabled": bool(get_global_auto_merge()),
-        "source": "global",
-    }
-
-
-def unregister_repo(target: Path) -> bool:
-    """Remove a repository (matched by path or containing main worktree) from `repos.json`."""
-    resolved = target.expanduser().resolve()
-    candidates = {str(resolved)}
-    main_wt = resolve_main_worktree_ro(resolved)
-    if main_wt is not None:
-        candidates.add(str(main_wt))
-
-    with _REPOS_LOCK:
-        with _file_lock(get_config_dir() / ".repos.lock"):
-            raw_items = _read_raw_repos_unlocked()
-            kept: list[dict[str, Any]] = []
-            removed = False
-            for item in raw_items:
-                try:
-                    p_str = str(Path(item["path"]).expanduser().resolve())
-                except OSError:
-                    p_str = item["path"].strip()
-                if p_str in candidates:
-                    removed = True
-                else:
-                    kept.append(item)
-            if removed:
-                kept.sort(key=lambda r: (-float(r.get("last_seen_at") or 0.0), str(r.get("name", ""))))
-                _save_repos_unlocked(kept)
-            return removed
-
-
-_GH_CLI_CACHE: dict[str, Any] = {"checked_at": 0.0, "logged_in": False, "username": ""}
-_GH_CLI_LOCK = threading.Lock()
-_GH_CLI_INFLIGHT = False
-
-
-def _check_gh_cli_status(ttl: float = 30.0) -> tuple[bool, str]:
-    global _GH_CLI_INFLIGHT
-    now = time.time()
-    with _GH_CLI_LOCK:
-        if (now - float(_GH_CLI_CACHE.get("checked_at") or 0.0)) < ttl:
-            return bool(_GH_CLI_CACHE.get("logged_in")), str(_GH_CLI_CACHE.get("username") or "")
+def _probe_gh_cli_status() -> tuple[bool, str]:
     ok = False
     username = ""
     if shutil.which("gh"):
@@ -665,42 +243,60 @@ def _check_gh_cli_status(ttl: float = 30.0) -> tuple[bool, str]:
                     username = m.group(1).strip()
         except _IGNORED_GIT_ERROR:
             ok = False
-    with _GH_CLI_LOCK:
-        _GH_CLI_CACHE["checked_at"] = time.time()
-        _GH_CLI_CACHE["logged_in"] = ok
-        _GH_CLI_CACHE["username"] = username
-        _GH_CLI_INFLIGHT = False
     return ok, username
 
 
-def _get_gh_cli_status_nonblocking(ttl: float = 30.0) -> tuple[bool, str]:
-    """Return cached `gh auth status` immediately and refresh stale cache on a background thread."""
-    global _GH_CLI_INFLIGHT
-    now = time.time()
-    with _GH_CLI_LOCK:
-        checked_at = float(_GH_CLI_CACHE.get("checked_at") or 0.0)
-        logged_in = bool(_GH_CLI_CACHE.get("logged_in"))
-        username = str(_GH_CLI_CACHE.get("username") or "")
-        if (now - checked_at) < ttl:
-            return logged_in, username
-        if not _GH_CLI_INFLIGHT:
-            _GH_CLI_INFLIGHT = True
+class GitHubCliAuthStatus:
+    """Share one platform identity probe between synchronous and polling callers."""
 
-            def _bg_probe() -> None:
-                try:
-                    _check_gh_cli_status(ttl=ttl)
-                finally:
-                    with _GH_CLI_LOCK:
-                        global _GH_CLI_INFLIGHT
-                        _GH_CLI_INFLIGHT = False
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._value = (False, "")
+        self._checked_at: float | None = None
+        self._inflight: Future[tuple[bool, str]] | None = None
 
-            threading.Thread(target=_bg_probe, daemon=True).start()
-        return logged_in, username
+    def invalidate(self) -> None:
+        with self._lock:
+            self._checked_at = None
+            self._inflight = None
+
+    def get(self, *, background: bool = False, ttl: float = 30.0) -> tuple[bool, str]:
+        with self._lock:
+            cached = self._value
+            if self._checked_at is not None and time.monotonic() - self._checked_at < ttl:
+                return cached
+            probe = self._inflight
+            run_here = probe is None and not background
+            if probe is None:
+                probe = Future()
+                if background:
+                    # Publish this probe only after its worker has actually started.
+                    threading.Thread(target=self._refresh, args=(probe,), daemon=True).start()
+                self._inflight = probe
+
+        if run_here:
+            self._refresh(probe)
+        return cached if background else probe.result()
+
+    def _refresh(self, probe: Future[tuple[bool, str]]) -> None:
+        try:
+            value = _probe_gh_cli_status()
+        except BaseException as exc:
+            # A synchronous interruption must also release other callers of this Future.
+            with self._lock:
+                if self._inflight is probe:
+                    self._inflight = None
+            probe.set_exception(exc)
+            return
+        with self._lock:
+            if self._inflight is probe:
+                self._value = value
+                self._checked_at = time.monotonic()
+                self._inflight = None
+        probe.set_result(value)
 
 
-def _check_gh_cli_logged_in(ttl: float = 30.0) -> bool:
-    ok, _ = _check_gh_cli_status(ttl=ttl)
-    return ok
+github_cli_auth = GitHubCliAuthStatus()
 
 
 def _mask_token(tok: str) -> str:
@@ -717,15 +313,15 @@ def collect_auth_hosts_status(*, root: Path | None = None, global_mode: bool = T
     saved_hosts = load_hosts_config()
     repo_paths: list[Path] = []
     if not global_mode and root is not None:
-        m = resolve_main_worktree_ro(root)
+        m = resolve_main_worktree(root)
         if m is not None:
             repo_paths.append(m)
     else:
         if root is not None:
-            m = resolve_main_worktree_ro(root)
+            m = resolve_main_worktree(root)
             if m is not None:
                 register_repo(m)
-        repo_paths = [Path(rec["path"]) for rec in load_registered_repos(prune_missing=True)]
+        repo_paths = [Path(rec["path"]) for rec in load_registered_repos()]
 
     hosts_map: dict[str, dict[str, Any]] = {}
 
@@ -799,7 +395,7 @@ def collect_auth_hosts_status(*, root: Path | None = None, global_mode: bool = T
                 auth_source = "env"
             else:
                 if gh_status is None:
-                    gh_status = _check_gh_cli_status()
+                    gh_status = github_cli_auth.get()
                 gh_logged_in, gh_username = gh_status
                 if gh_logged_in and (host_key == "github.com" or host_key.endswith(".github.com")):
                     configured = True
@@ -1012,7 +608,7 @@ def _get_commit_info_cached(
     last_commit_sha = ""
     last_commit_ts = 0.0
     last_commit_subject = ""
-    log_proc = _run_git_ro(wt_path, ["log", "-1", "--format=%h%x1f%ct%x1f%s"])
+    log_proc = read_git(wt_path, ["log", "-1", "--format=%h%x1f%ct%x1f%s"])
     if log_proc and log_proc.returncode == 0 and log_proc.stdout.strip():
         parts = log_proc.stdout.strip().split("\x1f", 2)
         if len(parts) >= 2:
@@ -1055,14 +651,14 @@ def _inspect_remote_sync_ro(
         return result
 
     if has_origin is None:
-        rem = _run_git_ro(wt_path, ["remote"])
+        rem = read_git(wt_path, ["remote"])
         remotes = {line.strip() for line in rem.stdout.splitlines() if line.strip()} if rem and rem.returncode == 0 else set()
         has_origin = "origin" in remotes
     if not has_origin:
         return result
 
     if not branch:
-        br_proc = _run_git_ro(wt_path, ["branch", "--show-current"])
+        br_proc = read_git(wt_path, ["branch", "--show-current"])
         branch = br_proc.stdout.strip() if br_proc and br_proc.returncode == 0 else ""
     if not branch or branch == "(detached)":
         return result
@@ -1070,7 +666,7 @@ def _inspect_remote_sync_ro(
     if upstream_hint is not None:
         upstream = upstream_hint
     else:
-        up_proc = _run_git_ro(wt_path, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+        up_proc = read_git(wt_path, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
         upstream = up_proc.stdout.strip() if up_proc and up_proc.returncode == 0 else ""
     result["upstream"] = upstream
     if branch != default_branch and upstream == f"origin/{default_branch}":
@@ -1090,7 +686,7 @@ def _inspect_remote_sync_ro(
     origin_ref = f"refs/remotes/origin/{branch}"
     rem_exists, rem_oid = _read_ref_oid_fast(common_dir, origin_ref)
     if rem_exists is None:
-        rem_ref_proc = _run_git_ro(wt_path, ["show-ref", "--verify", "--quiet", origin_ref])
+        rem_ref_proc = read_git(wt_path, ["show-ref", "--verify", "--quiet", origin_ref])
         rem_exists = bool(rem_ref_proc and rem_ref_proc.returncode == 0)
 
     if rem_exists:
@@ -1100,7 +696,7 @@ def _inspect_remote_sync_ro(
             result["unpushed_commits"] = 0
             result["remote_state"] = "synced"
             return result
-        lr_proc = _run_git_ro(wt_path, ["rev-list", "--left-right", "--count", f"{origin_ref}...HEAD"])
+        lr_proc = read_git(wt_path, ["rev-list", "--left-right", "--count", f"{origin_ref}...HEAD"])
         if lr_proc and lr_proc.returncode == 0 and lr_proc.stdout.strip():
             counts = lr_proc.stdout.strip().split()
             if len(counts) == 2 and counts[0].isdigit() and counts[1].isdigit():
@@ -1113,13 +709,13 @@ def _inspect_remote_sync_ro(
         base_ref = f"refs/remotes/origin/{default_branch}"
         base_exists, base_oid = _read_ref_oid_fast(common_dir, base_ref)
         if base_exists is None:
-            base_ref_proc = _run_git_ro(wt_path, ["show-ref", "--verify", "--quiet", base_ref])
+            base_ref_proc = read_git(wt_path, ["show-ref", "--verify", "--quiet", base_ref])
             base_exists = bool(base_ref_proc and base_ref_proc.returncode == 0)
         if base_exists:
             if head_oid and base_oid and head_oid == base_oid:
                 result["unpushed_commits"] = 0
             elif head_oid != "(initial)":
-                ahead_proc = _run_git_ro(wt_path, ["rev-list", "--count", f"{base_ref}..HEAD"])
+                ahead_proc = read_git(wt_path, ["rev-list", "--count", f"{base_ref}..HEAD"])
                 if ahead_proc and ahead_proc.returncode == 0 and ahead_proc.stdout.strip().isdigit():
                     result["unpushed_commits"] = int(ahead_proc.stdout.strip())
 
@@ -1216,7 +812,7 @@ def inspect_worktree_pulse(
 
     if wt_path.is_dir():
         git_dir, common_dir = _resolve_git_dirs_fast(wt_path)
-        st_proc = _run_git_ro(wt_path, ["status", "--porcelain=v2", "--branch", "-uall"])
+        st_proc = read_git(wt_path, ["status", "--porcelain=v2", "--branch", "-uall"])
         if st_proc and st_proc.returncode == 0:
             (
                 head_oid,
@@ -1240,9 +836,9 @@ def inspect_worktree_pulse(
     insertions = 0
     deletions = 0
     if wt_path.is_dir() and modified_count > 0:
-        diff_proc = _run_git_ro(wt_path, ["diff", "HEAD", "--shortstat"])
+        diff_proc = read_git(wt_path, ["diff", "HEAD", "--shortstat"])
         if diff_proc is None or diff_proc.returncode != 0:
-            diff_proc = _run_git_ro(wt_path, ["diff", "--shortstat"])
+            diff_proc = read_git(wt_path, ["diff", "--shortstat"])
         if diff_proc and diff_proc.returncode == 0:
             ins_m = re.search(r"(\d+)\s+insertion", diff_proc.stdout)
             del_m = re.search(r"(\d+)\s+deletion", diff_proc.stdout)
@@ -1579,10 +1175,10 @@ class ForgeSnapshotCache:
         """Start parallel non-blocking background forge refreshes for valid origin repos."""
         now = time.time()
         for raw_path in repo_paths:
-            main_wt = resolve_main_worktree_ro(raw_path)
+            main_wt = resolve_main_worktree(raw_path)
             if main_wt is None:
                 continue
-            has_origin, _ = _detect_repo_meta_ro(main_wt)
+            has_origin = has_remote_origin(main_wt)
             if not has_origin:
                 continue
             key = str(main_wt.resolve())
@@ -1818,7 +1414,7 @@ def _extract_task_dirs_from_paths(lines: list[str], *, strip_porcelain: bool) ->
 
 
 def _get_worktree_dirty_task_dirs(wt_path: Path) -> set[str]:
-    st_proc = _run_git_ro(wt_path, ["status", "--porcelain=v1", "--", "TASK"])
+    st_proc = read_git(wt_path, ["status", "--porcelain=v1", "--", "TASK"])
     if st_proc and st_proc.returncode == 0 and st_proc.stdout.strip():
         return _extract_task_dirs_from_paths(st_proc.stdout.splitlines(), strip_porcelain=True)
     return set()
@@ -1858,10 +1454,10 @@ def _get_worktree_base_task_dirs(wt_path: Path, default_branch: str) -> set[str]
                 return set(cached)
     result: set[str] = set()
     for base_ref in (default_branch, f"origin/{default_branch}"):
-        mb_proc = _run_git_ro(wt_path, ["merge-base", base_ref, "HEAD"])
+        mb_proc = read_git(wt_path, ["merge-base", base_ref, "HEAD"])
         if mb_proc and mb_proc.returncode == 0 and mb_proc.stdout.strip():
             mb_sha = mb_proc.stdout.strip()
-            tree_proc = _run_git_ro(wt_path, ["ls-tree", "-d", "--name-only", f"{mb_sha}:TASK"])
+            tree_proc = read_git(wt_path, ["ls-tree", "-d", "--name-only", f"{mb_sha}:TASK"])
             if tree_proc and tree_proc.returncode == 0 and tree_proc.stdout.strip():
                 result = {line.strip() for line in tree_proc.stdout.splitlines() if line.strip()}
             break
@@ -1891,7 +1487,7 @@ def _get_worktree_touched_task_dirs(
                     return touched | cached
         committed: set[str] = set()
         for base_ref in (default_branch, f"origin/{default_branch}"):
-            diff_proc = _run_git_ro(wt_path, ["diff", "--name-only", f"{base_ref}...HEAD", "--", "TASK"])
+            diff_proc = read_git(wt_path, ["diff", "--name-only", f"{base_ref}...HEAD", "--", "TASK"])
             if diff_proc and diff_proc.returncode == 0:
                 committed = _extract_task_dirs_from_paths(diff_proc.stdout.splitlines(), strip_porcelain=False)
                 break
@@ -1912,7 +1508,7 @@ def _collect_all_worktrees_ro(
     default_branch: str = "main",
     all_worktrees: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    worktrees = all_worktrees if all_worktrees is not None else list_git_worktrees_ro(main_worktree)
+    worktrees = all_worktrees if all_worktrees is not None else list_worktrees(main_worktree, timeout=10.0)
     main_resolved = main_worktree.resolve()
     main_task_root = main_resolved / "TASK"
     main_task_dirs: set[str] = set()
@@ -1929,7 +1525,7 @@ def _collect_all_worktrees_ro(
             return [], [], False, ""
         branch = wt.get("branch", "")
         is_main = wt_path == main_resolved
-        entries, warnings, matched = task_status._collect_from_task_root(  # noqa: SLF001
+        entries, warnings, matched = task_status.collect_task_entries(
             task_root,
             issue_filter,
             open_only,
@@ -2079,7 +1675,7 @@ def collect_repo_snapshot(
         main_wt = Path(_prelisted_worktrees[0]["path"]).resolve()
         all_worktrees = _prelisted_worktrees
     else:
-        main_wt, all_worktrees = _resolve_main_worktree_and_list_ro(resolved)
+        main_wt, all_worktrees = main_worktree_and_inventory(resolved)
 
     remote_spec = None
     inferred_forge = "local"
@@ -2346,7 +1942,7 @@ def collect_repo_snapshot(
         if (main_wt is not None and has_origin)
         else {"state": "local", "mismatches": [], "error": ""}
     )
-    auto_merge_meta = resolve_auto_merge(main_wt)
+    auto_merge_meta = {"enabled": get_global_auto_merge(), "source": "global"}
 
     return {
         "repo_name": repo_name,
@@ -2373,6 +1969,13 @@ def collect_repo_snapshot(
         "forge_fetched_at": forge_info["fetched_at"],
         "generated_at": time.time(),
     }
+
+
+def summarize_repo(snap: dict[str, Any]) -> dict[str, Any]:
+    """Compute the same counters for one repository in either terminal or browser views."""
+    return _compute_global_summary(
+        [snap], snap.get("issues") or [], snap.get("local_only_items") or [], snap.get("orphan_changes") or [],
+    )
 
 
 def _compute_global_summary(
@@ -2524,7 +2127,7 @@ def _build_forge_connections(
     saved_hosts = load_hosts_config()
     has_gitlab_env = bool(os.environ.get("GITLAB_TOKEN", "").strip() or os.environ.get("GITLAB_PRIVATE_TOKEN", "").strip())
     has_github_env = bool(os.environ.get("GH_TOKEN", "").strip() or os.environ.get("GITHUB_TOKEN", "").strip())
-    gh_ok, gh_user = _get_gh_cli_status_nonblocking() if allow_stale_async else _check_gh_cli_status()
+    gh_ok, gh_user = github_cli_auth.get(background=allow_stale_async)
 
     def _resolve_host_auth(fg: str, host_key: str, saved_entry: dict[str, str] | None) -> tuple[bool, str, str]:
         saved_tok = str((saved_entry or {}).get("token") or "").strip()
@@ -2735,12 +2338,12 @@ def collect_global_snapshot(
     """Aggregate live status snapshots across all registered repositories on this machine."""
     prelisted_worktrees: dict[str, list[dict[str, str]]] = {}
     if current_cwd is not None:
-        cur_main, cur_wts = _resolve_main_worktree_and_list_ro(current_cwd)
+        cur_main, cur_wts = main_worktree_and_inventory(current_cwd)
         if cur_main is not None:
             prelisted_worktrees[str(cur_main)] = cur_wts
             register_repo(cur_main, min_touch_interval=60.0 if allow_stale_async else 0.0)
 
-    registered = load_registered_repos(prune_missing=True)
+    registered = load_registered_repos()
     cache = forge_cache if forge_cache is not None else ForgeSnapshotCache(ttl_seconds=0.0)
 
     def scan_rec(rec: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None, str | None]:
@@ -2832,12 +2435,7 @@ def collect_scope_snapshot(
             allow_stale_async=allow_stale_async,
             register=True,
         )
-        summary = _compute_global_summary(
-            [snap],
-            snap["issues"],
-            snap["local_only_items"],
-            snap["orphan_changes"],
-        )
+        summary = summarize_repo(snap)
         auth_alerts, warnings = _dedupe_auth_alerts([snap])
         return {
             "global": False,

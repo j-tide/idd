@@ -8,7 +8,8 @@ from collections import Counter
 import json
 from pathlib import Path
 import re
-import subprocess
+
+from git_worktrees import list_worktrees
 
 
 STATUSES = ("planned", "in_progress", "blocked", "deferred", "cancelled", "done", "unknown")
@@ -43,6 +44,11 @@ def _matches_issue_filter(dir_name: str, issue_filter: str | None) -> bool:
     filter_num = parse_issue_number(issue_filter)
     dir_num = parse_issue_number("", dir_name)
     return filter_num is not None and dir_num == filter_num
+
+
+def is_task_record(path: Path) -> bool:
+    """Recognize numbered TASK records used by progress and delivery commands."""
+    return path.is_file() and re.match(r"^TASK-\d+(?:-|\.md)", path.name) is not None
 
 
 def read_task(path: Path, task_root: Path) -> dict:
@@ -114,7 +120,7 @@ def read_task(path: Path, task_root: Path) -> dict:
     }
 
 
-def _collect_from_task_root(
+def collect_task_entries(
     task_root: Path,
     issue_filter: str | None,
     open_only: bool,
@@ -125,7 +131,7 @@ def _collect_from_task_root(
     """Collect Issue directory summaries from one TASK/ root."""
     grouped: dict[str, list[dict]] = {}
     for path in sorted(task_root.glob("*/TASK-*.md")):
-        if path.is_file() and re.match(r"^TASK-\d+(?:-|\.md)", path.name):
+        if is_task_record(path):
             if _matches_issue_filter(path.parent.name, issue_filter):
                 grouped.setdefault(path.parent.name, []).append(read_task(path, task_root))
     matched = issue_filter is None or bool(grouped)
@@ -158,46 +164,15 @@ def _collect_from_task_root(
 
 def collect(task_root: Path, issue_filter: str | None, open_only: bool) -> dict:
     """Collect task status under a single TASK/ directory."""
-    entries, warnings, matched = _collect_from_task_root(task_root, issue_filter, open_only)
+    entries, warnings, matched = collect_task_entries(task_root, issue_filter, open_only)
     if issue_filter is not None and not matched:
         raise ValueError(f"没有匹配的 Issue 目录：{issue_filter}")
     return {"issues": entries, "warnings": warnings}
 
 
-def list_git_worktrees(repo_root: Path) -> list[dict[str, str]]:
-    """Return list of {path, branch} dictionaries from `git worktree list --porcelain`."""
-    proc = subprocess.run(
-        ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"],
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        raise ValueError(proc.stderr.strip() or f"无法列出 Git 工作树：{repo_root}")
-    worktrees: list[dict[str, str]] = []
-    current: dict[str, str] = {}
-    for line in proc.stdout.splitlines():
-        if not line.strip():
-            if current.get("path"):
-                worktrees.append(current)
-            current = {}
-            continue
-        if line.startswith("worktree "):
-            current["path"] = line[len("worktree "):].strip()
-        elif line.startswith("branch "):
-            ref = line[len("branch "):].strip()
-            if ref.startswith("refs/heads/"):
-                ref = ref[len("refs/heads/"):]
-            current["branch"] = ref
-        elif line == "detached":
-            current.setdefault("branch", "(detached)")
-    if current.get("path"):
-        worktrees.append(current)
-    return worktrees
-
-
 def collect_all_worktrees(repo_root: Path, issue_filter: str | None, open_only: bool) -> dict:
     """Collect task status across all git worktrees belonging to the repository."""
-    worktrees = list_git_worktrees(repo_root)
+    worktrees = list_worktrees(repo_root)
     all_entries: list[dict] = []
     all_warnings: list[str] = []
     seen_keys: set[tuple[str, str]] = set()
@@ -208,7 +183,7 @@ def collect_all_worktrees(repo_root: Path, issue_filter: str | None, open_only: 
         task_root = wt_path / "TASK"
         if not task_root.is_dir():
             continue
-        entries, warnings, matched = _collect_from_task_root(
+        entries, warnings, matched = collect_task_entries(
             task_root,
             issue_filter,
             open_only,

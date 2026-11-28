@@ -1,0 +1,13 @@
+      --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+      --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+      --ease-pop: cubic-bezier(0.34, 1.45, 0.64, 1);
+      --ease-in: cubic-bezier(0.4, 0, 1, 1);
+      --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+      --dur-press: 80ms;
+      --dur-micro: 120ms;
+      --dur-exit: 150ms;
+      --dur-fast: 180ms;
+      --dur-panel: 220ms;
+      --dur-layout: 240ms;
+      --press-scale-sm: 0.97;
+      --press-scale-btn: 0.98;

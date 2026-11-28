@@ -17,6 +17,9 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import idd_cli  # noqa: E402
+import delivery_summary  # noqa: E402
+import naming  # noqa: E402
+import repository_lock  # noqa: E402
 from version import parse_skill_version  # noqa: E402
 
 
@@ -1145,11 +1148,11 @@ class TestIddCli(unittest.TestCase):
             self.assertTrue((h.repo / "export.py").is_file())
 
     def test_pr_and_land_avoid_duplicate_conventional_title_prefixes(self) -> None:
-        self.assertEqual(idd_cli._format_conventional_title("fix", "修复断连"), "fix: 修复断连")
-        self.assertEqual(idd_cli._format_conventional_title("fix", "fix: 修复断连"), "fix: 修复断连")
-        self.assertEqual(idd_cli._format_conventional_title("fix", "Feat(ui)!: 支持筛选"), "feat(ui)!: 支持筛选")
-        self.assertEqual(idd_cli._format_conventional_title("fix", "FIX：修复中文冒号"), "fix: 修复中文冒号")
-        self.assertEqual(idd_cli._format_conventional_title("feat", "API: 新增接口"), "feat: API: 新增接口")
+        self.assertEqual(naming.format_conventional_title("fix", "修复断连"), "fix: 修复断连")
+        self.assertEqual(naming.format_conventional_title("fix", "fix: 修复断连"), "fix: 修复断连")
+        self.assertEqual(naming.format_conventional_title("fix", "Feat(ui)!: 支持筛选"), "feat(ui)!: 支持筛选")
+        self.assertEqual(naming.format_conventional_title("fix", "FIX：修复中文冒号"), "fix: 修复中文冒号")
+        self.assertEqual(naming.format_conventional_title("feat", "API: 新增接口"), "feat: API: 新增接口")
 
         with tempfile.TemporaryDirectory() as tmp:
             h = GitHubHarness(Path(tmp))
@@ -1428,41 +1431,41 @@ class TestIddCli(unittest.TestCase):
     def test_issue_title_validation_short_scope_and_flags(self) -> None:
         # Valid normalized formats
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("feat: 支持导出 CSV"),
+            naming.validate_and_format_issue_title("feat: 支持导出 CSV"),
             "feat: 支持导出 CSV",
         )
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("fix(sync): 避免误匹配行内标记"),
+            naming.validate_and_format_issue_title("fix(sync): 避免误匹配行内标记"),
             "fix(sync): 避免误匹配行内标记",
         )
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("Feat(Repo-Init)!：中文冒号"),
+            naming.validate_and_format_issue_title("Feat(Repo-Init)!：中文冒号"),
             "feat(repo-init)!: 中文冒号",
         )
 
         # --type / --scope assembly & idempotency
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("补齐校验", issue_type="fix", scope="land"),
+            naming.validate_and_format_issue_title("补齐校验", issue_type="fix", scope="land"),
             "fix(land): 补齐校验",
         )
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("fix: 补齐校验", issue_type="fix", scope="land"),
+            naming.validate_and_format_issue_title("fix: 补齐校验", issue_type="fix", scope="land"),
             "fix(land): 补齐校验",
         )
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("fix(land): 补齐校验", issue_type="fix", scope="LAND"),
+            naming.validate_and_format_issue_title("fix(land): 补齐校验", issue_type="fix", scope="LAND"),
             "fix(land): 补齐校验",
         )
 
         # Escape hatch --raw
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("Tracking Q4 roadmap", raw=True),
+            naming.validate_and_format_issue_title("Tracking Q4 roadmap", raw=True),
             "Tracking Q4 roadmap",
         )
         with self.assertRaises(idd_cli.IddError):
-            idd_cli.validate_and_format_issue_title("Tracking Q4", issue_type="feat", raw=True)
+            naming.validate_and_format_issue_title("Tracking Q4", issue_type="feat", raw=True)
         with self.assertRaises(idd_cli.IddError):
-            idd_cli.validate_and_format_issue_title("Tracking Q4", scope="ui", raw=True)
+            naming.validate_and_format_issue_title("Tracking Q4", scope="ui", raw=True)
 
         # Invalid or missing prefixes, conflicts, empty/multiline
         for bad_title in (
@@ -1478,14 +1481,14 @@ class TestIddCli(unittest.TestCase):
             "fix(同步): 含中文",
         ):
             with self.assertRaises(idd_cli.IddError, msg=f"should reject {bad_title!r}"):
-                idd_cli.validate_and_format_issue_title(bad_title)
+                naming.validate_and_format_issue_title(bad_title)
 
         with self.assertRaises(idd_cli.IddError):
-            idd_cli.validate_and_format_issue_title("fix: 描述", issue_type="feat")
+            naming.validate_and_format_issue_title("fix: 描述", issue_type="feat")
         with self.assertRaises(idd_cli.IddError):
-            idd_cli.validate_and_format_issue_title("fix(sync): 描述", scope="land")
+            naming.validate_and_format_issue_title("fix(sync): 描述", scope="land")
         with self.assertRaises(idd_cli.IddError):
-            idd_cli.validate_and_format_issue_title("描述", scope="sync")
+            naming.validate_and_format_issue_title("描述", scope="sync")
 
     def test_issue_create_cli_validation_and_start_title_inference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1799,62 +1802,78 @@ class TestIddCli(unittest.TestCase):
             self.assertIn("已通过 Squash Merge 直线合入 PR #10", pr_override.stdout)
             self.assertEqual(h.load_state()["prs"]["10"]["state"], "MERGED")
 
-    def test_build_issue_summary_markdown_and_test_formatting(self) -> None:
-        self.assertEqual(
-            idd_cli._format_test_summary_line("uv run --offline --locked --extra dev python -m pytest -o addopts='' -q tests/ — 95 passed"),
-            "- **Test:** `pytest tests/` — 95 passed",
-        )
-        self.assertEqual(
-            idd_cli._format_test_summary_line("uv run pytest tests/ — 4505 passed, 11 skipped; tests/packaging/ — 3 passed"),
-            "**Test:**\n\n- `pytest tests/` — 4505 passed, 11 skipped\n- `tests/packaging/` — 3 passed",
-        )
-        self.assertEqual(
-            idd_cli._format_test_summary_line(
+    def test_verification_table_formats_supported_commands(self) -> None:
+        cases = [
+            (
+                "uv run --offline --locked --extra dev python -m pytest -o addopts='' -q tests/ — 95 passed",
+                [('`pytest tests/`', '95 passed')],
+            ),
+            (
+                'uv run pytest tests/ — 4505 passed, 11 skipped; tests/packaging/ — 3 passed',
+                [('`pytest tests/`', '4505 passed, 11 skipped'), ('`tests/packaging/`', '3 passed')],
+            ),
+            (
                 "uv run --offline --locked --extra dev python -m pytest -o addopts='' -q "
-                "tests/integrations/test_wecom_rendering.py tests/integrations/test_wecom.py "
-                "tests/integrations/test_wecom_connection.py tests/integrations/test_wecom_group_names.py "
-                "tests/integrations/test_wecom_relay.py tests/review/test_notifications.py "
-                "tests/architecture/test_dependencies.py — 379 passed; compileall/alembic/diff-check passed"
+                'tests/integrations/test_wecom_rendering.py tests/integrations/test_wecom.py '
+                'tests/integrations/test_wecom_connection.py tests/integrations/test_wecom_group_names.py '
+                'tests/integrations/test_wecom_relay.py tests/review/test_notifications.py '
+                'tests/architecture/test_dependencies.py — 379 passed; compileall/alembic/diff-check passed',
+                [('`pytest`（7 个测试文件）', '379 passed'), ('`compileall/alembic/diff-check`', 'passed')],
             ),
-            "**Test:**\n\n- `pytest`（7 个测试文件） — 379 passed\n- `compileall/alembic/diff-check` — passed",
-        )
-        self.assertEqual(
-            idd_cli._format_test_summary_line(
-                "corepack pnpm test --maxWorkers=2 — 93 files, 1219 passed; "
-                "corepack pnpm typecheck — 0 errors; "
-                "corepack pnpm test:architecture — 4 passed"
+            (
+                'corepack pnpm test --maxWorkers=2 — 93 files, 1219 passed; corepack pnpm typecheck — 0 '
+                'errors; corepack pnpm test:architecture — 4 passed',
+                [('`pnpm test`', '93 files, 1219 passed'), ('`pnpm typecheck`', '0 errors'), ('`pnpm test:architecture`', '4 passed')],
             ),
-            "**Test:**\n\n- `pnpm test` — 93 files, 1219 passed\n- `pnpm typecheck` — 0 errors\n- `pnpm test:architecture` — 4 passed",
-        )
-        self.assertEqual(
-            idd_cli._format_test_summary_line("PYTHONPATH=tests python3 -m unittest test_monitor_and_board -v — 23 passed"),
-            "- **Test:** `unittest test_monitor_and_board` — 23 passed",
-        )
-        self.assertEqual(
-            idd_cli._format_test_summary_line("python3 -m unittest discover -s tests -v — 89 passed"),
-            "- **Test:** `unittest tests` — 89 passed",
-        )
-        self.assertEqual(
-            idd_cli._format_test_summary_line("cmd1; cmd2 — 10 passed"),
-            "- **Test:** `cmd1; cmd2` — 10 passed",
-        )
-        self.assertEqual(
-            idd_cli._format_test_summary_line("`pytest tests/test_a.py` — 4 passed"),
-            "- **Test:** `pytest tests/test_a.py` — 4 passed",
-        )
-        self.assertEqual(
-            idd_cli._format_test_summary_line("echo `ok` — passed"),
-            "- **Test:** `` echo `ok` `` — passed",
-        )
-        self.assertEqual(
-            idd_cli._format_test_summary_line("未记录"),
-            "- **Test:** 未记录",
-        )
-        self.assertEqual(
-            idd_cli._format_test_summary_line("未在提交中记录"),
-            "- **Test:** 未在提交中记录",
-        )
+            (
+                'PYTHONPATH=tests python3 -m unittest test_monitor_and_board -v — 23 passed',
+                [('`unittest test_monitor_and_board`', '23 passed')],
+            ),
+            (
+                'python3 -m unittest discover -s tests -v — 89 passed',
+                [('`unittest tests`', '89 passed')],
+            ),
+            (
+                'cmd1; cmd2 — 10 passed',
+                [('`cmd1; cmd2`', '10 passed')],
+            ),
+            (
+                '`pytest tests/test_a.py` — 4 passed',
+                [('`pytest tests/test_a.py`', '4 passed')],
+            ),
+            (
+                'echo `ok` — passed',
+                [('`` echo `ok` ``', 'passed')],
+            ),
+            (
+                '未记录',
+                [('—', '未记录')],
+            ),
+            (
+                '未在提交中记录',
+                [('—', '未在提交中记录')],
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            def git(*args: str) -> str:
+                return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+            git("init", "-b", "main")
+            git("config", "user.name", "Tester")
+            git("config", "user.email", "test@example.com")
+            git("commit", "--allow-empty", "-m", "initial")
+            base = git("rev-parse", "HEAD")
+            expected_rows = []
+            for number, (raw, rows) in enumerate(cases, 1):
+                task = f"TASK-{number:02d}"
+                git("commit", "--allow-empty", "-m", "test: verify", "-m", f"Task: 42-case/{task}\nTest: {raw}")
+                for index, (label, result) in enumerate(rows):
+                    expected_rows.append(f"| {task if index == 0 else ''} | {label} | {result} |")
+            _, markdown, _ = delivery_summary.build_issue_summaries(repo, "42-case", 42, base)
+            actual_rows = [line for line in markdown.splitlines() if line.startswith("| ")][2:]
+            self.assertEqual(actual_rows, expected_rows)
 
+    def test_build_issue_summary_markdown_and_test_formatting(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = root / "repo"
@@ -1889,7 +1908,7 @@ class TestIddCli(unittest.TestCase):
             subprocess.run(["git", "-C", str(repo), "commit", "-m", commit_msg_1], check=True, capture_output=True)
 
             # Single TASK with issue_title=None must not leak '###' or 'TASK-01' into suggested_title
-            single_title, single_pr_body, single_commit_body = idd_cli.build_issue_summaries(
+            single_title, single_pr_body, single_commit_body = delivery_summary.build_issue_summaries(
                 repo, "6-review", 6, "main", issue_title=None
             )
             self.assertEqual(single_title, "feat: 扩展独立复核上下文 (#6)")
@@ -1945,7 +1964,7 @@ class TestIddCli(unittest.TestCase):
                 check=True,
                 capture_output=True,
             )
-            _, multi_pr_body, multi_commit_body = idd_cli.build_issue_summaries(
+            _, multi_pr_body, multi_commit_body = delivery_summary.build_issue_summaries(
                 repo, "6-review", 6, "main", issue_title="fix(review): 收敛噪音"
             )
             self.assertIn(
@@ -1984,7 +2003,7 @@ class TestIddCli(unittest.TestCase):
                 check=True,
                 capture_output=True,
             )
-            _, short_pr_body, short_commit_body = idd_cli.build_issue_summaries(
+            _, short_pr_body, short_commit_body = delivery_summary.build_issue_summaries(
                 repo, "6-review", 6, "main", issue_title="docs: 精简验证"
             )
             self.assertNotIn("<details>", short_pr_body)
@@ -2046,7 +2065,7 @@ class TestIddCli(unittest.TestCase):
                 capture_output=True,
             )
 
-            _, pr_body, commit_body = idd_cli.build_issue_summaries(
+            _, pr_body, commit_body = delivery_summary.build_issue_summaries(
                 repo, "71-gate", 71, "main", issue_title="docs(skill): 强化开发前先确认方案再建单门禁"
             )
             expected_commit = (
@@ -2155,7 +2174,7 @@ class TestIddCli(unittest.TestCase):
                 capture_output=True,
             )
 
-            _, pr_body, commit_body = idd_cli.build_issue_summaries(
+            _, pr_body, commit_body = delivery_summary.build_issue_summaries(
                 repo, "19-ai-status", 19, "main", issue_title="feat(console): 顶栏与总闸优化"
             )
             self.assertNotIn("### TASK-", pr_body)
@@ -2298,8 +2317,8 @@ class TestIddCli(unittest.TestCase):
             subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", "feat/1-a", str(wt)], check=True, capture_output=True)
 
             # Worktree resolves to the same common git dir lock path as main repo, and supports reentrant acquisition.
-            with idd_cli._repo_file_lock(wt, "idd-test.lock", owner_info={"branch": "feat/1-a"}) as lp1:
-                with idd_cli._repo_file_lock(repo, "idd-test.lock", owner_info={"branch": "feat/1-a"}) as lp2:
+            with repository_lock.repo_file_lock(wt, "idd-test.lock", owner_info={"branch": "feat/1-a"}) as lp1:
+                with repository_lock.repo_file_lock(repo, "idd-test.lock", owner_info={"branch": "feat/1-a"}) as lp2:
                     self.assertEqual(lp1, lp2)
                     self.assertTrue(lp1.is_file())
                     owner = json.loads(lp1.read_text(encoding="utf-8"))
@@ -2310,11 +2329,12 @@ class TestIddCli(unittest.TestCase):
                     "import os, sys\n"
                     "from pathlib import Path\n"
                     "sys.path.insert(0, sys.argv[1])\n"
-                    "import idd_cli\n"
+                    "from command_runner import IddError\n"
+                    "import repository_lock\n"
                     "try:\n"
-                    "    with idd_cli._repo_file_lock(Path(sys.argv[2]), 'idd-test.lock', wait_prefix='测试队列', timeout_env='IDD_TEST_LOCK_TIMEOUT'):\n"
+                    "    with repository_lock.repo_file_lock(Path(sys.argv[2]), 'idd-test.lock', wait_prefix='测试队列', timeout=float(os.environ['IDD_TEST_LOCK_TIMEOUT'])):\n"
                     "        pass\n"
-                    "except idd_cli.IddError as exc:\n"
+                    "except IddError as exc:\n"
                     "    print(f'ERR:{exc.exit_code}:{exc}', file=sys.stderr)\n"
                     "    sys.exit(exc.exit_code)\n"
                 )

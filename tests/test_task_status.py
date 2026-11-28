@@ -221,8 +221,8 @@ class TestTaskStatus(unittest.TestCase):
             subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True)
             subprocess.run(["git", "-C", str(repo), "commit", "-m", "chore: init"], check=True, capture_output=True)
 
-            wt1 = tmp_path / "repo-worktrees/42-csv"
-            wt2 = tmp_path / "repo-worktrees/43-auth"
+            wt1 = tmp_path / "含 空格的目录/42-csv"
+            wt2 = wt1.parent / "43-auth"
             wt1.parent.mkdir(parents=True)
             subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", "feat/42-csv", str(wt1), "main"], check=True, capture_output=True)
             subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", "fix/43-auth", str(wt2), "main"], check=True, capture_output=True)
@@ -231,8 +231,15 @@ class TestTaskStatus(unittest.TestCase):
             write_task(wt1, "42-csv", 2, status="in_progress", issue="#42")
             write_task(wt2, "43-auth", 1, status="blocked")
 
+            detached = wt1.parent / "44-read-only"
+            subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", str(detached), "main"],
+                           check=True, capture_output=True)
+            write_task(detached, "44-read-only", status="planned")
+
             data = query(repo, "--all-worktrees")
-            self.assertEqual([item["issue"] for item in data["issues"]], ["42-csv", "43-auth"])
+            self.assertEqual([item["issue"] for item in data["issues"]], ["42-csv", "43-auth", "44-read-only"])
+            self.assertEqual(data["issues"][2]["branch"], "(detached)")
+            self.assertEqual(Path(data["issues"][0]["worktree"]), wt1.resolve())
             self.assertEqual(data["issues"][0]["branch"], "feat/42-csv")
             self.assertEqual(data["issues"][0]["done"], 1)
             self.assertEqual(data["issues"][0]["total"], 2)

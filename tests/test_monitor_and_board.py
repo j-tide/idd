@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 import errno
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
@@ -31,7 +32,9 @@ from test_idd_cli import FAKE_GH_SCRIPT, IDD_BIN, SCRIPTS_DIR, parse_skill_versi
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from local_http import LocalHTTPServer
 import board_ui  # noqa: E402
+import repo_registry
 import monitor  # noqa: E402
 
 
@@ -564,7 +567,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                 os.environ.pop("GITLAB_TOKEN", None)
                 os.environ.pop("GITLAB_PRIVATE_TOKEN", None)
                 for rec_repo in (repo1, repo2):
-                    monitor.register_repo(rec_repo)
+                    repo_registry.register_repo(rec_repo)
 
                 cache = monitor.ForgeSnapshotCache(ttl_seconds=30.0)
                 t0 = time.perf_counter()
@@ -625,7 +628,7 @@ class TestMonitorAndBoard(unittest.TestCase):
             sub_env.pop("GITLAB_PRIVATE_TOKEN", None)
             sub_env.pop("IDD_FORGE", None)
             with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                monitor.register_repo(repo)
+                repo_registry.register_repo(repo)
 
             proc = subprocess.Popen(
                 [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--no-open"],
@@ -749,6 +752,18 @@ class TestMonitorAndBoard(unittest.TestCase):
                     out_logout = json.loads(resp.read().decode("utf-8"))
                     self.assertTrue(out_logout["ok"])
                     self.assertTrue(out_logout["removed"])
+
+                hosts_path = cfg / "hosts.json"
+                hosts_path.write_bytes(b'{"incomplete":')
+                for update in (req_save, req_logout):
+                    with self.assertRaises(urllib.error.HTTPError) as failure:
+                        urllib.request.urlopen(update, timeout=5)
+                    with failure.exception as response:
+                        self.assertEqual(response.code, 500)
+                        error = json.loads(response.read())
+                        self.assertFalse(error["ok"])
+                        self.assertIn("无法更新主机配置", error["error"])
+                    self.assertEqual(hosts_path.read_bytes(), b'{"incomplete":')
             finally:
                 proc.terminate()
                 try:
@@ -875,7 +890,7 @@ class TestMonitorAndBoard(unittest.TestCase):
         self.assertTrue(handler_500_broken.close_connection)
 
     def test_board_server_handle_error_suppresses_disconnects_only(self) -> None:
-        server = board_ui.BoardHTTPServer(("127.0.0.1", 0), board_ui.BoardRequestHandler, bind_and_activate=False)
+        server = LocalHTTPServer(("127.0.0.1", 0), board_ui.BoardRequestHandler, bind_and_activate=False)
         try:
             for exc in (
                 BrokenPipeError("broken"),
@@ -987,7 +1002,7 @@ class TestMonitorAndBoard(unittest.TestCase):
             sub_env.pop("GITLAB_PRIVATE_TOKEN", None)
             sub_env.pop("IDD_FORGE", None)
             with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                monitor.register_repo(repo)
+                repo_registry.register_repo(repo)
 
             proc = subprocess.Popen(
                 [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--no-open"],
@@ -1098,7 +1113,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                     "squash_commit_template": "%{title}",
                 })
                 with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                    monitor.set_repo_init_meta(repo, "")
+                    repo_registry.set_repo_init_meta(repo, "")
 
                 req_save_auto = urllib.request.Request(
                     f"{base_url}/api/auth/save",
@@ -1127,6 +1142,50 @@ class TestMonitorAndBoard(unittest.TestCase):
                 gl_server.shutdown()
                 gl_server.server_close()
 
+    def test_auth_probe_recovers_from_worker_start_failure_and_interruption(self) -> None:
+        class BoundedFuture(Future):
+            def result(self, timeout=2):
+                return super().result(timeout)
+
+        auth = monitor.GitHubCliAuthStatus()
+        with mock.patch.object(monitor, "Future", BoundedFuture):
+            with mock.patch.object(threading.Thread, "start", side_effect=RuntimeError("cannot start thread")):
+                with self.assertRaisesRegex(RuntimeError, "cannot start thread"):
+                    auth.get(background=True)
+            with mock.patch.object(monitor, "_probe_gh_cli_status", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    auth.get()
+            with mock.patch.object(monitor, "_probe_gh_cli_status", return_value=(True, "recovered")):
+                self.assertEqual(auth.get(), (True, "recovered"))
+
+    def test_auth_refresh_cannot_overwrite_a_new_identity_after_invalidation(self) -> None:
+        auth = monitor.GitHubCliAuthStatus()
+        started = threading.Event()
+        release = threading.Event()
+
+        def probe():
+            if not started.is_set():
+                started.set()
+                if not release.wait(timeout=5):
+                    raise TimeoutError("old probe was not released")
+                return True, "previous"
+            return True, "current"
+
+        with mock.patch.object(monitor, "_probe_gh_cli_status", side_effect=probe) as query:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                old = pool.submit(auth.get)
+                try:
+                    self.assertTrue(started.wait(timeout=5))
+                    self.assertEqual(auth.get(background=True), (False, ""))
+                    self.assertEqual(query.call_count, 1)
+                    auth.invalidate()
+                    self.assertEqual(auth.get(), (True, "current"))
+                finally:
+                    release.set()
+                self.assertEqual(old.result(timeout=5), (True, "previous"))
+            self.assertEqual(auth.get(), (True, "current"))
+            self.assertEqual(query.call_count, 2)
+
     def test_forge_connections_states_and_gh_username_parsing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfg = Path(tmp) / "config"
@@ -1137,7 +1196,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                     os.environ.pop(key, None)
 
                 # 1. `gh auth status` username parsing (modern "account X" and legacy "as X")
-                monitor._GH_CLI_CACHE["checked_at"] = 0.0
+                monitor.github_cli_auth.invalidate()
                 fake_proc_new = subprocess.CompletedProcess(
                     ["gh", "auth", "status"],
                     0,
@@ -1148,11 +1207,11 @@ class TestMonitorAndBoard(unittest.TestCase):
                     mock.patch.object(monitor.shutil, "which", return_value="/usr/bin/gh"),
                     mock.patch.object(monitor.subprocess, "run", return_value=fake_proc_new),
                 ):
-                    ok, user = monitor._check_gh_cli_status(ttl=30.0)
+                    ok, user = monitor.github_cli_auth.get(ttl=30.0)
                     self.assertTrue(ok)
                     self.assertEqual(user, "j-tide")
 
-                monitor._GH_CLI_CACHE["checked_at"] = 0.0
+                monitor.github_cli_auth.invalidate()
                 fake_proc_old = subprocess.CompletedProcess(
                     ["gh", "auth", "status"],
                     0,
@@ -1163,12 +1222,12 @@ class TestMonitorAndBoard(unittest.TestCase):
                     mock.patch.object(monitor.shutil, "which", return_value="/usr/bin/gh"),
                     mock.patch.object(monitor.subprocess, "run", return_value=fake_proc_old),
                 ):
-                    ok, user = monitor._check_gh_cli_status(ttl=30.0)
+                    ok, user = monitor.github_cli_auth.get(ttl=30.0)
                     self.assertTrue(ok)
                     self.assertEqual(user, "octocat")
 
                 # 2. `_build_forge_connections` across states
-                with mock.patch.object(monitor, "_check_gh_cli_status", return_value=(False, "")):
+                with mock.patch.object(monitor.github_cli_auth, "get", return_value=(False, "")):
                     empty_conns = monitor._build_forge_connections([], local_only=False)
                     self.assertEqual(empty_conns["github"]["status"], "unconfigured")
                     self.assertEqual(empty_conns["gitlab"]["status"], "unconfigured")
@@ -1321,7 +1380,7 @@ class TestMonitorAndBoard(unittest.TestCase):
             for key in ("GITLAB_TOKEN", "GITLAB_PRIVATE_TOKEN", "IDD_FORGE"):
                 sub_env.pop(key, None)
             with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                monitor.register_repo(repo)
+                repo_registry.register_repo(repo)
 
             proc = subprocess.Popen(
                 [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--no-open"],
@@ -1572,7 +1631,7 @@ class TestMonitorAndBoard(unittest.TestCase):
             sub_env = dict(env)
             sub_env["PYTHONUNBUFFERED"] = "1"
             with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                monitor.register_repo(repo)
+                repo_registry.register_repo(repo)
 
             proc = subprocess.Popen(
                 [sys.executable, str(IDD_BIN), "board", "--host", "127.0.0.1", "--port", "0", "--local-only", "--no-open"],
@@ -2666,7 +2725,7 @@ class TestMonitorAndBoard(unittest.TestCase):
             repo, origin, gh_state_file, env = _create_repo_harness(root / "h", "demo", cfg, issues=issues)
 
             with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                monitor.register_repo(repo)
+                repo_registry.register_repo(repo)
 
             # Create 3 worktrees and land them so they have merged PRs with matching headRefOid
             wt_clean1 = Path(json.loads(self._run(env, repo, "start", "10", "--slug", "clean-one", "--json").stdout)["worktree"])
@@ -3480,7 +3539,7 @@ class TestMonitorAndBoard(unittest.TestCase):
             subprocess.run(["git", "-C", str(wt_idle), "push", "-u", "origin", "HEAD"], check=True, capture_output=True)
 
             # 1) Cold clean worktree pulse uses <= 2 git subprocesses; warm HEAD cache uses <= 1
-            with mock.patch.object(monitor, "_run_git_ro", wraps=monitor._run_git_ro) as spy_git:
+            with mock.patch.object(monitor, "read_git", wraps=monitor.read_git) as spy_git:
                 pulse1 = monitor.inspect_worktree_pulse(
                     wt_idle,
                     branch=idle_branch,
@@ -3492,7 +3551,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                 self.assertEqual(pulse1["dirty_count"], 0)
                 self.assertLessEqual(spy_git.call_count, 2)
 
-            with mock.patch.object(monitor, "_run_git_ro", wraps=monitor._run_git_ro) as spy_git_warm:
+            with mock.patch.object(monitor, "read_git", wraps=monitor.read_git) as spy_git_warm:
                 pulse2 = monitor.inspect_worktree_pulse(
                     wt_idle,
                     branch=idle_branch,
@@ -3557,10 +3616,10 @@ class TestMonitorAndBoard(unittest.TestCase):
 
                 # 4) register_repo respects min_touch_interval to avoid rewriting repos.json every poll
                 repos_file = cfg / "repos.json"
-                monitor.register_repo(repo)
+                repo_registry.register_repo(repo)
                 mtime_before = repos_file.stat().st_mtime_ns
                 time.sleep(0.02)
-                monitor.register_repo(repo, min_touch_interval=60.0)
+                repo_registry.register_repo(repo, min_touch_interval=60.0)
                 self.assertEqual(repos_file.stat().st_mtime_ns, mtime_before)
 
     def test_board_snapshot_coalescer_merges_concurrent_requests_and_invalidates(self) -> None:
@@ -3637,7 +3696,7 @@ class TestMonitorAndBoard(unittest.TestCase):
                     version="0.0.4",
                     snapshot_cache=snap_cache,
                 )
-                server = board_ui.BoardHTTPServer(("127.0.0.1", 0), handler_cls)
+                server = LocalHTTPServer(("127.0.0.1", 0), handler_cls)
                 port = server.server_address[1]
                 srv_thread = threading.Thread(target=server.serve_forever, daemon=True)
                 srv_thread.start()
@@ -3821,10 +3880,10 @@ console.log(JSON.stringify(delays));
                 "import os, sys\n"
                 "from pathlib import Path\n"
                 "sys.path.insert(0, sys.argv[1])\n"
-                "import monitor\n"
+                "import repo_registry\n"
                 "repo = Path(sys.argv[2])\n"
-                "monitor.register_repo(repo)\n"
-                "monitor.set_repo_init_meta(repo, 'aligned')\n"
+                "repo_registry.register_repo(repo)\n"
+                "repo_registry.set_repo_init_meta(repo, 'aligned')\n"
             )
             env = dict(os.environ)
             env["IDD_CONFIG_DIR"] = str(cfg)
@@ -3843,7 +3902,7 @@ console.log(JSON.stringify(delays));
                 self.assertEqual(proc.returncode, 0, err or out)
 
             with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                entries = monitor.load_registered_repos(prune_missing=True)
+                entries = repo_registry.load_registered_repos()
             paths = {e["path"]: e for e in entries}
             self.assertEqual(len(paths), len(repos))
             for r in repos:

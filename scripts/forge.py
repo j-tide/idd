@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import re
 import shutil
-import stat
 import subprocess
 import tempfile
 import time
@@ -17,6 +16,8 @@ from typing import Any
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from local_state import load_hosts_config
 
 
 FAIL_CONCLUSIONS = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"}
@@ -151,44 +152,6 @@ def parse_remote_url(url: str) -> RemoteSpec | None:
     return None
 
 
-def get_config_dir() -> Path:
-    override = os.environ.get("IDD_CONFIG_DIR", "").strip()
-    if override:
-        return Path(override).expanduser().resolve()
-    return (Path.home() / ".config" / "idd").resolve()
-
-
-def get_hosts_path() -> Path:
-    return get_config_dir() / "hosts.json"
-
-
-def load_hosts_config() -> dict[str, dict[str, str]]:
-    path = get_hosts_path()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def save_hosts_config(data: dict[str, dict[str, str]]) -> None:
-    path = get_hosts_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        path.parent.chmod(stat.S_IRWXU)
-    except OSError:
-        pass
-    fd, tmp_name = tempfile.mkstemp(prefix="hosts-", suffix=".tmp", dir=str(path.parent))
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, ensure_ascii=False, indent=2)
-        tmp_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-        os.replace(tmp_path, path)
-    finally:
-        tmp_path.unlink(missing_ok=True)
-
-
 def normalize_host_input(host_or_url: str, *, use_http: bool = False) -> tuple[str, str]:
     """Normalize host or URL input into (host_key, api_base)."""
     raw = host_or_url.strip().rstrip("/")
@@ -231,6 +194,7 @@ def verify_host_token(forge_type: str, api_base: str, token: str) -> str:
             payload = json.loads(resp.read().decode("utf-8"))
             return str(payload.get("username") or payload.get("login") or "authenticated")
     except urllib.error.HTTPError as exc:
+        exc.close()
         raise ForgeError(f"Token 校验失败（HTTP {exc.code}）：请检查 Token 权限与主机地址 {api_base}。") from exc
     except urllib.error.URLError as exc:
         raise ForgeError(f"无法连接 {api_base}：{exc.reason}") from exc
@@ -353,6 +317,18 @@ class GitHubForge:
             "failed_log_ids": failed_ids,
         }
 
+    def _run_with_body(self, args: list[str], body: str | None) -> subprocess.CompletedProcess[str]:
+        """Give gh the exact UTF-8 body, closing the temporary file before gh opens it."""
+        if body is None:
+            return _run(args, cwd=self.cwd, env=self._gh_env())
+        fd, name = tempfile.mkstemp(prefix="idd-body-", suffix=".md")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(body)
+            return _run([*args, "--body-file", name], cwd=self.cwd, env=self._gh_env())
+        finally:
+            Path(name).unlink(missing_ok=True)
+
     def create_issue(
         self,
         title: str,
@@ -361,24 +337,13 @@ class GitHubForge:
         assignees: list[str] | None = None,
     ) -> dict[str, Any]:
         args = ["gh", "issue", "create", "--title", title]
-        tmp_path: Path | None = None
-        try:
-            if body is not None:
-                fd, raw_path = tempfile.mkstemp(prefix="idd-issue-", suffix=".md")
-                tmp_path = Path(raw_path)
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write(body)
-                args.extend(["--body-file", str(tmp_path)])
-            for label in labels or []:
-                args.extend(["--label", label])
-            for assignee in assignees or []:
-                args.extend(["--assignee", assignee])
-            proc = _run(args, cwd=self.cwd, env=self._gh_env())
-            url = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
-            return {"number": parse_number_from_url(url), "url": url, "title": title}
-        finally:
-            if tmp_path is not None:
-                tmp_path.unlink(missing_ok=True)
+        for label in labels or []:
+            args.extend(["--label", label])
+        for assignee in assignees or []:
+            args.extend(["--assignee", assignee])
+        proc = self._run_with_body(args, body)
+        url = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
+        return {"number": parse_number_from_url(url), "url": url, "title": title}
 
     def get_issue(self, number: int, *, check: bool = True) -> dict[str, Any] | None:
         raw = self._gh_json(
@@ -424,14 +389,7 @@ class GitHubForge:
         return [self._normalize_issue(item) for item in raw]
 
     def update_issue_body(self, number: int, body: str) -> None:
-        fd, raw_path = tempfile.mkstemp(prefix="idd-sync-", suffix=".md")
-        tmp_path = Path(raw_path)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(body)
-            _run(["gh", "issue", "edit", str(number), "--body-file", str(tmp_path)], cwd=self.cwd, env=self._gh_env())
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        self._run_with_body(["gh", "issue", "edit", str(number)], body)
 
     def list_changes(
         self,
@@ -453,47 +411,17 @@ class GitHubForge:
         return [self._normalize_pr(item) for item in raw]
 
     def create_change(self, base: str, head: str, title: str, body: str, draft: bool = False) -> dict[str, Any]:
-        fd, raw_path = tempfile.mkstemp(prefix="idd-pr-", suffix=".md")
-        tmp_path = Path(raw_path)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(body)
-            args = [
-                "gh",
-                "pr",
-                "create",
-                "--base",
-                base,
-                "--head",
-                head,
-                "--title",
-                title,
-                "--body-file",
-                str(tmp_path),
-            ]
-            if draft:
-                args.append("--draft")
-            proc = _run(args, cwd=self.cwd, env=self._gh_env())
-            url = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
-            return {"number": parse_number_from_url(url), "url": url, "title": title}
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        args = ["gh", "pr", "create", "--base", base, "--head", head, "--title", title]
+        if draft:
+            args.append("--draft")
+        proc = self._run_with_body(args, body)
+        url = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
+        return {"number": parse_number_from_url(url), "url": url, "title": title}
 
     def update_change(self, number: int, title: str, body: str) -> dict[str, Any]:
-        fd, raw_path = tempfile.mkstemp(prefix="idd-pr-", suffix=".md")
-        tmp_path = Path(raw_path)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(body)
-            proc = _run(
-                ["gh", "pr", "edit", str(number), "--title", title, "--body-file", str(tmp_path)],
-                cwd=self.cwd,
-                env=self._gh_env(),
-            )
-            url = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
-            return {"number": number, "url": url, "title": title}
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        proc = self._run_with_body(["gh", "pr", "edit", str(number), "--title", title], body)
+        url = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
+        return {"number": number, "url": url, "title": title}
 
     def get_change(self, number: int | None = None, branch: str | None = None, *, check: bool = True) -> dict[str, Any] | None:
         if number is None and branch:
@@ -537,29 +465,12 @@ class GitHubForge:
         auto: bool = False,
         expected_sha: str | None = None,
     ) -> None:
-        fd, raw_path = tempfile.mkstemp(prefix="idd-merge-", suffix=".md")
-        tmp_path = Path(raw_path)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(body)
-            args = [
-                "gh",
-                "pr",
-                "merge",
-                str(number),
-                "--squash",
-                "--subject",
-                title,
-                "--body-file",
-                str(tmp_path),
-            ]
-            if expected_sha:
-                args.extend(["--match-head-commit", expected_sha])
-            if auto:
-                args.insert(4, "--auto")
-            _run(args, cwd=self.cwd, env=self._gh_env())
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        args = ["gh", "pr", "merge", str(number), "--squash", "--subject", title]
+        if expected_sha:
+            args.extend(["--match-head-commit", expected_sha])
+        if auto:
+            args.insert(4, "--auto")
+        self._run_with_body(args, body)
 
     def repo_init(self, *, apply: bool = False) -> dict[str, Any]:
         if apply:
@@ -696,7 +607,8 @@ class GitLabForge:
                     return text
                 return json.loads(text) if text.strip() else None
         except urllib.error.HTTPError as exc:
-            err_body = exc.read().decode("utf-8", errors="replace")
+            with exc:
+                err_body = exc.read().decode("utf-8", errors="replace")
             if not check:
                 return None
             detail = err_body
