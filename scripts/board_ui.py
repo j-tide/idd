@@ -33,8 +33,8 @@ from forge import (  # noqa: E402
     save_hosts_config,
     verify_host_token,
 )
-from git_worktrees import default_worktree_root, list_worktrees
-from naming import BRANCH_PREFIXES
+from git_worktrees import default_worktree_root
+from worktree_cleanup import CleanupResult, inspect_worktree, remove_merged_worktree
 import monitor  # noqa: E402
 from version import get_version  # noqa: E402
 
@@ -7895,172 +7895,42 @@ def _cleanup_single_worktree(
     merged_cache: _MergedChangesCache | None = None,
 ) -> dict[str, object]:
     """Safely remove a single clean, merged worktree directory while preserving its branch."""
-    main_wt = monitor.resolve_main_worktree_ro(repo_path)
-    if main_wt is None:
+    main = monitor.resolve_main_worktree_ro(repo_path)
+    if main is None:
         return {"ok": False, "status": "error", "error": f"无效的 Git 仓库路径：{repo_path}"}
-
-    main_resolved = main_wt.resolve()
-    target_wt = worktree_path.expanduser().resolve()
-    if target_wt == main_resolved:
-        return {
-            "ok": False,
-            "status": "rejected",
-            "worktree": str(target_wt),
-            "error": "禁止清理主工作树目录",
-        }
-
-    worktrees = list_worktrees(main_resolved, timeout=10.0)
-    wt_entry = next(
-        (w for w in worktrees if w.get("path") and Path(w["path"]).resolve() == target_wt),
-        None,
-    )
-    if wt_entry is None:
-        if not target_wt.exists():
-            return {
-                "ok": True,
-                "status": "already_removed",
-                "worktree": str(target_wt),
-                "message": "工作树目录已不存在",
-            }
-        return {
-            "ok": False,
-            "status": "rejected",
-            "worktree": str(target_wt),
-            "error": "目标目录不属于该仓库的活动工作树",
-        }
-
-    branch = str(wt_entry.get("branch") or "")
-    if not branch or branch == "(detached)":
-        return {
-            "ok": False,
-            "status": "rejected",
-            "worktree": str(target_wt),
-            "branch": branch,
-            "error": "工作树处于游离 HEAD 状态，已跳过清理",
-        }
-
-    worktree_root = default_worktree_root(main_resolved)
-    under_managed_root = worktree_root == target_wt.parent
-    feature_branch = branch.startswith(BRANCH_PREFIXES)
-    if not (under_managed_root or feature_branch):
-        return {
-            "ok": False,
-            "status": "rejected",
-            "worktree": str(target_wt),
-            "branch": branch,
-            "error": "工作树不在受管目录或规范分支前缀下，已跳过清理",
-        }
-
-    status_proc = subprocess.run(
-        ["git", "-C", str(target_wt), "status", "--porcelain"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if status_proc.returncode != 0:
-        return {
-            "ok": False,
-            "status": "error",
-            "worktree": str(target_wt),
-            "branch": branch,
-            "error": (status_proc.stderr or "读取工作区状态失败").strip(),
-        }
-    dirty_lines = [ln for ln in status_proc.stdout.splitlines() if ln.strip()]
-    if dirty_lines:
-        return {
-            "ok": False,
-            "status": "skipped_dirty",
-            "worktree": str(target_wt),
-            "branch": branch,
-            "error": f"工作区存在 {len(dirty_lines)} 处未提交改动，已跳过清理",
-        }
-
-    head_proc = subprocess.run(
-        ["git", "-C", str(target_wt), "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if head_proc.returncode != 0:
-        return {
-            "ok": False,
-            "status": "error",
-            "worktree": str(target_wt),
-            "branch": branch,
-            "error": (head_proc.stderr or "读取本地 HEAD 失败").strip(),
-        }
-    local_head = head_proc.stdout.strip()
-
+    target = worktree_path.expanduser().resolve()
+    managed_root = default_worktree_root(main)
+    candidate = inspect_worktree(main, target, managed_root)
+    if isinstance(candidate, CleanupResult):
+        return _cleanup_payload(candidate)
     try:
-        forge = get_forge(main_resolved)
-        merged_changes = (
-            merged_cache.get_merged_for_branch(main_resolved, forge, branch)
+        forge = get_forge(main)
+        merged = (
+            merged_cache.get_merged_for_branch(main, forge, candidate.branch)
             if merged_cache is not None
-            else forge.list_changes(state="merged", head_branch=branch, limit=10)
+            else forge.list_changes(state="merged", head_branch=candidate.branch, limit=10)
         )
     except ForgeError as exc:
-        return {
-            "ok": False,
-            "status": "error",
-            "worktree": str(target_wt),
-            "branch": branch,
-            "error": str(exc),
-        }
-
-    if not isinstance(merged_changes, list):
-        return {
-            "ok": False,
-            "status": "error",
-            "worktree": str(target_wt),
-            "branch": branch,
-            "error": "远端已合入 PR/MR 查询失败，已跳过清理",
-        }
-    if not merged_changes:
-        return {
-            "ok": False,
-            "status": "skipped_unmerged",
-            "worktree": str(target_wt),
-            "branch": branch,
-            "error": f"未查询到分支 {branch} 的已合入 PR/MR，已跳过清理",
-        }
-
-    matching = next(
-        (c for c in merged_changes if c.get("headRefOid") and c.get("headRefOid") == local_head),
-        None,
+        return _cleanup_payload(CleanupResult("error", target, str(exc), candidate.branch))
+    if not isinstance(merged, list):
+        return _cleanup_payload(CleanupResult("error", target, "远端已合入 PR/MR 查询失败，已跳过清理", candidate.branch))
+    result = remove_merged_worktree(
+        main, target, candidate.branch, managed_root, merged, ref_prefix=f"{forge.mr_label} {forge.mr_prefix}",
     )
-    if matching is None:
-        return {
-            "ok": False,
-            "status": "skipped_unmerged",
-            "worktree": str(target_wt),
-            "branch": branch,
-            "error": f"本地 HEAD ({local_head[:7]}) 与已合入 PR/MR 不一致，可能存在合入后新增提交，已跳过清理",
-        }
+    return _cleanup_payload(result)
 
-    rm_proc = subprocess.run(
-        ["git", "-C", str(main_resolved), "worktree", "remove", str(target_wt)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if rm_proc.returncode != 0:
-        return {
-            "ok": False,
-            "status": "error",
-            "worktree": str(target_wt),
-            "branch": branch,
-            "error": (rm_proc.stderr or rm_proc.stdout or "移除工作树失败").strip(),
-        }
 
-    ref = f"{forge.mr_label} {forge.mr_prefix}{matching['number']}"
-    return {
-        "ok": True,
-        "status": "removed",
-        "worktree": str(target_wt),
-        "branch": branch,
-        "ref": ref,
-        "message": f"已移除工作树目录（保留分支 {branch}）— {ref}",
-    }
+def _cleanup_payload(result: CleanupResult) -> dict[str, object]:
+    ok = result.status in ("removed", "already_removed")
+    payload: dict[str, object] = {"ok": ok, "status": result.status, "worktree": str(result.path)}
+    if result.branch:
+        payload["branch"] = result.branch
+    if result.status == "removed":
+        payload["ref"] = result.ref
+        payload["message"] = f"已移除工作树目录（保留分支 {result.branch}）— {result.ref}"
+    else:
+        payload["message" if ok else "error"] = result.message
+    return payload
 
 
 class BoardHTTPServer(ThreadingHTTPServer):

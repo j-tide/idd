@@ -18,6 +18,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import idd_cli  # noqa: E402
 import naming  # noqa: E402
+import repository_lock  # noqa: E402
 from version import parse_skill_version  # noqa: E402
 
 
@@ -2299,8 +2300,8 @@ class TestIddCli(unittest.TestCase):
             subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", "feat/1-a", str(wt)], check=True, capture_output=True)
 
             # Worktree resolves to the same common git dir lock path as main repo, and supports reentrant acquisition.
-            with idd_cli._repo_file_lock(wt, "idd-test.lock", owner_info={"branch": "feat/1-a"}) as lp1:
-                with idd_cli._repo_file_lock(repo, "idd-test.lock", owner_info={"branch": "feat/1-a"}) as lp2:
+            with repository_lock.repo_file_lock(wt, "idd-test.lock", owner_info={"branch": "feat/1-a"}) as lp1:
+                with repository_lock.repo_file_lock(repo, "idd-test.lock", owner_info={"branch": "feat/1-a"}) as lp2:
                     self.assertEqual(lp1, lp2)
                     self.assertTrue(lp1.is_file())
                     owner = json.loads(lp1.read_text(encoding="utf-8"))
@@ -2311,11 +2312,12 @@ class TestIddCli(unittest.TestCase):
                     "import os, sys\n"
                     "from pathlib import Path\n"
                     "sys.path.insert(0, sys.argv[1])\n"
-                    "import idd_cli\n"
+                    "from command_runner import IddError\n"
+                    "import repository_lock\n"
                     "try:\n"
-                    "    with idd_cli._repo_file_lock(Path(sys.argv[2]), 'idd-test.lock', wait_prefix='测试队列', timeout_env='IDD_TEST_LOCK_TIMEOUT'):\n"
+                    "    with repository_lock.repo_file_lock(Path(sys.argv[2]), 'idd-test.lock', wait_prefix='测试队列', timeout=float(os.environ['IDD_TEST_LOCK_TIMEOUT'])):\n"
                     "        pass\n"
-                    "except idd_cli.IddError as exc:\n"
+                    "except IddError as exc:\n"
                     "    print(f'ERR:{exc.exit_code}:{exc}', file=sys.stderr)\n"
                     "    sys.exit(exc.exit_code)\n"
                 )

@@ -6,10 +6,6 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
-try:
-    import fcntl
-except ImportError:
-    fcntl = None  # type: ignore[assignment]
 import json
 import os
 from pathlib import Path
@@ -30,8 +26,10 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from command_runner import IddError, run_cmd
 from git_worktrees import default_worktree_root, list_worktrees
+from repository_lock import MAIN_GIT_LOCK, repo_file_lock
+from worktree_cleanup import cleanup_scope_error, remove_merged_worktree
 from naming import (
-    ALLOWED_TYPES, BRANCH_PREFIXES, MAX_ISSUE_SCOPE_LEN,
+    ALLOWED_TYPES, MAX_ISSUE_SCOPE_LEN,
     format_conventional_title, infer_prefix_from_labels, infer_prefix_from_title,
     slug_source_from_issue_title, slugify, validate_and_format_issue_title, validate_branch_name,
 )
@@ -62,8 +60,6 @@ LAND_MERGE_RETRY_DELAY_SECONDS = 1.5
 CI_WAIT_GRACE_SECONDS = 5.0
 CI_WAIT_POLL_INTERVAL_SECONDS = 5.0
 CI_WAIT_TIMEOUT_SECONDS = 1800.0
-LAND_LOCK_POLL_INTERVAL_SECONDS = 0.05
-LAND_LOCK_DEFAULT_TIMEOUT_SECONDS = 0.0
 LAND_MAX_REBASE_ATTEMPTS = 3
 
 PROGRESS_START = "<!-- idd:progress:start -->"
@@ -180,132 +176,6 @@ def _resolve_base_ref(repo: RepoInfo, base_branch: str | None = None) -> str:
     if repo.has_origin and _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
         return f"origin/{branch}"
     return branch
-
-
-_ACTIVE_REPO_LOCKS: set[Path] = set()
-
-
-def _resolve_git_common_dir(repo_dir: Path) -> Path:
-    """Resolve the shared `.git` common directory for lock placement across worktrees."""
-    proc = run_cmd(["git", "-C", str(repo_dir), "rev-parse", "--git-common-dir"], check=False)
-    raw = proc.stdout.strip() if proc.returncode == 0 else ""
-    if not raw:
-        return (repo_dir / ".git").resolve()
-    candidate = Path(raw)
-    if not candidate.is_absolute():
-        candidate = repo_dir / candidate
-    return candidate.resolve()
-
-
-def _read_lock_owner_info(lock_path: Path) -> dict[str, Any]:
-    try:
-        raw = lock_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return {}
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _format_lock_holder(owner: dict[str, Any]) -> str:
-    parts: list[str] = []
-    branch = str(owner.get("branch") or "").strip()
-    cmd = str(owner.get("command") or "").strip()
-    pid = owner.get("pid")
-    if branch:
-        parts.append(f"分支 `{branch}`")
-    if cmd:
-        parts.append(cmd)
-    if pid:
-        parts.append(f"PID {pid}")
-    return "，".join(parts) if parts else "另一会话"
-
-
-@contextmanager
-def _repo_file_lock(
-    main_worktree: Path,
-    lock_name: str,
-    *,
-    owner_info: dict[str, Any] | None = None,
-    wait_prefix: str = "",
-    timeout_env: str | None = None,
-) -> Iterator[Path]:
-    """Acquire a reentrant cross-process exclusive repository lock under git-common-dir."""
-    common_dir = _resolve_git_common_dir(main_worktree)
-    common_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = (common_dir / lock_name).resolve()
-    if lock_path in _ACTIVE_REPO_LOCKS or fcntl is None:
-        yield lock_path
-        return
-
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
-    handle = os.fdopen(fd, "r+", encoding="utf-8")
-    acquired = False
-    try:
-        waited = False
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            acquired = True
-        except BlockingIOError:
-            waited = True
-            holder = _format_lock_holder(_read_lock_owner_info(lock_path))
-            if wait_prefix:
-                print(f"⏳ {wait_prefix}：当前正被 {holder} 占用，排队等待中...", flush=True)
-            timeout = (
-                _get_float_env(timeout_env, LAND_LOCK_DEFAULT_TIMEOUT_SECONDS, minimum=0.0)
-                if timeout_env
-                else 0.0
-            )
-            if timeout <= 0.0:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-                acquired = True
-            else:
-                deadline = time.monotonic() + timeout
-                while True:
-                    try:
-                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        acquired = True
-                        break
-                    except BlockingIOError:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0.0:
-                            latest_holder = _format_lock_holder(_read_lock_owner_info(lock_path))
-                            raise IddError(
-                                f"等待 {wait_prefix or lock_name} 超时（{timeout:.1f}s），当前持锁者：{latest_holder}。",
-                                exit_code=3,
-                            )
-                        time.sleep(min(LAND_LOCK_POLL_INTERVAL_SECONDS, remaining))
-        if waited and wait_prefix:
-            print(f"🔓 已获取 {wait_prefix} 锁，继续执行...", flush=True)
-
-        payload = dict(owner_info or {})
-        payload["pid"] = os.getpid()
-        payload["started_at"] = round(time.time(), 3)
-        handle.seek(0)
-        handle.truncate()
-        handle.write(json.dumps(payload, ensure_ascii=False))
-        handle.flush()
-
-        _ACTIVE_REPO_LOCKS.add(lock_path)
-        yield lock_path
-    finally:
-        _ACTIVE_REPO_LOCKS.discard(lock_path)
-        if acquired:
-            try:
-                handle.seek(0)
-                handle.truncate()
-                handle.flush()
-            except OSError:
-                pass
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except OSError:
-                pass
-        handle.close()
 
 
 def find_worktree_for_target(main_worktree: Path, target: str) -> dict[str, str] | None:
@@ -2478,9 +2348,9 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     validate_branch_name(branch, issue_num)
 
-    with _repo_file_lock(
+    with repo_file_lock(
         repo.main_worktree,
-        "idd-main-git.lock",
+        MAIN_GIT_LOCK,
         owner_info={"command": "start", "branch": branch},
     ):
         if repo.has_origin:
@@ -3325,12 +3195,12 @@ def _execute_land(
     issue_data: dict[str, Any] | None = None
     verified_tip: str | None = None
 
-    with _repo_file_lock(
+    with repo_file_lock(
         repo.main_worktree,
         "idd-land.lock",
         owner_info={"command": lock_cmd, "branch": branch},
         wait_prefix=f"仓库 `{repo.main_worktree.name}` 合入队列",
-        timeout_env="IDD_LAND_LOCK_TIMEOUT",
+        timeout=_get_float_env("IDD_LAND_LOCK_TIMEOUT", 0.0),
     ):
         for attempt in range(max_attempts):
             change_lookup = forge.get_change(branch=branch, check=False)
@@ -3631,9 +3501,9 @@ def _execute_land(
         # Step G: Retain branches & worktree by default; optionally remove worktree; fast-forward main
         in_removed_wt = False
         main_sha = ""
-        with _repo_file_lock(
+        with repo_file_lock(
             repo.main_worktree,
-            "idd-main-git.lock",
+            MAIN_GIT_LOCK,
             owner_info={"command": "land-post", "branch": branch},
         ):
             if rm_worktree:
@@ -3692,51 +3562,31 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     repo = get_repo_info(Path.cwd())
     forge = get_forge(repo.main_worktree)
     worktrees = list_worktrees(repo.main_worktree)
-    main_resolved = repo.main_worktree.resolve()
-
     removed: list[str] = []
     skipped_dirty: list[str] = []
     skipped_unmerged: list[str] = []
 
     for wt in worktrees:
-        wt_path = Path(wt["path"]).resolve()
+        path = Path(wt["path"]).resolve()
         branch = wt.get("branch", "")
-        if wt_path == main_resolved or not branch or branch == "(detached)":
+        if cleanup_scope_error(repo.main_worktree, path, branch, repo.worktree_root):
             continue
-        under_managed_root = repo.worktree_root == wt_path.parent
-        feature_branch = branch.startswith(BRANCH_PREFIXES)
-        if not (under_managed_root or feature_branch):
+        merged = forge.list_changes(state="merged", head_branch=branch, limit=10)
+        if not isinstance(merged, list) or not merged:
             continue
-
-        merged_changes = forge.list_changes(state="merged", head_branch=branch, limit=10)
-        if not isinstance(merged_changes, list) or not merged_changes:
-            continue
-
-        dirty = run_cmd(["git", "-C", str(wt_path), "status", "--porcelain"], check=False).stdout.strip()
-        if dirty:
-            skipped_dirty.append(f"{wt_path} ({branch})")
-            continue
-
-        local_head = run_cmd(["git", "-C", str(wt_path), "rev-parse", "HEAD"]).stdout.strip()
-        matching = next(
-            (c for c in merged_changes if c.get("headRefOid") and c.get("headRefOid") == local_head),
-            None,
+        result = remove_merged_worktree(
+            repo.main_worktree, path, branch, repo.worktree_root, merged,
+            ref_prefix=f"{forge.mr_label} {forge.mr_prefix}", dry_run=args.dry_run,
         )
-        if not matching:
-            skipped_unmerged.append(f"{wt_path} ({branch} @ {local_head[:7]})")
-            continue
-
-        ref = f"{forge.mr_label} {forge.mr_prefix}{matching['number']}"
-        if args.dry_run:
-            removed.append(f"[dry-run] 将仅移除工作树目录 {wt_path}（保留分支 {branch}）— {ref}")
-        else:
-            with _repo_file_lock(
-                repo.main_worktree,
-                "idd-main-git.lock",
-                owner_info={"command": "cleanup", "branch": branch},
-            ):
-                run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
-            removed.append(f"已移除工作树目录 {wt_path}（保留分支 {branch}）— {ref}")
+        if result.status in ("removed", "dry_run"):
+            action = "[dry-run] 将仅移除" if args.dry_run else "已移除"
+            removed.append(f"{action}工作树目录 {path}（保留分支 {branch}）— {result.ref}")
+        elif result.status == "skipped_dirty":
+            skipped_dirty.append(f"{path} ({branch})")
+        elif result.status == "skipped_unmerged" and result.head:
+            skipped_unmerged.append(f"{path} ({branch} @ {result.head[:7]})")
+        elif result.status == "error":
+            raise IddError(result.message)
 
     lines = list(removed)
     if skipped_dirty:
