@@ -321,7 +321,9 @@ class _SnapshotCoalescer:
         return body
 
 
-def _board_snapshot(root: Path | None, global_mode: bool, local_only: bool, cache: monitor.ForgeSnapshotCache) -> dict:
+def _board_snapshot(
+    root: Path | None, global_mode: bool, local_only: bool, cache: monitor.ForgeSnapshotCache,
+) -> dict[str, object]:
     return monitor.collect_scope_snapshot(
         root=root, global_mode=global_mode, open_only=False, local_only=local_only,
         forge_cache=cache, allow_stale_async=True,
@@ -399,7 +401,8 @@ class BoardRequestHandler(LocalRequestHandler):
         monitor.invalidate_monitor_caches()
         self.cache.invalidate_all()
         if not self.local_only:
-            self.cache.refresh_now(self._target_repos(), timeout=timeout)
+            # Credentials or repo settings have already been saved at this point.
+            self.cache.refresh_now(self._target_repos(), timeout=timeout, report_errors=False)
         self._invalidate_snapshot_cache()
 
     def do_GET(self) -> None:

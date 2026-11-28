@@ -1019,7 +1019,9 @@ class ForgeSnapshotCache:
             self._entries.clear()
             self._inflight.clear()
 
-    def refresh_now(self, repo_paths: list[Path], *, timeout: float = 2.0) -> bool:
+    def refresh_now(
+        self, repo_paths: list[Path], *, timeout: float = 2.0, report_errors: bool = True,
+    ) -> bool:
         """Join or start a refresh per repository and wait for this batch only."""
         pending = []
         for path in repo_paths:
@@ -1027,8 +1029,9 @@ class ForgeSnapshotCache:
             if main is not None and has_remote_origin(main):
                 pending.append(self._schedule_refresh(main, str(main.resolve())))
         done, unfinished = wait(pending, timeout=timeout)
-        for task in done:
-            task.result()
+        if report_errors:
+            for task in done:
+                task.result()
         return not unfinished
 
     @staticmethod

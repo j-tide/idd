@@ -7440,8 +7440,12 @@
           state.initError = "";
           state.slowInit = false;
           renderAll(true);
-          stopStream();
-          connectStream();
+          if (state.paused) {
+            fetchSnapshot(true);
+          } else {
+            stopStream();
+            connectStream();
+          }
           return;
         }
         const openEl = e.target.closest("[data-open-key]");

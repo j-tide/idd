@@ -43,7 +43,7 @@
 | **原生工具体验** | 原生窗口，无额外学习成本 | 强制绑定特定客户端或调度 UI | **保留 Claude Code / Codex / Antigravity 原生窗口** |
 | **并行开发隔离** | 共享同一目录，极易互相覆盖 | 依赖私有沙箱或容器快照 | **每个 Issue 自动分配独立物理 Git Worktree** |
 | **跨 Agent 接力** | 换工具需手动总结全部上下文 | 仅限平台内部模型切换 | **磁盘 `TASK/` 账本 + 看板一键「接力词」无缝续写** |
-| **全局进度监控** | 逐个窗口翻聊天记录 | 需运行常驻后台与额外 Token | **零 Token 磨砂玻璃看板（自适应低耗轮询）与终端盯盘** |
+| **全局进度监控** | 逐个窗口翻聊天记录 | 需运行常驻后台与额外 Token | **零 Token 磨砂玻璃看板（SSE 推送）与终端盯盘** |
 | **平台与合入历史** | 容易直接提交主干或混入脏节点 | 多为本地分支或平台私有状态 | **原生联动 GitHub / GitLab，CI 自愈后 Squash 直线合入 `main`** |
 | **依赖与侵入性** | 无 | 重依赖、配置复杂 | **0 外部依赖（Python 3 标准库 + sh），零 Git Hooks 侵入** |
 
@@ -71,7 +71,7 @@ IDD 用三层轻量组件把整套研发闭环串起来，平时只需要对 Age
   <tr>
     <td width="50%" valign="top">
       <h3>极致低耗引擎 · 零闪烁丝滑动效</h3>
-      首屏仅在首次加载展示布局骨架屏，后续刷新全部采用<strong>原地 DOM 调和与卡片 FLIP 动效</strong>，同步状态收口至顶栏避免布局跳动；标签页切到后台自动暂停轮询，前台按 <code>1.2s–15s</code> 串行自适应退避，配合服务端 <code>porcelain v2</code> 扫描、30s 闲置签名缓存与 singleflight 请求合并，大幅降低 CPU 与 Git 子进程开销。
+      有缓存时先展示上次的卡片，首次加载时显示骨架。打开的页面通过 <strong>SSE</strong> 共享本机采集结果。工作树、任务或 CI 有变化时，卡片就地更新。切到后台或暂停时会关闭订阅，恢复时补上最新快照。本机按活动程度采集，GitHub/GitLab 状态默认缓存 30 秒，可用 <code>--forge-ttl</code> 调整。
     </td>
     <td width="50%" valign="top">
       <h3>全局自动准入 · CI 两轮自愈</h3>
@@ -217,7 +217,7 @@ idd board
 
 | 命令 | 说明 |
 | :--- | :--- |
-| `idd board` / `idd ui [--current-only] [--local-only] [--port ...]` | 启动本地磨砂玻璃 Web 雷达与接力看板（三视图、自适应低耗轮询、逐卡安全清理、中/英切换） |
+| `idd board` / `idd ui [--current-only] [--local-only] [--port ...]` | 启动本地磨砂玻璃 Web 雷达与接力看板（三视图、SSE 静默更新、逐卡安全清理、中/英切换） |
 | `idd preview <target>... [--compare] [--title "..."] [--port ...]` | 启动本地交互原型预览工作台（热更新、A/B 并排对比与桌面/平板/手机视口切换） |
 | `idd watch [--current-only] [--open-only] [--once]` | 在终端按 2 秒频率实时刷新全局（或当前仓库）Worktree 脉搏、当前 TASK 与 CI |
 | `idd status [-g\|--global] [--open-only] [--local-only] [--json]` | 终端一次性输出 Open Issues、Worktree `TASK` 进度、脉搏与 PR/MR CI |

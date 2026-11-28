@@ -5,8 +5,11 @@ from __future__ import annotations
 from functools import partial
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import threading
+import time
 import unittest
 import urllib.request
 from unittest import mock
@@ -14,7 +17,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from board_events import BoardEvents, sample_interval
-from board_ui import BoardRequestHandler
+from board_ui import BOARD_HTML, BoardRequestHandler
 from local_http import LocalHTTPServer
 from monitor import ForgeSnapshotCache
 
@@ -31,22 +34,82 @@ def read_frame(response):
 
 
 def read_event(response):
-    while True:
+    deadline = time.monotonic() + 4
+    while time.monotonic() < deadline:
         frame = read_frame(response)
         if not frame.startswith(b":"):
             event, data = frame.decode().splitlines()
             return event.removeprefix("event: "), json.loads(data.removeprefix("data: "))
+    raise TimeoutError("no SSE data event")
 
 
 class TestBoardEvents(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node is required for EventSource lifecycle checks")
+    def test_browser_reconnect_does_not_revive_a_closed_or_hidden_subscription(self):
+        handlers = BOARD_HTML[BOARD_HTML.index("      function stopStream()"):BOARD_HTML.index("      async function fetchSnapshot(")]
+        lifecycle = BOARD_HTML[BOARD_HTML.index('      document.addEventListener("visibilitychange"'):BOARD_HTML.index('      window.addEventListener("pagehide"')]
+        harness = r"""
+const assert = require("node:assert/strict");
+const state = { snapshot: {}, stream: null };
+const sources = [], timers = new Map(), snapshots = [];
+let timerId = 0;
+const document = { hidden: false, documentElement: { classList: {toggle() {}} },
+  addEventListener(type, cb) { this[type] = cb; } };
+function setTimeout(cb) { timers.set(++timerId, cb); return timerId; }
+function clearTimeout(id) { timers.delete(id); }
+function updateConnectionBadge() {}
+function updateActivityTimes() {}
+function tr(zh) { return zh; }
+function applySnapshot(snap) { snapshots.push(snap); return true; }
+class EventSource {
+  static CLOSED = 2;
+  constructor(url) { assert.equal(url, "/api/events"); sources.push(this); this.readyState = 1; }
+  addEventListener(name, fn) { this[name] = fn; }
+  close() { this.readyState = EventSource.CLOSED; }
+}
+"""
+        checks = r"""
+connectStream();
+connectStream();
+assert.equal(sources.length, 1);
+const first = sources[0];
+first.snapshot({data: '{"step":1}'});
+assert.equal(state.streamStatus, "live");
+first.readyState = 0; // Native EventSource is already reconnecting.
+first.onerror();
+assert.equal(state.streamStatus, "reconnecting");
+assert.equal(timers.size, 0);
+first.readyState = EventSource.CLOSED;
+first.onerror();
+assert.equal(timers.size, 1);
+document.hidden = true;
+document.visibilitychange();
+assert.equal(timers.size, 0);
+first.snapshot({data: '{"step":2}'});
+state.paused = true;
+document.hidden = false;
+document.visibilitychange();
+assert.equal(sources.length, 1);
+state.paused = false;
+connectStream();
+sources[1].snapshot({data: '{"step":3}'});
+assert.deepEqual(snapshots, [{step:1}, {step:3}]);
+"""
+        result = subprocess.run(["node", "-"], input=harness + handlers + lifecycle + checks,
+                                capture_output=True, text=True, timeout=8)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_shared_http_stream_deduplicates_and_recovers(self):
         clock = 100
         stage = "运行中"
         fail = False
+        resampled = threading.Event()
 
         def collect():
             if fail:
                 raise ValueError("读取失败\n稍后重试")
+            if clock == 101:
+                resampled.set()
             snapshot = {
                 "summary": {}, "generated_at": clock, "forge_syncing": clock == 101,
                 "repos": [{"forge_fetched_at": clock, "last_seen_at": clock}],
@@ -72,6 +135,7 @@ class TestBoardEvents(unittest.TestCase):
                     self.assertEqual(sampler.call_count, 1)
                     clock = 101
                     feed.invalidate()
+                    self.assertTrue(resampled.wait(timeout=2))
                     self.assertTrue(read_frame(first).startswith(b":"))
                     self.assertGreaterEqual(sampler.call_count, 2)
                     self.assertTrue(read_frame(second).startswith(b":"))
@@ -98,16 +162,21 @@ class TestBoardEvents(unittest.TestCase):
 
     def test_last_subscriber_stops_collection_and_resume_reads_fresh(self):
         calls = 0
+        sampled = threading.Event()
+
         def collect():
             nonlocal calls
             calls += 1
+            sampled.set()
             return json.dumps({"forge_syncing": False, "summary": {}, "step": calls}).encode()
 
         feed = BoardEvents(collect, heartbeat=2)
         first = feed.frames()
         self.assertIn(b'"step": 1', next(first))
         first.close()
+        sampled.clear()
         feed.invalidate()
+        self.assertFalse(sampled.wait(timeout=0.1))
         second = feed.frames()
         self.assertIn(b'"step": 2', next(second))
         second.close()

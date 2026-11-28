@@ -40,6 +40,7 @@ flowchart LR
     Tasks --> Git
     Names --> Runner
     Release --> Version
+    Board --> Events["board_events · 共享 SSE 订阅"]
     Board -.-> BoardPage["web/board.html"]
     Preview -.-> PreviewPage["web/preview.html"]
     HTTP -.-> Motion["web/motion-properties.css.inc"]
@@ -52,7 +53,7 @@ flowchart LR
 | Git 事实与清理 | `git_worktrees.py`、`worktree_cleanup.py`、`repository_lock.py` | 清单保留 Git 的顺序，第一项是主工作树。清理使用当前分支、干净工作区和远端已合入记录的 `headRefOid`。`command_runner.py` 负责需要向用户报告失败的外部命令。 |
 | 平台读写和交付正文 | `forge.py`、`delivery_summary.py` | Forge 归一 Issue、PR/MR、CI 字段及错误。汇总器读取 TASK 与提交记录，为同一批验证记录生成 Markdown 和纯文本。 |
 | 状态读取与展示 | `monitor.py`、`repo_registry.py`、`local_state.py` | CLI、看板和终端从公开接口读取快照、登记信息和全局设置。显示一次状态可以登记已经识别的仓库。 |
-| 页面与本地 HTTP | `scripts/web/`、`board_ui.py`、`preview_ui.py`、`local_http.py` | 页面按 UTF-8 随安装交付。加载时内联共享的 CSS 动效属性，无前端构建步骤或额外的浏览器请求。两个服务共用响应头、JSON 写出和客户端断连处理。看板拥有写接口的请求校验，预览拥有文件访问范围与 MIME 判定。 |
+| 页面与本地 HTTP | `scripts/web/`、`board_ui.py`、`preview_ui.py`、`local_http.py` | 页面按 UTF-8 随安装交付。加载时内联共享的 CSS 动效属性，无前端构建步骤或额外的浏览器请求。两个服务共用响应头、JSON 写出和客户端断连处理。看板通过 `board_events` 按订阅启动共享采集，有变化才推送最新快照。看板拥有写接口的请求校验，预览拥有文件访问范围与 MIME 判定。 |
 | 版本、安装与发布 | `version.py`、`release.py`、`install.sh`、`.github/workflows/` | `SKILL.md` 的 `metadata.version` 是版本源。中英文 README 徽章、CLI 和发布标签可交叉校验。shell 卸载后备路径用于 Python 入口已缺失的安装。 |
 
 ## 状态所有权

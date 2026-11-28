@@ -21,7 +21,7 @@ metadata:
 
 | 命令 | 用途 |
 | :--- | :--- |
-| `idd board` / `idd ui` | 启动本地 Web 实时监控看板（浏览器零 Token 跨仓库盯盘，2s 刷新工作树脉搏） |
+| `idd board` / `idd ui` | 启动本地 Web 实时监控看板（浏览器通过 SSE 接收工作树、任务与 CI 的变化） |
 | `idd preview <file-or-dir>... [--compare] [--title "..."] [--port ...] [--no-open]` | 启动本地交互原型预览工作台（支持热更新、A/B 并排对比与桌面/平板/手机视口切换） |
 | `idd watch [--current-only] [--once]` | 启动终端实时监控面板（默认全局聚合，2s 刷新本地脉搏、30s 缓存远端） |
 | `idd status [-g\|--global] [--open-only] [--local-only] [--json]` | 聚合并展示 Issue、`TASK` 进度、实时脉搏与 PR/MR CI 状态（非 Git 目录自动全局聚合） |
@@ -123,7 +123,7 @@ idd status [--open-only]   # 在非 Git 目录或未挂工作区的全局对话�
 每次在任意仓库运行 `idd start` / `status` 等命令时，主仓库会自动记入本机全局索引 `~/.config/idd/repos.json`，`idd status` 会附带每个工作树的**实时脉搏**（未提交文件数、`+insertions/-deletions`、活跃心跳与疑似卡住告警）。
 
 当用户希望**不打断当前对话、零 Token 实时盯盘**时，推荐直接让用户在独立终端启动：
-- **浏览器网页看板（最直观）**：`idd board`（别名 `idd ui`，每 2 秒无锁轮询工作树脉搏并按 30 秒缓存同步 GitHub/GitLab 状态）；
+- **浏览器网页看板（最直观）**：`idd board`（别名 `idd ui`，可见页面共享本机采集，通过 SSE 接收更新，GitHub/GitLab 状态默认缓存 30 秒）；
 - **终端实时看板**：`idd watch`（支持 `--once`、`--current-only`、`--interval`）。
 
 纯离线/无 Git 场景也可直接调用：
