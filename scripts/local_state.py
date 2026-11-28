@@ -15,6 +15,8 @@ import stat
 import tempfile
 import threading
 
+from command_runner import IddError
+
 
 def get_config_dir() -> Path:
     override = os.environ.get("IDD_CONFIG_DIR", "").strip()
@@ -27,12 +29,25 @@ def get_hosts_path() -> Path:
     return get_config_dir() / "hosts.json"
 
 
-def load_hosts_config() -> dict[str, dict[str, str]]:
-    path = get_hosts_path()
+class HostConfigError(IddError):
+    """A host change could not be applied to the existing configuration."""
+
+
+def _read_hosts(path: Path) -> dict[str, dict[str, str]]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("主机配置的顶层必须是 JSON 对象")
+    return data
+
+
+def load_hosts_config() -> dict[str, dict[str, str]]:
+    try:
+        return _read_hosts(get_hosts_path())
+    except (OSError, ValueError):
         return {}
 
 
@@ -72,6 +87,16 @@ def atomic_write_json(path: Path, data: object, *, mode: int | None = None) -> N
 _HOSTS_LOCK = threading.Lock()
 
 
+@contextmanager
+def _host_transaction() -> Iterator[dict[str, dict[str, str]]]:
+    path = get_hosts_path()
+    try:
+        with _HOSTS_LOCK, config_file_lock(path.with_name(".hosts.lock")):
+            yield _read_hosts(path)
+    except (OSError, ValueError) as exc:
+        raise HostConfigError(f"无法更新主机配置 {path}：{exc}") from exc
+
+
 def _write_hosts(hosts: dict[str, dict[str, str]]) -> None:
     path = get_hosts_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -83,15 +108,13 @@ def _write_hosts(hosts: dict[str, dict[str, str]]) -> None:
 
 
 def set_host(host: str, record: dict[str, str]) -> None:
-    with _HOSTS_LOCK, config_file_lock(get_config_dir() / ".hosts.lock"):
-        hosts = load_hosts_config()
+    with _host_transaction() as hosts:
         hosts[host] = record
         _write_hosts(hosts)
 
 
 def remove_hosts(candidates: Iterable[str], *, first_only: bool = False) -> bool:
-    with _HOSTS_LOCK, config_file_lock(get_config_dir() / ".hosts.lock"):
-        hosts = load_hosts_config()
+    with _host_transaction() as hosts:
         removed = False
         for host in candidates:
             if host in hosts:

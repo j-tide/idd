@@ -50,8 +50,37 @@ class TestLocalState(unittest.TestCase):
             path = local_state.get_hosts_path()
             original = path.read_bytes()
             with mock.patch.object(local_state.os, "replace", side_effect=OSError("read-only")):
-                with self.assertRaises(OSError):
+                with self.assertRaises(local_state.HostConfigError):
                     local_state.set_host("new.example", {"forge": "github"})
             self.assertEqual(path.read_bytes(), original)
             self.assertEqual(local_state.load_hosts_config()[other]["custom"], other)
             self.assertEqual(list(path.parent.glob("*.tmp")), [])
+
+    def test_corrupt_or_unreadable_hosts_are_never_replaced(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": tmp}):
+            path = local_state.get_hosts_path()
+            for raw in (b'{"incomplete":', b'[]', b'\xff'):
+                with self.subTest(raw=raw):
+                    path.write_bytes(raw)
+                    self.assertEqual(local_state.load_hosts_config(), {})
+                    with self.assertRaises(local_state.HostConfigError):
+                        local_state.set_host("new.example", {"forge": "gitlab"})
+                    with self.assertRaises(local_state.HostConfigError):
+                        local_state.remove_hosts(("existing.example",))
+                    self.assertEqual(path.read_bytes(), raw)
+            raw = b'{"existing.example":{"custom":"keep"}}'
+            path.write_bytes(raw)
+            with mock.patch.object(Path, "read_text", side_effect=PermissionError("unreadable")):
+                with self.assertRaises(local_state.HostConfigError):
+                    local_state.set_host("new.example", {"forge": "gitlab"})
+            self.assertEqual(path.read_bytes(), raw)
+            path.write_bytes(b"[]")
+            cmd = subprocess.run(
+                [sys.executable, "-B", str(SCRIPTS / "idd"), "auth", "login", "new.example",
+                 "--no-verify", "--token", "fixture"],
+                env=dict(os.environ, IDD_NO_AUTO_UPDATE="1"), capture_output=True, text=True,
+            )
+            self.assertEqual(cmd.returncode, 1)
+            self.assertIn("无法更新主机配置", cmd.stderr)
+            self.assertNotIn("Traceback", cmd.stderr)
+            self.assertEqual(path.read_bytes(), b"[]")

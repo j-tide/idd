@@ -751,6 +751,18 @@ class TestMonitorAndBoard(unittest.TestCase):
                     out_logout = json.loads(resp.read().decode("utf-8"))
                     self.assertTrue(out_logout["ok"])
                     self.assertTrue(out_logout["removed"])
+
+                hosts_path = cfg / "hosts.json"
+                hosts_path.write_bytes(b'{"incomplete":')
+                for update in (req_save, req_logout):
+                    with self.assertRaises(urllib.error.HTTPError) as failure:
+                        urllib.request.urlopen(update, timeout=5)
+                    with failure.exception as response:
+                        self.assertEqual(response.code, 500)
+                        error = json.loads(response.read())
+                        self.assertFalse(error["ok"])
+                        self.assertIn("无法更新主机配置", error["error"])
+                    self.assertEqual(hosts_path.read_bytes(), b'{"incomplete":')
             finally:
                 proc.terminate()
                 try:

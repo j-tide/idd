@@ -30,7 +30,7 @@ from forge import (  # noqa: E402
     normalize_host_input,
     verify_host_token,
 )
-from local_state import remove_hosts, set_host
+from local_state import HostConfigError, remove_hosts, set_host
 from git_worktrees import default_worktree_root, has_remote_origin
 from worktree_cleanup import CleanupResult, inspect_worktree, remove_merged_worktree
 import monitor  # noqa: E402
@@ -441,6 +441,12 @@ class BoardRequestHandler(LocalRequestHandler):
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
     def do_POST(self) -> None:
+        try:
+            self._handle_post()
+        except HostConfigError as exc:
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(exc)})
+
+    def _handle_post(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         if not self._require_local_csrf():
             return
