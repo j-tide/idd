@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import io
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,8 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
+import urllib.error
 import urllib.parse
 
 
@@ -451,6 +454,30 @@ class TestGitLabForge(unittest.TestCase):
             self.assertEqual(fallback["headRefOid"], "list_sha")
             self.assertEqual(fallback["rawSha"], "list_sha")
             self.assertEqual(fallback["mergeStateStatus"], "CHECKING")
+
+    def test_http_errors_release_the_response_and_preserve_details(self) -> None:
+        url = "https://gitlab.example.test"
+        spec = forge.RemoteSpec("https", "gitlab.example.test", "gitlab.example.test", None, "org/repo", url)
+        with tempfile.TemporaryDirectory() as tmp:
+            gl = forge.GitLabForge(Path(tmp), spec, {"token": "fixture"})
+            for check in (False, True):
+                stream = io.BytesIO(b'{"message":"merge conflict"}')
+                error = urllib.error.HTTPError(url, 409, "Conflict", {}, stream)
+                with mock.patch("urllib.request.urlopen", side_effect=error):
+                    if check:
+                        with self.assertRaises(forge.ForgeError) as raised:
+                            gl._request("GET", "/projects", check=True)
+                        self.assertEqual(raised.exception.http_status, 409)
+                        self.assertIn("merge conflict", str(raised.exception))
+                    else:
+                        self.assertIsNone(gl._request("GET", "/projects", check=False))
+                self.assertTrue(stream.closed)
+            stream = io.BytesIO(b"unauthorized")
+            error = urllib.error.HTTPError(url, 401, "Unauthorized", {}, stream)
+            with mock.patch("urllib.request.urlopen", side_effect=error):
+                with self.assertRaisesRegex(forge.ForgeError, "401"):
+                    forge.verify_host_token("gitlab", url, "fixture")
+            self.assertTrue(stream.closed)
 
     def test_merge_squash_passes_expected_sha_and_http_status_on_error(self) -> None:
         captured: list[tuple[str, str, dict | None]] = []

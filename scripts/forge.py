@@ -194,6 +194,7 @@ def verify_host_token(forge_type: str, api_base: str, token: str) -> str:
             payload = json.loads(resp.read().decode("utf-8"))
             return str(payload.get("username") or payload.get("login") or "authenticated")
     except urllib.error.HTTPError as exc:
+        exc.close()
         raise ForgeError(f"Token 校验失败（HTTP {exc.code}）：请检查 Token 权限与主机地址 {api_base}。") from exc
     except urllib.error.URLError as exc:
         raise ForgeError(f"无法连接 {api_base}：{exc.reason}") from exc
@@ -606,7 +607,8 @@ class GitLabForge:
                     return text
                 return json.loads(text) if text.strip() else None
         except urllib.error.HTTPError as exc:
-            err_body = exc.read().decode("utf-8", errors="replace")
+            with exc:
+                err_body = exc.read().decode("utf-8", errors="replace")
             if not check:
                 return None
             detail = err_body
