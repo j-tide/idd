@@ -120,14 +120,14 @@ idd repo-init --apply
 
 ### `idd land` 标准执行顺序
 
-当 PR / MR 已获验收且 CI 绿灯后，执行 `idd land <issue#>`（建议先用 `--dry-run` 预览）：
+当 PR / MR 已获验收且 CI 绿灯后，执行 `idd land <issue#>`（建议先用 `--dry-run` 预览）；当全局 `auto_merge` 开启时，`idd pr` / `idd mr` 亦会在持锁后直通单轮 CI 与合入流程：
 
-1. **检查洁净度、分支名与自动 Rebase**：校验分支名合法且工作树干净后 `git fetch origin <base>`；若分支落后于 `origin/<base>` 自动执行 `git rebase`（发生冲突时以退出码 `2` 暂停并列出冲突文件，等待解决并 `git rebase --continue`）。
-2. **先持久化汇总，再清理目录**：在删除 `TASK/` 前读取 `TASK/<issue>/` 与提交历史，分别生成结构化 Markdown 写入 PR/MR 描述、以及零 Markdown 符号的纯文本写入 Squash Commit 正文（均含 `Closes #<id>` + 逐 `TASK` 验证清单）。
-3. **清理 `TASK/<issue>/` 目录**：默认执行 `git rm -rf TASK/<issue>` 并提交 `chore: 清理已汇总的任务记录 (<issue>)`，确保 `main` 主干不堆积临时任务目录（传 `--keep-tasks` 可保留）。
+1. **仓库级合入串行队列与自动 Rebase**：非 `dry-run` 路径通过 `<git-common-dir>/idd-land.lock`（支持 `IDD_LAND_LOCK_TIMEOUT`）串行排队，等待方会输出当前持锁分支与 PID 提示；持锁后校验分支名与工作区洁净度、`git fetch origin <base>`，若落后则自动执行 `git rebase`（发生冲突时以退出码 `2` 暂停）。
+2. **先持久化汇总，再清理目录**：在删除 `TASK/` 前读取 `TASK/<issue>/` 与提交历史，分别生成结构化 Markdown 写入 PR/MR 描述、以及零 Markdown 纯文本写入 Squash Commit 正文（均含 `Closes #<id>` + 逐 `TASK` 验证清单）。
+3. **清理 `TASK/<issue>/` 目录与单轮推送**：默认执行 `git rm -rf TASK/<issue>` 并提交 `chore: 清理已汇总的任务记录 (<issue>)`，随后单次推送远端并创建/更新 PR/MR（传 `--keep-tasks` 可保留）。`idd pr`/`idd mr` 自动合入路径若遇到 CI 失败、超时或冲突，会自动回滚该清理提交以完整保留 `TASK/`。
    - **证据保护**：若 `TASK/<issue>/evidence/` 内存在附件文件，默认会安全拦截并列出清单；需确认附件已不再需要或已转存后，传 `--force-clean-evidence` 才一并清理。
-4. **同步 PR/MR、Squash 直线合入并收口 Issue 验收框**。刷新描述，有新提交时使用 `--force-with-lease` 推送，确认 CI 通过后执行合入。GitLab 需要 MR 状态与远端目标分支一致，且目标分支新提交的唯一父提交是合入前的分支头。核对失败时，命令返回错误并提示检查远端历史。使用 `--auto` 时，若 GitLab 尚未合入，命令只报告合入请求待确认。完成核对后默认勾选 Issue 正文「验收标准」节内的复选框并刷新进度，可用 `--no-check-acceptance` 跳过。
-5. **默认保留与快进主线**：**默认同时保留本地需求分支与本地 Worktree 目录**（如希望合入时顺带移除工作树目录可显式传 `--rm-worktree`），随后将干净的主工作树 `main` 快进（`git merge --ff-only`）到最新 `origin/main`。
+4. **同步 PR/MR、落后止损、Squash 直线合入并收口 Issue 验收框**：等待 head 提交同步与 CI 结算（GitLab 轮询期间若遇 `need_rebase` / `BEHIND` 会立即取消失效流水线并在 `IDD_LAND_MAX_REBASE_ATTEMPTS` 上限内自动重变基重试），随后执行合入。GitLab 核对目标分支新增的 Squash 提交具备唯一父提交且位于目标分支历史链上。使用 `--auto` 时，若 GitLab 尚未合入，命令只报告合入请求待确认。完成核对后默认勾选 Issue 正文「验收标准」节内的复选框并刷新进度，可用 `--no-check-acceptance` 跳过。
+5. **默认保留与快进主线**：**默认同时保留本地需求分支与本地 Worktree 目录**（如希望合入时顺带移除工作树目录可显式传 `--rm-worktree`），随后持有 `idd-main-git.lock` 将干净的主工作树 `main` 快进（`git merge --ff-only`）到最新 `origin/main`。
 
 ### `idd cleanup` 安全释放工作树磁盘空间
 
