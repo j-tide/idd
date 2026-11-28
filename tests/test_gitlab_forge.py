@@ -80,15 +80,10 @@ class MockGitLabState:
         )
         return proc.stdout.strip() if proc.returncode == 0 else ""
 
-    def perform_ff_squash(self, mr: dict, message: str) -> str:
-        head = mr["source_branch"]
-        base = mr["target_branch"]
+    def advance_branch_tip(self, branch: str, message: str, *, tree_ref: str | None = None) -> str:
+        parent = self.origin_sha(branch)
         tree = subprocess.check_output(
-            ["git", "--git-dir", str(self.origin_dir), "rev-parse", f"refs/heads/{head}^{{tree}}"],
-            text=True,
-        ).strip()
-        parent = subprocess.check_output(
-            ["git", "--git-dir", str(self.origin_dir), "rev-parse", f"refs/heads/{base}"],
+            ["git", "--git-dir", str(self.origin_dir), "rev-parse", tree_ref or f"{parent}^{{tree}}"],
             text=True,
         ).strip()
         env = dict(os.environ)
@@ -96,13 +91,18 @@ class MockGitLabState:
         env["GIT_AUTHOR_EMAIL"] = "gitlab@corp.local"
         env["GIT_COMMITTER_NAME"] = "GitLab"
         env["GIT_COMMITTER_EMAIL"] = "gitlab@corp.local"
-        squash_sha = subprocess.check_output(
+        sha = subprocess.check_output(
             ["git", "--git-dir", str(self.origin_dir), "commit-tree", tree, "-p", parent, "-m", message],
             text=True,
             env=env,
         ).strip()
-        subprocess.check_call(["git", "--git-dir", str(self.origin_dir), "update-ref", f"refs/heads/{base}", squash_sha])
-        return squash_sha
+        subprocess.check_call(["git", "--git-dir", str(self.origin_dir), "update-ref", f"refs/heads/{branch}", sha])
+        return sha
+
+    def perform_ff_squash(self, mr: dict, message: str) -> str:
+        head = mr["source_branch"]
+        base = mr["target_branch"]
+        return self.advance_branch_tip(base, message, tree_ref=f"refs/heads/{head}^{{tree}}")
 
 
 def make_handler(state: MockGitLabState):
@@ -1123,11 +1123,7 @@ class TestGitLabForge(unittest.TestCase):
                     mr["state"] = "merged"
 
                     # Simulate a second MR landing right after ours before _fetch_target_tip runs.
-                    second_sha = subprocess.check_output(
-                        ["git", "--git-dir", str(state.origin_dir), "commit-tree", f"{squash_sha}^{{tree}}", "-p", squash_sha, "-m", "feat: concurrent second"],
-                        text=True,
-                    ).strip()
-                    subprocess.check_call(["git", "--git-dir", str(state.origin_dir), "update-ref", "refs/heads/main", second_sha])
+                    state.advance_branch_tip("main", "feat: concurrent second", tree_ref=f"{squash_sha}^{{tree}}")
 
                     verified = idd_cli._gitlab_land_result(gl_forge, 10, wt, "main", before, auto=False)
                     self.assertEqual(verified, squash_sha)
@@ -1155,13 +1151,7 @@ class TestGitLabForge(unittest.TestCase):
                 state.forced_detailed_merge_status = "need_rebase"
 
                 # Advance origin/main externally so rebase is required.
-                base_sha = state.origin_sha("main")
-                base_tree = subprocess.check_output(["git", "--git-dir", str(state.origin_dir), "rev-parse", f"{base_sha}^{{tree}}"], text=True).strip()
-                ext_sha = subprocess.check_output(
-                    ["git", "--git-dir", str(state.origin_dir), "commit-tree", base_tree, "-p", base_sha, "-m", "feat: upstream change"],
-                    text=True,
-                ).strip()
-                subprocess.check_call(["git", "--git-dir", str(state.origin_dir), "update-ref", "refs/heads/main", ext_sha])
+                state.advance_branch_tip("main", "feat: upstream change")
 
                 def _clear_behind() -> None:
                     while not state.canceled_pipeline_ids:

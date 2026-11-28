@@ -34,3 +34,4 @@
 | 日期 / 修订 | 命令或操作 | 实际结果 | 证据 |
 | --- | --- | --- | --- |
 | 2026-11-28 (worktree) | `python3 -m py_compile scripts/*.py && python3 -m unittest discover -s tests -v` | passed (107 passed, 0 failed) | `scripts/*.py`, `tests/*.py`, `SKILL.md`, `references/git-issue-workflow.md` |
+| 2026-11-28 (worktree) | `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null PYTHONPATH=tests python3 -m unittest test_gitlab_forge -v`（修复 GitHub Actions 无全局 Git 作者配置导致的 `commit-tree` 报错） | passed (14 passed, 0 failed) | `tests/test_gitlab_forge.py` |
