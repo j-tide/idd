@@ -46,6 +46,11 @@ def _matches_issue_filter(dir_name: str, issue_filter: str | None) -> bool:
     return filter_num is not None and dir_num == filter_num
 
 
+def is_task_record(path: Path) -> bool:
+    """Recognize numbered TASK records used by progress and delivery commands."""
+    return path.is_file() and re.match(r"^TASK-\d+(?:-|\.md)", path.name) is not None
+
+
 def read_task(path: Path, task_root: Path) -> dict:
     """Parse one TASK-*.md file's header fields without mutating the file."""
     relative = path.relative_to(task_root)
@@ -126,7 +131,7 @@ def collect_task_entries(
     """Collect Issue directory summaries from one TASK/ root."""
     grouped: dict[str, list[dict]] = {}
     for path in sorted(task_root.glob("*/TASK-*.md")):
-        if path.is_file() and re.match(r"^TASK-\d+(?:-|\.md)", path.name):
+        if is_task_record(path):
             if _matches_issue_filter(path.parent.name, issue_filter):
                 grouped.setdefault(path.parent.name, []).append(read_task(path, task_root))
     matched = issue_filter is None or bool(grouped)
