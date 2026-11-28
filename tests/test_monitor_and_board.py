@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 import errno
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
@@ -1128,6 +1128,22 @@ class TestMonitorAndBoard(unittest.TestCase):
                     proc.stderr.close()
                 gl_server.shutdown()
                 gl_server.server_close()
+
+    def test_auth_probe_recovers_from_worker_start_failure_and_interruption(self) -> None:
+        class BoundedFuture(Future):
+            def result(self, timeout=2):
+                return super().result(timeout)
+
+        auth = monitor.GitHubCliAuthStatus()
+        with mock.patch.object(monitor, "Future", BoundedFuture):
+            with mock.patch.object(threading.Thread, "start", side_effect=RuntimeError("cannot start thread")):
+                with self.assertRaisesRegex(RuntimeError, "cannot start thread"):
+                    auth.get(background=True)
+            with mock.patch.object(monitor, "_probe_gh_cli_status", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    auth.get()
+            with mock.patch.object(monitor, "_probe_gh_cli_status", return_value=(True, "recovered")):
+                self.assertEqual(auth.get(), (True, "recovered"))
 
     def test_auth_refresh_cannot_overwrite_a_new_identity_after_invalidation(self) -> None:
         auth = monitor.GitHubCliAuthStatus()

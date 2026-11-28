@@ -590,22 +590,23 @@ class GitHubCliAuthStatus:
             if self._checked_at is not None and time.monotonic() - self._checked_at < ttl:
                 return cached
             probe = self._inflight
-            start = probe is None
+            run_here = probe is None and not background
             if probe is None:
                 probe = Future()
+                if background:
+                    # Publish this probe only after its worker has actually started.
+                    threading.Thread(target=self._refresh, args=(probe,), daemon=True).start()
                 self._inflight = probe
 
-        if start:
-            if background:
-                threading.Thread(target=self._refresh, args=(probe,), daemon=True).start()
-            else:
-                self._refresh(probe)
+        if run_here:
+            self._refresh(probe)
         return cached if background else probe.result()
 
     def _refresh(self, probe: Future[tuple[bool, str]]) -> None:
         try:
             value = _probe_gh_cli_status()
-        except Exception as exc:
+        except BaseException as exc:
+            # A synchronous interruption must also release other callers of this Future.
             with self._lock:
                 if self._inflight is probe:
                     self._inflight = None
