@@ -3232,14 +3232,37 @@ def _gitlab_land_result(
 
         after = _fetch_target_tip(worktree, base_branch)
         merged_oid = merged.get("squashCommitOid") or merged.get("mergeCommitOid") or merged.get("headRefOid")
-        parents = run_cmd(["git", "rev-list", "--parents", "-n", "1", after], cwd=worktree).stdout.split()
-        if parents != [after, before] or after != merged_oid:
-            count = run_cmd(["git", "rev-list", "--count", f"{before}..{after}"], cwd=worktree).stdout.strip()
-            raise IddError(
-                f"远端 `{base_branch}` 从 `{before[:12]}` 变为 `{after[:12]}`，区间有 {count} 条提交。"
-                "未能确认本次 MR 只新增一条直接后继提交。"
+        if after == merged_oid:
+            parents = run_cmd(["git", "rev-list", "--parents", "-n", "1", after], cwd=worktree).stdout.split()
+            if parents != [after, before]:
+                count = run_cmd(["git", "rev-list", "--count", f"{before}..{after}"], cwd=worktree).stdout.strip()
+                raise IddError(
+                    f"远端 `{base_branch}` 从 `{before[:12]}` 变为 `{after[:12]}`，区间有 {count} 条提交。"
+                    "未能确认本次 MR 只新增一条直接后继提交。"
+                )
+            return after
+
+        squash_oid = str(merged.get("squashCommitOid") or "")
+        if squash_oid and squash_oid == merged_oid and squash_oid != before:
+            parents = run_cmd(["git", "rev-list", "--parents", "-n", "1", squash_oid], cwd=worktree).stdout.split()
+            anc_before = run_cmd(
+                ["git", "merge-base", "--is-ancestor", before, squash_oid],
+                cwd=worktree,
+                check=False,
             )
-        return after
+            anc_after = run_cmd(
+                ["git", "merge-base", "--is-ancestor", squash_oid, after],
+                cwd=worktree,
+                check=False,
+            )
+            if len(parents) == 2 and anc_before.returncode == 0 and anc_after.returncode == 0:
+                return squash_oid
+
+        count = run_cmd(["git", "rev-list", "--count", f"{before}..{after}"], cwd=worktree).stdout.strip()
+        raise IddError(
+            f"远端 `{base_branch}` 从 `{before[:12]}` 变为 `{after[:12]}`，区间有 {count} 条提交。"
+            "未能确认本次 MR 只新增一条直接后继提交。"
+        )
     except (ForgeError, IddError) as exc:
         raise IddError(
             f"未能验证 GitLab MR !{change_num} 的合入结果。GitLab 可能已经合入，请检查远端历史。\n{exc}"
@@ -3276,6 +3299,13 @@ def _merge_squash_with_retry(
                     _wait_for_change_head_sync(forge, change_num, expected_sha, latest)
 
 
+def _should_abort_ci_wait(change: dict[str, Any], *, abort_on_behind: bool) -> bool:
+    merge_state = str(change.get("mergeStateStatus") or "")
+    if merge_state == "DIRTY":
+        return True
+    return abort_on_behind and merge_state == "BEHIND"
+
+
 def _wait_for_ci_settlement(
     forge: Any,
     change_num: int,
@@ -3283,10 +3313,13 @@ def _wait_for_ci_settlement(
     fallback_change: dict[str, Any],
     *,
     skip_initial_grace: bool = False,
+    abort_on_behind: bool = False,
 ) -> tuple[dict[str, Any], str]:
     """Wait for remote headRefOid sync and CI checks to settle (`PASS`, `FAIL`, `NONE`, or `PENDING` on timeout)."""
     latest = _wait_for_change_head_sync(forge, change_num, expected_sha, fallback_change)
     overall = str(latest.get("checks_overall") or "NONE")
+    if _should_abort_ci_wait(latest, abort_on_behind=abort_on_behind):
+        return latest, overall
 
     grace = _get_float_env("IDD_CI_GRACE_SECONDS", CI_WAIT_GRACE_SECONDS, minimum=0.0)
     poll_interval = _get_float_env("IDD_CI_POLL_INTERVAL", CI_WAIT_POLL_INTERVAL_SECONDS, minimum=0.0)
@@ -3309,6 +3342,8 @@ def _wait_for_ci_settlement(
                 if remote_oid and remote_oid != expected_sha:
                     return latest, str(latest.get("checks_overall") or "NONE")
                 overall = str(latest.get("checks_overall") or "NONE")
+                if _should_abort_ci_wait(latest, abort_on_behind=abort_on_behind):
+                    return latest, overall
                 if overall != "NONE":
                     break
 
@@ -3330,6 +3365,8 @@ def _wait_for_ci_settlement(
             break
         remote_oid = str(latest.get("headRefOid") or "")
         if remote_oid and remote_oid != expected_sha:
+            break
+        if _should_abort_ci_wait(latest, abort_on_behind=abort_on_behind):
             break
 
     return latest, overall

@@ -1,7 +1,7 @@
 # TASK-03：串行合入队列与自动合入单轮 CI
 
 - Issue: #79
-- Status: planned
+- Status: in_progress
 - Depends on: TASK-02
 - Test: tests/test_idd_cli.py, tests/test_gitlab_forge.py
 
