@@ -6,6 +6,10 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
 import json
 import os
 from pathlib import Path
@@ -51,6 +55,9 @@ LAND_MERGE_RETRY_DELAY_SECONDS = 1.5
 CI_WAIT_GRACE_SECONDS = 5.0
 CI_WAIT_POLL_INTERVAL_SECONDS = 5.0
 CI_WAIT_TIMEOUT_SECONDS = 1800.0
+LAND_LOCK_POLL_INTERVAL_SECONDS = 0.05
+LAND_LOCK_DEFAULT_TIMEOUT_SECONDS = 0.0
+LAND_MAX_REBASE_ATTEMPTS = 3
 
 ALLOWED_TYPES = ("feat", "fix", "refactor", "perf", "docs", "test", "ci", "chore")
 MAX_ISSUE_SCOPE_LEN = 16
@@ -294,6 +301,132 @@ def _resolve_base_ref(repo: RepoInfo, base_branch: str | None = None) -> str:
     if repo.has_origin and _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
         return f"origin/{branch}"
     return branch
+
+
+_ACTIVE_REPO_LOCKS: set[Path] = set()
+
+
+def _resolve_git_common_dir(repo_dir: Path) -> Path:
+    """Resolve the shared `.git` common directory for lock placement across worktrees."""
+    proc = run_cmd(["git", "-C", str(repo_dir), "rev-parse", "--git-common-dir"], check=False)
+    raw = proc.stdout.strip() if proc.returncode == 0 else ""
+    if not raw:
+        return (repo_dir / ".git").resolve()
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = repo_dir / candidate
+    return candidate.resolve()
+
+
+def _read_lock_owner_info(lock_path: Path) -> dict[str, Any]:
+    try:
+        raw = lock_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return {}
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _format_lock_holder(owner: dict[str, Any]) -> str:
+    parts: list[str] = []
+    branch = str(owner.get("branch") or "").strip()
+    cmd = str(owner.get("command") or "").strip()
+    pid = owner.get("pid")
+    if branch:
+        parts.append(f"分支 `{branch}`")
+    if cmd:
+        parts.append(cmd)
+    if pid:
+        parts.append(f"PID {pid}")
+    return "，".join(parts) if parts else "另一会话"
+
+
+@contextmanager
+def _repo_file_lock(
+    main_worktree: Path,
+    lock_name: str,
+    *,
+    owner_info: dict[str, Any] | None = None,
+    wait_prefix: str = "",
+    timeout_env: str | None = None,
+) -> Iterator[Path]:
+    """Acquire a reentrant cross-process exclusive repository lock under git-common-dir."""
+    common_dir = _resolve_git_common_dir(main_worktree)
+    common_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = (common_dir / lock_name).resolve()
+    if lock_path in _ACTIVE_REPO_LOCKS or fcntl is None:
+        yield lock_path
+        return
+
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    handle = os.fdopen(fd, "r+", encoding="utf-8")
+    acquired = False
+    try:
+        waited = False
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except BlockingIOError:
+            waited = True
+            holder = _format_lock_holder(_read_lock_owner_info(lock_path))
+            if wait_prefix:
+                print(f"⏳ {wait_prefix}：当前正被 {holder} 占用，排队等待中...", flush=True)
+            timeout = (
+                _get_float_env(timeout_env, LAND_LOCK_DEFAULT_TIMEOUT_SECONDS, minimum=0.0)
+                if timeout_env
+                else 0.0
+            )
+            if timeout <= 0.0:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                acquired = True
+            else:
+                deadline = time.monotonic() + timeout
+                while True:
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        acquired = True
+                        break
+                    except BlockingIOError:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0.0:
+                            latest_holder = _format_lock_holder(_read_lock_owner_info(lock_path))
+                            raise IddError(
+                                f"等待 {wait_prefix or lock_name} 超时（{timeout:.1f}s），当前持锁者：{latest_holder}。",
+                                exit_code=3,
+                            )
+                        time.sleep(min(LAND_LOCK_POLL_INTERVAL_SECONDS, remaining))
+        if waited and wait_prefix:
+            print(f"🔓 已获取 {wait_prefix} 锁，继续执行...", flush=True)
+
+        payload = dict(owner_info or {})
+        payload["pid"] = os.getpid()
+        payload["started_at"] = round(time.time(), 3)
+        handle.seek(0)
+        handle.truncate()
+        handle.write(json.dumps(payload, ensure_ascii=False))
+        handle.flush()
+
+        _ACTIVE_REPO_LOCKS.add(lock_path)
+        yield lock_path
+    finally:
+        _ACTIVE_REPO_LOCKS.discard(lock_path)
+        if acquired:
+            try:
+                handle.seek(0)
+                handle.truncate()
+                handle.flush()
+            except OSError:
+                pass
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
 
 
 def find_worktree_for_target(main_worktree: Path, target: str) -> dict[str, str] | None:
@@ -2595,22 +2728,27 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     validate_branch_name(branch, issue_num)
 
-    if repo.has_origin:
-        run_cmd(["git", "-C", str(repo.main_worktree), "fetch", "origin", repo.default_branch], check=False)
+    with _repo_file_lock(
+        repo.main_worktree,
+        "idd-main-git.lock",
+        owner_info={"command": "start", "branch": branch},
+    ):
+        if repo.has_origin:
+            run_cmd(["git", "-C", str(repo.main_worktree), "fetch", "origin", repo.default_branch], check=False)
 
-    base_ref = _resolve_base_ref(repo, args.base)
-    repo.worktree_root.mkdir(parents=True, exist_ok=True)
-    wt_path = repo.worktree_root / issue_dir
+        base_ref = _resolve_base_ref(repo, args.base)
+        repo.worktree_root.mkdir(parents=True, exist_ok=True)
+        wt_path = repo.worktree_root / issue_dir
 
-    if wt_path.exists():
-        raise IddError(f"目标目录已存在但未注册为 Git 工作树：{wt_path}")
+        if wt_path.exists():
+            raise IddError(f"目标目录已存在但未注册为 Git 工作树：{wt_path}")
 
-    if _ref_exists(repo.main_worktree, f"refs/heads/{branch}"):
-        run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", str(wt_path), branch])
-    elif repo.has_origin and _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
-        run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "-b", branch, str(wt_path), f"origin/{branch}"])
-    else:
-        run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "--no-track", "-b", branch, str(wt_path), base_ref])
+        if _ref_exists(repo.main_worktree, f"refs/heads/{branch}"):
+            run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", str(wt_path), branch])
+        elif repo.has_origin and _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
+            run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "-b", branch, str(wt_path), f"origin/{branch}"])
+        else:
+            run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "--no-track", "-b", branch, str(wt_path), base_ref])
 
     copied = sync_worktree_includes(repo.main_worktree, wt_path)
     _fix_misbound_upstream(wt_path, branch, repo.default_branch)
@@ -2794,79 +2932,50 @@ def cmd_pr(args: argparse.Namespace) -> int:
         )
         return 0
 
-    push_cmd = ["git", "-C", str(wt_path), "push", "-u", "origin", "HEAD"]
-    if args.force_with_lease:
-        push_cmd.append("--force-with-lease")
-    run_cmd(push_cmd)
-
-    existing_items = forge.list_changes(state="open", head_branch=branch, limit=1)
-    existing = existing_items[0] if existing_items else None
-    if existing:
-        updated = forge.update_change(existing["number"], final_title, body)
-        url = updated.get("url") or existing.get("url", "")
-        change_num: int | None = int(existing["number"])
-        change_obj: dict[str, Any] = dict(existing)
-        change_obj["title"] = final_title
-        change_obj["body"] = body
-        if url:
-            change_obj["url"] = url
-        print(f"已更新 {forge.mr_label} {forge.mr_prefix}{change_num}: {url}")
-    else:
-        created = forge.create_change(base_branch, branch, final_title, body, draft=args.draft)
-        num = created.get("number")
-        num_str = f" {forge.mr_prefix}{num}" if num is not None else ""
-        print(f"已创建 {forge.mr_label}{num_str}: {created.get('url', '')}")
-        change_num = int(num) if num is not None else None
-        change_obj = dict(created)
-
     if not effective_auto_merge:
+        push_cmd = ["git", "-C", str(wt_path), "push", "-u", "origin", "HEAD"]
+        if args.force_with_lease:
+            push_cmd.append("--force-with-lease")
+        run_cmd(push_cmd)
+
+        existing_items = forge.list_changes(state="open", head_branch=branch, limit=1)
+        existing = existing_items[0] if existing_items else None
+        if existing:
+            updated = forge.update_change(existing["number"], final_title, body)
+            url = updated.get("url") or existing.get("url", "")
+            change_num = int(existing["number"])
+            print(f"已更新 {forge.mr_label} {forge.mr_prefix}{change_num}: {url}")
+        else:
+            created = forge.create_change(base_branch, branch, final_title, body, draft=args.draft)
+            num = created.get("number")
+            num_str = f" {forge.mr_prefix}{num}" if num is not None else ""
+            print(f"已创建 {forge.mr_label}{num_str}: {created.get('url', '')}")
         return 0
+
     if args.draft:
+        push_cmd = ["git", "-C", str(wt_path), "push", "-u", "origin", "HEAD"]
+        if args.force_with_lease:
+            push_cmd.append("--force-with-lease")
+        run_cmd(push_cmd)
+
+        existing_items = forge.list_changes(state="open", head_branch=branch, limit=1)
+        existing = existing_items[0] if existing_items else None
+        if existing:
+            updated = forge.update_change(existing["number"], final_title, body)
+            url = updated.get("url") or existing.get("url", "")
+            print(f"已更新 {forge.mr_label} {forge.mr_prefix}{int(existing['number'])}: {url}")
+        else:
+            created = forge.create_change(base_branch, branch, final_title, body, draft=True)
+            num = created.get("number")
+            num_str = f" {forge.mr_prefix}{num}" if num is not None else ""
+            print(f"已创建 {forge.mr_label}{num_str}: {created.get('url', '')}")
         print(f"提示：当前为 Draft {forge.mr_label}，本次跳过自动准入与合入。")
         return 0
 
-    if change_num is None:
-        looked_up = forge.get_change(branch=branch, check=False)
-        if looked_up and looked_up.get("number") is not None:
-            change_num = int(looked_up["number"])
-            change_obj = looked_up
-    if change_num is None:
-        raise IddError(f"已提交 {forge.mr_label} 但无法解析编号，已停止自动准入与合入。")
-
-    initial_head = run_cmd(["git", "-C", str(wt_path), "rev-parse", "HEAD"]).stdout.strip()
-    src_desc = "命令行 --auto-merge" if am_source == "cli" else "全局配置"
-    print(f"已开启自动准入合入（来源：{src_desc}），开始等待 {forge.mr_label} {forge.mr_prefix}{change_num} CI 结算...")
-
-    settled, overall = _wait_for_ci_settlement(forge, change_num, initial_head, change_obj)
-    settled_state = str(settled.get("state") or "OPEN")
-    if settled_state == "MERGED":
-        print(f"{forge.mr_label} {forge.mr_prefix}{change_num} 已处于已合并状态：{settled.get('url', '')}")
-        return 0
-    if settled_state != "OPEN":
-        raise IddError(f"{forge.mr_label} {forge.mr_prefix}{change_num} 状态已变为 {settled_state}，已取消自动合入。")
-
-    remote_head_oid = str(settled.get("headRefOid") or "")
-    if remote_head_oid and remote_head_oid != initial_head:
-        raise IddError(
-            f"{forge.mr_label} {forge.mr_prefix}{change_num} 远端最新提交已变更为 `{remote_head_oid[:12]}`（本地 `{initial_head[:12]}`），"
-            "为防止合入未校验提交已暂停自动合入。"
-        )
-    if overall == "FAIL":
-        raise _format_ci_failure_error(forge, settled, context="自动准入 CI 检查")
-    if overall == "PENDING":
-        raise IddError(
-            f"等待 {forge.mr_label} {forge.mr_prefix}{change_num} CI 结算超时（当前仍为 PENDING），"
-            "已暂停自动合入（TASK 目录已保留）。",
-            exit_code=3,
-        )
-    if settled.get("mergeStateStatus") == "DIRTY":
-        raise IddError(
-            f"{forge.mr_label} {forge.mr_prefix}{change_num} 存在合并冲突（DIRTY），请先解决冲突并复测。",
-            exit_code=2,
-        )
-
-    ci_note = "CI 检查通过（PASS）" if overall == "PASS" else "仓库未配置远端 CI（NONE），按本地测试通过放行"
-    print(f"{ci_note}，自动执行 Squash 直线合入...")
+    _validate_unfinished_tasks_guard(wt_path, issue_dir, force_unfinished_tasks=False)
+    _validate_evidence_guard(wt_path, issue_dir, force_clean_evidence=False)
+    if forge.forge_type == "gitlab":
+        _require_gitlab_squash(forge)
 
     return _execute_land(
         caller_cwd=caller_cwd,
@@ -2874,7 +2983,10 @@ def cmd_pr(args: argparse.Namespace) -> int:
         target=args.target or branch,
         title_override=args.title,
         wait_ci=True,
-        pre_checked_head=initial_head,
+        create_or_update_pr=True,
+        base_branch_override=args.base,
+        force_with_lease=bool(args.force_with_lease),
+        auto_merge_source=am_source,
     )
 
 
@@ -3095,14 +3207,37 @@ def _gitlab_land_result(
 
         after = _fetch_target_tip(worktree, base_branch)
         merged_oid = merged.get("squashCommitOid") or merged.get("mergeCommitOid") or merged.get("headRefOid")
-        parents = run_cmd(["git", "rev-list", "--parents", "-n", "1", after], cwd=worktree).stdout.split()
-        if parents != [after, before] or after != merged_oid:
-            count = run_cmd(["git", "rev-list", "--count", f"{before}..{after}"], cwd=worktree).stdout.strip()
-            raise IddError(
-                f"远端 `{base_branch}` 从 `{before[:12]}` 变为 `{after[:12]}`，区间有 {count} 条提交。"
-                "未能确认本次 MR 只新增一条直接后继提交。"
+        if after == merged_oid:
+            parents = run_cmd(["git", "rev-list", "--parents", "-n", "1", after], cwd=worktree).stdout.split()
+            if parents != [after, before]:
+                count = run_cmd(["git", "rev-list", "--count", f"{before}..{after}"], cwd=worktree).stdout.strip()
+                raise IddError(
+                    f"远端 `{base_branch}` 从 `{before[:12]}` 变为 `{after[:12]}`，区间有 {count} 条提交。"
+                    "未能确认本次 MR 只新增一条直接后继提交。"
+                )
+            return after
+
+        squash_oid = str(merged.get("squashCommitOid") or "")
+        if squash_oid and squash_oid == merged_oid and squash_oid != before:
+            parents = run_cmd(["git", "rev-list", "--parents", "-n", "1", squash_oid], cwd=worktree).stdout.split()
+            anc_before = run_cmd(
+                ["git", "merge-base", "--is-ancestor", before, squash_oid],
+                cwd=worktree,
+                check=False,
             )
-        return after
+            anc_after = run_cmd(
+                ["git", "merge-base", "--is-ancestor", squash_oid, after],
+                cwd=worktree,
+                check=False,
+            )
+            if len(parents) == 2 and anc_before.returncode == 0 and anc_after.returncode == 0:
+                return squash_oid
+
+        count = run_cmd(["git", "rev-list", "--count", f"{before}..{after}"], cwd=worktree).stdout.strip()
+        raise IddError(
+            f"远端 `{base_branch}` 从 `{before[:12]}` 变为 `{after[:12]}`，区间有 {count} 条提交。"
+            "未能确认本次 MR 只新增一条直接后继提交。"
+        )
     except (ForgeError, IddError) as exc:
         raise IddError(
             f"未能验证 GitLab MR !{change_num} 的合入结果。GitLab 可能已经合入，请检查远端历史。\n{exc}"
@@ -3139,6 +3274,13 @@ def _merge_squash_with_retry(
                     _wait_for_change_head_sync(forge, change_num, expected_sha, latest)
 
 
+def _should_abort_ci_wait(change: dict[str, Any], *, abort_on_behind: bool) -> bool:
+    merge_state = str(change.get("mergeStateStatus") or "")
+    if merge_state == "DIRTY":
+        return True
+    return abort_on_behind and merge_state == "BEHIND"
+
+
 def _wait_for_ci_settlement(
     forge: Any,
     change_num: int,
@@ -3146,10 +3288,13 @@ def _wait_for_ci_settlement(
     fallback_change: dict[str, Any],
     *,
     skip_initial_grace: bool = False,
+    abort_on_behind: bool = False,
 ) -> tuple[dict[str, Any], str]:
     """Wait for remote headRefOid sync and CI checks to settle (`PASS`, `FAIL`, `NONE`, or `PENDING` on timeout)."""
     latest = _wait_for_change_head_sync(forge, change_num, expected_sha, fallback_change)
     overall = str(latest.get("checks_overall") or "NONE")
+    if _should_abort_ci_wait(latest, abort_on_behind=abort_on_behind):
+        return latest, overall
 
     grace = _get_float_env("IDD_CI_GRACE_SECONDS", CI_WAIT_GRACE_SECONDS, minimum=0.0)
     poll_interval = _get_float_env("IDD_CI_POLL_INTERVAL", CI_WAIT_POLL_INTERVAL_SECONDS, minimum=0.0)
@@ -3172,6 +3317,8 @@ def _wait_for_ci_settlement(
                 if remote_oid and remote_oid != expected_sha:
                     return latest, str(latest.get("checks_overall") or "NONE")
                 overall = str(latest.get("checks_overall") or "NONE")
+                if _should_abort_ci_wait(latest, abort_on_behind=abort_on_behind):
+                    return latest, overall
                 if overall != "NONE":
                     break
 
@@ -3193,6 +3340,8 @@ def _wait_for_ci_settlement(
             break
         remote_oid = str(latest.get("headRefOid") or "")
         if remote_oid and remote_oid != expected_sha:
+            break
+        if _should_abort_ci_wait(latest, abort_on_behind=abort_on_behind):
             break
 
     return latest, overall
@@ -3233,6 +3382,86 @@ def _find_unfinished_tasks(wt_path: Path, issue_dir: str | None) -> list[dict[st
     return [t for t in tasks if t.get("status") in UNFINISHED_LAND_TASK_STATUSES]
 
 
+def _get_int_env(name: str, default: int, *, minimum: int = 1) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        val = int(raw)
+    except ValueError:
+        return default
+    return val if val >= minimum else default
+
+
+def _validate_unfinished_tasks_guard(
+    wt_path: Path, issue_dir: str | None, *, force_unfinished_tasks: bool
+) -> None:
+    if force_unfinished_tasks:
+        return
+    unfinished_tasks = _find_unfinished_tasks(wt_path, issue_dir)
+    if not unfinished_tasks:
+        return
+    listed = "\n".join(
+        f"  - {t.get('id') or Path(t['path']).stem} [{t.get('status')}] {t.get('title') or ''} ({t.get('path')})"
+        for t in unfinished_tasks
+    )
+    raise IddError(
+        f"检测到 `TASK/{issue_dir}/` 含未完成任务，为防提前合入已暂停：\n{listed}\n"
+        "请先完成并验证上述 TASK（更新状态为 `done` / `cancelled` / `deferred`）后再执行 `idd land`，"
+        "或确认无误后传 `--force-unfinished-tasks` 强制继续。",
+        exit_code=2,
+    )
+
+
+def _collect_evidence_files(wt_path: Path, issue_dir: str | None) -> list[str]:
+    if not issue_dir:
+        return []
+    evidence_dir = wt_path / "TASK" / issue_dir / "evidence"
+    if not evidence_dir.is_dir():
+        return []
+    return [
+        p.relative_to(wt_path).as_posix()
+        for p in sorted(evidence_dir.rglob("*"))
+        if p.is_file()
+    ]
+
+
+def _validate_evidence_guard(
+    wt_path: Path, issue_dir: str | None, *, force_clean_evidence: bool
+) -> None:
+    evidence_files = _collect_evidence_files(wt_path, issue_dir)
+    if evidence_files and not force_clean_evidence:
+        listed = "\n".join(f"  - {item}" for item in evidence_files)
+        raise IddError(
+            f"检测到 `TASK/{issue_dir}/evidence/` 含附件文件，为防误删已暂停合入：\n{listed}\n"
+            "请确认后传 `--force-clean-evidence` 一并清理，或传 `--keep-tasks` 保留任务目录。",
+            exit_code=2,
+        )
+
+
+def _rollback_task_cleanup(
+    wt_path: Path,
+    pre_clean_head: str | None,
+    *,
+    forge_type: str,
+    restore_remote: bool = True,
+) -> None:
+    """Restore local (and optionally remote) HEAD to before the temporary TASK cleanup commit."""
+    if not pre_clean_head:
+        return
+    run_cmd(["git", "-C", str(wt_path), "reset", "--hard", pre_clean_head], check=False)
+    if not restore_remote:
+        return
+    if forge_type == "gitlab":
+        skip_proc = run_cmd(
+            ["git", "-C", str(wt_path), "push", "--force-with-lease", "-o", "ci.skip", "origin", "HEAD"],
+            check=False,
+        )
+        if skip_proc.returncode == 0:
+            return
+    run_cmd(["git", "-C", str(wt_path), "push", "--force-with-lease", "origin", "HEAD"], check=False)
+
+
 def _execute_land(
     *,
     caller_cwd: Path,
@@ -3249,109 +3478,52 @@ def _execute_land(
     no_check_acceptance: bool = False,
     dry_run: bool = False,
     pre_checked_head: str | None = None,
+    create_or_update_pr: bool = False,
+    base_branch_override: str | None = None,
+    force_with_lease: bool = False,
+    auto_merge_source: str = "global",
 ) -> int:
     wt_path, branch, issue_dir, issue_num = _resolve_target_worktree(repo, target)
     validate_branch_name(branch, issue_num, wt_path)
     _require_clean_worktree(wt_path)
-    if not force_unfinished_tasks:
-        unfinished_tasks = _find_unfinished_tasks(wt_path, issue_dir)
-        if unfinished_tasks:
-            listed = "\n".join(
-                f"  - {t.get('id') or Path(t['path']).stem} [{t.get('status')}] {t.get('title') or ''} ({t.get('path')})"
-                for t in unfinished_tasks
-            )
-            raise IddError(
-                f"检测到 `TASK/{issue_dir}/` 含未完成任务，为防提前合入已暂停：\n{listed}\n"
-                "请先完成并验证上述 TASK（更新状态为 `done` / `cancelled` / `deferred`）后再执行 `idd land`，"
-                "或确认无误后传 `--force-unfinished-tasks` 强制继续。",
-                exit_code=2,
-            )
+    _validate_unfinished_tasks_guard(wt_path, issue_dir, force_unfinished_tasks=force_unfinished_tasks)
+    if not keep_tasks:
+        _validate_evidence_guard(wt_path, issue_dir, force_clean_evidence=force_clean_evidence)
 
     forge = get_forge(repo.main_worktree)
-    change = forge.get_change(branch=branch, check=False)
-    if not change:
-        raise IddError(f"分支 `{branch}` 尚无 Open {forge.mr_label}，请先运行 `idd pr` 创建。")
-
-    change_num = change["number"]
-    base_branch = change.get("baseRefName") or repo.default_branch
     is_gitlab = forge.forge_type == "gitlab"
-    if is_gitlab:
-        _require_gitlab_squash(forge)
 
-    if repo.has_origin:
-        run_cmd(["git", "-C", str(wt_path), "fetch", "origin", base_branch])
-    base_ref = _resolve_base_ref(repo, base_branch)
-
-    # Step A: Rebase if behind target base
-    needs_rebase = False
-    if not no_rebase:
-        anc = run_cmd(["git", "-C", str(wt_path), "merge-base", "--is-ancestor", base_ref, "HEAD"], check=False)
-        if anc.returncode != 0:
-            needs_rebase = True
-            if not dry_run:
-                reb = run_cmd(["git", "-C", str(wt_path), "rebase", base_ref], check=False)
-                if reb.returncode != 0:
-                    conflicts = run_cmd(
-                        ["git", "-C", str(wt_path), "diff", "--name-only", "--diff-filter=U"],
-                        check=False,
-                    ).stdout.strip()
-                    raise IddError(
-                        "Rebase 到最新主线时发生冲突，请解决冲突后执行 `git rebase --continue`（或 `git rebase --abort` 放弃）：\n"
-                        f"{conflicts or reb.stderr.strip()}",
-                        exit_code=2,
-                    )
-
-    # Step B: Collect TASK snapshot & build summary BEFORE removing TASK/<issue_dir>/
-    landed_tasks: list[dict[str, Any]] = []
-    task_root = wt_path / "TASK"
-    if issue_dir and task_root.is_dir() and (task_root / issue_dir).is_dir():
-        try:
-            collected = task_status.collect(task_root, issue_dir, open_only=False)
-            if collected.get("issues"):
-                landed_tasks = list(collected["issues"][0].get("tasks", []))
-        except Exception:
-            landed_tasks = []
-
-    issue_data = forge.get_issue(issue_num, check=False) if issue_num is not None else None
-    issue_title = issue_data.get("title") if issue_data else None
-    pending_acceptance_count = 0
-    if issue_num is not None and issue_data and not no_check_acceptance:
-        _, pending_acceptance_count = check_acceptance_criteria(issue_data.get("body", ""))
-
-    suggested_title, pr_summary, commit_summary = build_issue_summaries(
-        wt_path,
-        issue_dir or branch,
-        issue_num,
-        base_ref,
-        issue_title=issue_title,
-        branch=branch,
-    )
-    final_title = title_override or suggested_title
-
-    # Step C: Clean TASK/<issue_dir>/ before merging into main (unless --keep-tasks)
-    task_issue_dir = wt_path / "TASK" / (issue_dir or "")
-    will_clean_tasks = False
-    if not keep_tasks and issue_dir and task_issue_dir.is_dir():
-        evidence_dir = task_issue_dir / "evidence"
-        evidence_files = [
-            p.relative_to(wt_path).as_posix()
-            for p in sorted(evidence_dir.rglob("*"))
-            if p.is_file()
-        ] if evidence_dir.is_dir() else []
-        if evidence_files and not force_clean_evidence:
-            listed = "\n".join(f"  - {item}" for item in evidence_files)
-            raise IddError(
-                f"检测到 `TASK/{issue_dir}/evidence/` 含附件文件，为防误删已暂停合入：\n{listed}\n"
-                "请确认后传 `--force-clean-evidence` 一并清理，或传 `--keep-tasks` 保留任务目录。",
-                exit_code=2,
-            )
-        will_clean_tasks = True
-        if not dry_run:
-            run_cmd(["git", "-C", str(wt_path), "rm", "-rf", f"TASK/{issue_dir}"])
-            run_cmd(["git", "-C", str(wt_path), "commit", "-m", f"chore: 清理已汇总的任务记录 ({issue_dir})"])
-
-    # Step D: Dry-run short-circuit
     if dry_run:
+        change = forge.get_change(branch=branch, check=False)
+        if not change:
+            raise IddError(f"分支 `{branch}` 尚无 Open {forge.mr_label}，请先运行 `idd pr` 创建。")
+        change_num = change["number"]
+        base_branch = base_branch_override or change.get("baseRefName") or repo.default_branch
+        if is_gitlab:
+            _require_gitlab_squash(forge)
+        if repo.has_origin:
+            run_cmd(["git", "-C", str(wt_path), "fetch", "origin", base_branch])
+        base_ref = _resolve_base_ref(repo, base_branch)
+        needs_rebase = False
+        if not no_rebase:
+            anc = run_cmd(["git", "-C", str(wt_path), "merge-base", "--is-ancestor", base_ref, "HEAD"], check=False)
+            needs_rebase = anc.returncode != 0
+        issue_data = forge.get_issue(issue_num, check=False) if issue_num is not None else None
+        issue_title = issue_data.get("title") if issue_data else None
+        pending_acceptance_count = 0
+        if issue_num is not None and issue_data and not no_check_acceptance:
+            _, pending_acceptance_count = check_acceptance_criteria(issue_data.get("body", ""))
+        suggested_title, _, commit_summary = build_issue_summaries(
+            wt_path,
+            issue_dir or branch,
+            issue_num,
+            base_ref,
+            issue_title=issue_title,
+            branch=branch,
+        )
+        final_title = title_override or suggested_title
+        task_issue_dir = wt_path / "TASK" / (issue_dir or "")
+        will_clean_tasks = bool(not keep_tasks and issue_dir and task_issue_dir.is_dir())
         if issue_num is None:
             acceptance_preview = "无关联远端 Issue（跳过）"
         elif no_check_acceptance:
@@ -3382,128 +3554,368 @@ def _execute_land(
         print("\n".join(lines))
         return 0
 
-    # Step E: Push local HEAD first (so remote starts async MR/PR refresh), then update PR/MR body
-    local_head = run_cmd(["git", "-C", str(wt_path), "rev-parse", "HEAD"]).stdout.strip()
-    remote_proc = run_cmd(["git", "-C", str(wt_path), "rev-parse", f"origin/{branch}"], check=False)
-    remote_head = remote_proc.stdout.strip() if remote_proc.returncode == 0 else ""
-    if local_head != remote_head:
-        run_cmd(["git", "-C", str(wt_path), "push", "--force-with-lease", "origin", "HEAD"])
-    forge.update_change(change_num, final_title, pr_summary)
+    if not create_or_update_pr:
+        initial_change = forge.get_change(branch=branch, check=False)
+        if not initial_change:
+            raise IddError(f"分支 `{branch}` 尚无 Open {forge.mr_label}，请先运行 `idd pr` 创建。")
+    if is_gitlab:
+        _require_gitlab_squash(forge)
 
-    # Step F: Wait for remote headRefOid sync, verify CI on new SHA, and Squash Merge with SHA lock
-    fresh_change = _wait_for_change_head_sync(forge, change_num, local_head, change)
-    overall = str(fresh_change.get("checks_overall") or "NONE")
-
-    if wait_ci and not auto:
-        skip_ci_grace = bool(pre_checked_head and pre_checked_head == local_head)
-        if not skip_ci_grace and overall in ("PENDING", "NONE"):
-            fresh_change, overall = _wait_for_ci_settlement(
-                forge,
-                change_num,
-                local_head,
-                fresh_change,
-                skip_initial_grace=False,
-            )
-        elif skip_ci_grace and overall == "PENDING":
-            fresh_change, overall = _wait_for_ci_settlement(
-                forge,
-                change_num,
-                local_head,
-                fresh_change,
-                skip_initial_grace=True,
-            )
-        if overall == "FAIL":
-            raise _format_ci_failure_error(forge, fresh_change, context="合入前 CI 检查")
-        if overall == "PENDING":
-            raise IddError(
-                f"等待 {forge.mr_label} {forge.mr_prefix}{change_num} CI 结算超时（当前仍为 PENDING），暂不执行合入。",
-                exit_code=3,
-            )
-        if fresh_change.get("mergeStateStatus") == "DIRTY":
-            raise IddError(
-                f"{forge.mr_label} {forge.mr_prefix}{change_num} 存在合并冲突（DIRTY），请先解决冲突并复测。",
-                exit_code=2,
-            )
-    elif not auto and overall in ("FAIL", "PENDING"):
-        raise IddError(
-            f"{forge.mr_label} {forge.mr_prefix}{change_num} 当前 CI 状态为 `{overall}`，暂不执行合入。\n"
-            f"请运行 `idd ci {issue_num or change_num} --watch` 等待/排查 CI，或传 `--wait-ci` / `--auto` 启用自动合入。",
-            exit_code=3,
-        )
-
-    before = _fetch_target_tip(wt_path, base_branch) if is_gitlab else ""
-    _merge_squash_with_retry(
-        forge,
-        change_num,
-        final_title,
-        commit_summary,
-        auto=auto,
-        expected_sha=local_head,
+    lock_cmd = "pr-auto-merge" if create_or_update_pr else "land"
+    max_attempts = (
+        1
+        if (no_rebase or auto or not is_gitlab)
+        else _get_int_env("IDD_LAND_MAX_REBASE_ATTEMPTS", LAND_MAX_REBASE_ATTEMPTS, minimum=1)
     )
-    verified_tip = _gitlab_land_result(forge, change_num, wt_path, base_branch, before, auto=auto) if is_gitlab else None
-    if auto and verified_tip is None:
-        if is_gitlab:
-            print(f"已提交 MR !{change_num} 的自动 Squash 合入请求。合入结果待确认。{change.get('url', '')}")
-        else:
-            print(
-                f"已为 {forge.mr_label} {forge.mr_prefix}{change_num} 开启自动 Squash 合并（CI 通过后将直线合入 {base_branch}，保留需求分支）：{change.get('url', '')}"
+
+    change: dict[str, Any] = {}
+    change_num: int = 0
+    base_branch = base_branch_override or repo.default_branch
+    landed_tasks: list[dict[str, Any]] = []
+    issue_data: dict[str, Any] | None = None
+    verified_tip: str | None = None
+
+    with _repo_file_lock(
+        repo.main_worktree,
+        "idd-land.lock",
+        owner_info={"command": lock_cmd, "branch": branch},
+        wait_prefix=f"仓库 `{repo.main_worktree.name}` 合入队列",
+        timeout_env="IDD_LAND_LOCK_TIMEOUT",
+    ):
+        for attempt in range(max_attempts):
+            change_lookup = forge.get_change(branch=branch, check=False)
+            if not create_or_update_pr and not change_lookup:
+                raise IddError(f"分支 `{branch}` 尚无 Open {forge.mr_label}，请先运行 `idd pr` 创建。")
+            base_branch = (
+                base_branch_override
+                or (change_lookup.get("baseRefName") if change_lookup else None)
+                or repo.default_branch
             )
-        print("本地工作树与需求分支已保留；合并完成后如需释放工作树目录可执行 `idd cleanup`。")
-        return 0
 
-    acceptance_note = ""
-    if issue_num is not None:
-        try:
-            fresh_issue = forge.get_issue(issue_num, check=False) or issue_data
-            orig_body = (fresh_issue or {}).get("body", "")
-            updated_body = orig_body
-            checked_count = 0
-            if not no_check_acceptance:
-                updated_body, checked_count = check_acceptance_criteria(orig_body)
-            if landed_tasks and _find_progress_block_span(updated_body) is not None:
-                updated_body = merge_progress_block(updated_body, build_progress_block(landed_tasks))
-            if updated_body != orig_body:
-                forge.update_issue_body(issue_num, updated_body)
-                if checked_count > 0:
-                    acceptance_note = f"已自动勾选 Issue #{issue_num} 验收标准（{checked_count} 项）"
+            if repo.has_origin:
+                run_cmd(["git", "-C", str(wt_path), "fetch", "origin", base_branch])
+            base_ref = _resolve_base_ref(repo, base_branch)
+
+            # Step A: Rebase if behind target base
+            rebased = False
+            if not no_rebase:
+                anc = run_cmd(["git", "-C", str(wt_path), "merge-base", "--is-ancestor", base_ref, "HEAD"], check=False)
+                if anc.returncode != 0:
+                    reb = run_cmd(["git", "-C", str(wt_path), "rebase", base_ref], check=False)
+                    if reb.returncode != 0:
+                        conflicts = run_cmd(
+                            ["git", "-C", str(wt_path), "diff", "--name-only", "--diff-filter=U"],
+                            check=False,
+                        ).stdout.strip()
+                        raise IddError(
+                            "Rebase 到最新主线时发生冲突，请解决冲突后执行 `git rebase --continue`（或 `git rebase --abort` 放弃）：\n"
+                            f"{conflicts or reb.stderr.strip()}",
+                            exit_code=2,
+                        )
+                    rebased = True
+
+            # Step B: Collect TASK snapshot & build summary BEFORE removing TASK/<issue_dir>/
+            landed_tasks = []
+            task_root = wt_path / "TASK"
+            if issue_dir and task_root.is_dir() and (task_root / issue_dir).is_dir():
+                try:
+                    collected = task_status.collect(task_root, issue_dir, open_only=False)
+                    if collected.get("issues"):
+                        landed_tasks = list(collected["issues"][0].get("tasks", []))
+                except Exception:
+                    landed_tasks = []
+
+            issue_data = forge.get_issue(issue_num, check=False) if issue_num is not None else None
+            issue_title = issue_data.get("title") if issue_data else None
+            suggested_title, pr_summary, commit_summary = build_issue_summaries(
+                wt_path,
+                issue_dir or branch,
+                issue_num,
+                base_ref,
+                issue_title=issue_title,
+                branch=branch,
+            )
+            final_title = title_override or suggested_title
+
+            # Step C: Clean TASK/<issue_dir>/ before merging into main (unless --keep-tasks)
+            pre_clean_head: str | None = None
+            task_issue_dir = wt_path / "TASK" / (issue_dir or "")
+            if not keep_tasks and issue_dir and task_issue_dir.is_dir():
+                _validate_evidence_guard(wt_path, issue_dir, force_clean_evidence=force_clean_evidence)
+                pre_clean_head = run_cmd(["git", "-C", str(wt_path), "rev-parse", "HEAD"]).stdout.strip()
+                run_cmd(["git", "-C", str(wt_path), "rm", "-rf", f"TASK/{issue_dir}"])
+                run_cmd(["git", "-C", str(wt_path), "commit", "-m", f"chore: 清理已汇总的任务记录 ({issue_dir})"])
+
+            rolled_back = False
+            try:
+                # Step D/E: Single push, then create/update PR/MR
+                local_head = run_cmd(["git", "-C", str(wt_path), "rev-parse", "HEAD"]).stdout.strip()
+                remote_proc = run_cmd(["git", "-C", str(wt_path), "rev-parse", f"origin/{branch}"], check=False)
+                remote_head = remote_proc.stdout.strip() if remote_proc.returncode == 0 else ""
+                if not remote_head:
+                    push_cmd = ["git", "-C", str(wt_path), "push", "-u", "origin", "HEAD"]
+                    if force_with_lease:
+                        push_cmd.append("--force-with-lease")
+                    run_cmd(push_cmd)
+                elif local_head != remote_head or rebased or force_with_lease:
+                    run_cmd(["git", "-C", str(wt_path), "push", "-u", "--force-with-lease", "origin", "HEAD"])
+
+                if create_or_update_pr:
+                    existing = change_lookup or next(
+                        iter(forge.list_changes(state="open", head_branch=branch, limit=1) or []),
+                        None,
+                    )
+                    if existing:
+                        updated = forge.update_change(existing["number"], final_title, pr_summary)
+                        url = updated.get("url") or existing.get("url", "")
+                        change_num = int(existing["number"])
+                        change = dict(existing)
+                        change["title"] = final_title
+                        change["body"] = pr_summary
+                        if url:
+                            change["url"] = url
+                        if attempt == 0:
+                            print(f"已更新 {forge.mr_label} {forge.mr_prefix}{change_num}: {url}")
+                    else:
+                        created = forge.create_change(base_branch, branch, final_title, pr_summary, draft=False)
+                        num = created.get("number")
+                        num_str = f" {forge.mr_prefix}{num}" if num is not None else ""
+                        if attempt == 0:
+                            print(f"已创建 {forge.mr_label}{num_str}: {created.get('url', '')}")
+                        change = dict(created)
+                        if num is None:
+                            looked_up = forge.get_change(branch=branch, check=False)
+                            if looked_up and looked_up.get("number") is not None:
+                                change = looked_up
+                                num = looked_up.get("number")
+                        if num is None:
+                            raise IddError(f"已提交 {forge.mr_label} 但无法解析编号，已停止自动准入与合入。")
+                        change_num = int(num)
+                    if attempt == 0:
+                        src_desc = "命令行 --auto-merge" if auto_merge_source == "cli" else "全局配置"
+                        print(
+                            f"已开启自动准入合入（来源：{src_desc}），开始等待 {forge.mr_label} {forge.mr_prefix}{change_num} CI 结算..."
+                        )
                 else:
-                    acceptance_note = f"已同步更新 Issue #{issue_num} 执行进度"
-        except (IddError, ForgeError) as exc:
-            acceptance_note = f"⚠️ 合入已成功，但自动更新 Issue #{issue_num} 验收标准失败：{exc}"
+                    assert change_lookup is not None
+                    change = change_lookup
+                    change_num = int(change["number"])
+                    forge.update_change(change_num, final_title, pr_summary)
 
-    # Step G: Retain branches & worktree by default; optionally remove worktree; fast-forward main
-    in_removed_wt = False
-    if rm_worktree:
-        in_removed_wt = caller_cwd == wt_path or wt_path in caller_cwd.parents
-        run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
+                # Step F: Wait for remote headRefOid sync, verify CI on new SHA, and Squash Merge with SHA lock
+                fresh_change = _wait_for_change_head_sync(forge, change_num, local_head, change)
+                overall = str(fresh_change.get("checks_overall") or "NONE")
 
-    main_sha = ""
-    if repo.has_origin:
-        run_cmd(["git", "-C", str(repo.main_worktree), "fetch", "origin", base_branch], check=False)
-        main_st = run_cmd(["git", "-C", str(repo.main_worktree), "status", "--porcelain"], check=False).stdout.strip()
-        main_br = run_cmd(["git", "-C", str(repo.main_worktree), "branch", "--show-current"], check=False).stdout.strip()
-        if not main_st and main_br == base_branch:
-            run_cmd(["git", "-C", str(repo.main_worktree), "merge", "--ff-only", f"origin/{base_branch}"], check=False)
-            main_sha = run_cmd(["git", "-C", str(repo.main_worktree), "rev-parse", "--short", "HEAD"], check=False).stdout.strip()
+                if wait_ci and not auto:
+                    skip_ci_grace = bool(pre_checked_head and pre_checked_head == local_head)
+                    if not skip_ci_grace and overall in ("PENDING", "NONE"):
+                        fresh_change, overall = _wait_for_ci_settlement(
+                            forge,
+                            change_num,
+                            local_head,
+                            fresh_change,
+                            skip_initial_grace=False,
+                            abort_on_behind=is_gitlab,
+                        )
+                    elif skip_ci_grace and overall == "PENDING":
+                        fresh_change, overall = _wait_for_ci_settlement(
+                            forge,
+                            change_num,
+                            local_head,
+                            fresh_change,
+                            skip_initial_grace=True,
+                            abort_on_behind=is_gitlab,
+                        )
+                    settled_state = str(fresh_change.get("state") or "OPEN")
+                    if settled_state == "MERGED":
+                        print(f"{forge.mr_label} {forge.mr_prefix}{change_num} 已处于已合并状态：{fresh_change.get('url', '')}")
+                        return 0
+                    if settled_state != "OPEN":
+                        raise IddError(
+                            f"{forge.mr_label} {forge.mr_prefix}{change_num} 状态已变为 {settled_state}，已取消自动合入。"
+                        )
+                    if is_gitlab and fresh_change.get("mergeStateStatus") == "BEHIND":
+                        forge.cancel_change_pipeline(fresh_change)
+                        if attempt + 1 < max_attempts and not no_rebase:
+                            print(
+                                f"⏳ {forge.mr_label} {forge.mr_prefix}{change_num} 因远端主线前移需要 Rebase（BEHIND），"
+                                f"已取消旧流水线并自动重变基重试（第 {attempt + 2}/{max_attempts} 轮）...",
+                                flush=True,
+                            )
+                            _rollback_task_cleanup(
+                                wt_path,
+                                pre_clean_head,
+                                forge_type=forge.forge_type,
+                                restore_remote=False,
+                            )
+                            rolled_back = True
+                            continue
+                        raise IddError(
+                            f"{forge.mr_label} {forge.mr_prefix}{change_num} 连续重变基后仍落后于 `{base_branch}`（BEHIND），"
+                            "已暂停合入（TASK 目录已保留）。",
+                            exit_code=3,
+                        )
+                    if fresh_change.get("mergeStateStatus") == "DIRTY":
+                        if is_gitlab:
+                            forge.cancel_change_pipeline(fresh_change)
+                        raise IddError(
+                            f"{forge.mr_label} {forge.mr_prefix}{change_num} 存在合并冲突（DIRTY），请先解决冲突并复测。",
+                            exit_code=2,
+                        )
+                    remote_head_oid = str(fresh_change.get("headRefOid") or "")
+                    if remote_head_oid and remote_head_oid != local_head:
+                        raise IddError(
+                            f"{forge.mr_label} {forge.mr_prefix}{change_num} 远端最新提交已变更为 `{remote_head_oid[:12]}`（本地 `{local_head[:12]}`），"
+                            "为防止合入未校验提交已暂停自动合入。"
+                        )
+                    if overall == "FAIL":
+                        ctx = "自动准入 CI 检查" if create_or_update_pr else "合入前 CI 检查"
+                        raise _format_ci_failure_error(forge, fresh_change, context=ctx)
+                    if overall == "PENDING":
+                        if create_or_update_pr:
+                            raise IddError(
+                                f"等待 {forge.mr_label} {forge.mr_prefix}{change_num} CI 结算超时（当前仍为 PENDING），"
+                                "已暂停自动合入（TASK 目录已保留）。",
+                                exit_code=3,
+                            )
+                        raise IddError(
+                            f"等待 {forge.mr_label} {forge.mr_prefix}{change_num} CI 结算超时（当前仍为 PENDING），暂不执行合入。",
+                            exit_code=3,
+                        )
+                elif not auto and overall in ("FAIL", "PENDING"):
+                    raise IddError(
+                        f"{forge.mr_label} {forge.mr_prefix}{change_num} 当前 CI 状态为 `{overall}`，暂不执行合入。\n"
+                        f"请运行 `idd ci {issue_num or change_num} --watch` 等待/排查 CI，或传 `--wait-ci` / `--auto` 启用自动合入。",
+                        exit_code=3,
+                    )
 
-    lines = [
-        f"已通过 Squash Merge 直线合入 {forge.mr_label} {forge.mr_prefix}{change_num}（无 Merge 节点）：{change.get('url', '')}",
-        f"已保留本地与远端分支：{branch}",
-    ]
-    if verified_tip:
-        lines.append(f"已核对远端 `{base_branch}` 只新增一条提交 `{verified_tip[:12]}`。")
-    if acceptance_note:
-        lines.append(acceptance_note)
-    if rm_worktree:
-        lines.append(f"已移除本地工作树：{wt_path}")
-    else:
-        lines.append(f"已保留本地工作树：{wt_path}（如需释放磁盘空间可运行 `idd cleanup`）")
-    if main_sha:
-        lines.append(f"本地 `{base_branch}` 已快进至：{main_sha}")
-    if in_removed_wt:
-        lines.append(f"当前终端位于已清理目录，请切换回主工作树：cd {repo.main_worktree}")
-    print("\n".join(lines))
-    return 0
+                if create_or_update_pr:
+                    ci_note = (
+                        "CI 检查通过（PASS）"
+                        if overall == "PASS"
+                        else "仓库未配置远端 CI（NONE），按本地测试通过放行"
+                    )
+                    print(f"{ci_note}，自动执行 Squash 直线合入...")
+
+                before = _fetch_target_tip(wt_path, base_branch) if is_gitlab else ""
+                try:
+                    _merge_squash_with_retry(
+                        forge,
+                        change_num,
+                        final_title,
+                        commit_summary,
+                        auto=auto,
+                        expected_sha=local_head,
+                    )
+                except ForgeError:
+                    latest_after_err = forge.get_change(number=change_num, check=False) if is_gitlab else None
+                    if (
+                        is_gitlab
+                        and isinstance(latest_after_err, dict)
+                        and latest_after_err.get("mergeStateStatus") == "BEHIND"
+                        and attempt + 1 < max_attempts
+                        and not no_rebase
+                    ):
+                        forge.cancel_change_pipeline(latest_after_err)
+                        print(
+                            f"⏳ {forge.mr_label} {forge.mr_prefix}{change_num} 合入前远端主线已前移（BEHIND），"
+                            f"自动重变基重试（第 {attempt + 2}/{max_attempts} 轮）...",
+                            flush=True,
+                        )
+                        _rollback_task_cleanup(
+                            wt_path,
+                            pre_clean_head,
+                            forge_type=forge.forge_type,
+                            restore_remote=False,
+                        )
+                        rolled_back = True
+                        continue
+                    raise
+
+                verified_tip = (
+                    _gitlab_land_result(forge, change_num, wt_path, base_branch, before, auto=auto)
+                    if is_gitlab
+                    else None
+                )
+                break
+            except Exception:
+                if create_or_update_pr and not rolled_back:
+                    _rollback_task_cleanup(
+                        wt_path,
+                        pre_clean_head,
+                        forge_type=forge.forge_type,
+                        restore_remote=True,
+                    )
+                raise
+
+        if auto and verified_tip is None:
+            if is_gitlab:
+                print(f"已提交 MR !{change_num} 的自动 Squash 合入请求。合入结果待确认。{change.get('url', '')}")
+            else:
+                print(
+                    f"已为 {forge.mr_label} {forge.mr_prefix}{change_num} 开启自动 Squash 合并（CI 通过后将直线合入 {base_branch}，保留需求分支）：{change.get('url', '')}"
+                )
+            print("本地工作树与需求分支已保留；合并完成后如需释放工作树目录可执行 `idd cleanup`。")
+            return 0
+
+        acceptance_note = ""
+        if issue_num is not None:
+            try:
+                fresh_issue = forge.get_issue(issue_num, check=False) or issue_data
+                orig_body = (fresh_issue or {}).get("body", "")
+                updated_body = orig_body
+                checked_count = 0
+                if not no_check_acceptance:
+                    updated_body, checked_count = check_acceptance_criteria(orig_body)
+                if landed_tasks and _find_progress_block_span(updated_body) is not None:
+                    updated_body = merge_progress_block(updated_body, build_progress_block(landed_tasks))
+                if updated_body != orig_body:
+                    forge.update_issue_body(issue_num, updated_body)
+                    if checked_count > 0:
+                        acceptance_note = f"已自动勾选 Issue #{issue_num} 验收标准（{checked_count} 项）"
+                    else:
+                        acceptance_note = f"已同步更新 Issue #{issue_num} 执行进度"
+            except (IddError, ForgeError) as exc:
+                acceptance_note = f"⚠️ 合入已成功，但自动更新 Issue #{issue_num} 验收标准失败：{exc}"
+
+        # Step G: Retain branches & worktree by default; optionally remove worktree; fast-forward main
+        in_removed_wt = False
+        main_sha = ""
+        with _repo_file_lock(
+            repo.main_worktree,
+            "idd-main-git.lock",
+            owner_info={"command": "land-post", "branch": branch},
+        ):
+            if rm_worktree:
+                in_removed_wt = caller_cwd == wt_path or wt_path in caller_cwd.parents
+                run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
+
+            if repo.has_origin:
+                run_cmd(["git", "-C", str(repo.main_worktree), "fetch", "origin", base_branch], check=False)
+                main_st = run_cmd(["git", "-C", str(repo.main_worktree), "status", "--porcelain"], check=False).stdout.strip()
+                main_br = run_cmd(["git", "-C", str(repo.main_worktree), "branch", "--show-current"], check=False).stdout.strip()
+                if not main_st and main_br == base_branch:
+                    run_cmd(["git", "-C", str(repo.main_worktree), "merge", "--ff-only", f"origin/{base_branch}"], check=False)
+                    main_sha = run_cmd(["git", "-C", str(repo.main_worktree), "rev-parse", "--short", "HEAD"], check=False).stdout.strip()
+
+        lines = [
+            f"已通过 Squash Merge 直线合入 {forge.mr_label} {forge.mr_prefix}{change_num}（无 Merge 节点）：{change.get('url', '')}",
+            f"已保留本地与远端分支：{branch}",
+        ]
+        if verified_tip:
+            lines.append(f"已核对远端 `{base_branch}` 只新增一条提交 `{verified_tip[:12]}`。")
+        if acceptance_note:
+            lines.append(acceptance_note)
+        if rm_worktree:
+            lines.append(f"已移除本地工作树：{wt_path}")
+        else:
+            lines.append(f"已保留本地工作树：{wt_path}（如需释放磁盘空间可运行 `idd cleanup`）")
+        if main_sha:
+            lines.append(f"本地 `{base_branch}` 已快进至：{main_sha}")
+        if in_removed_wt:
+            lines.append(f"当前终端位于已清理目录，请切换回主工作树：cd {repo.main_worktree}")
+        print("\n".join(lines))
+        return 0
 
 
 def cmd_land(args: argparse.Namespace) -> int:
@@ -3569,7 +3981,12 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
         if args.dry_run:
             removed.append(f"[dry-run] 将仅移除工作树目录 {wt_path}（保留分支 {branch}）— {ref}")
         else:
-            run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
+            with _repo_file_lock(
+                repo.main_worktree,
+                "idd-main-git.lock",
+                owner_info={"command": "cleanup", "branch": branch},
+            ):
+                run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
             removed.append(f"已移除工作树目录 {wt_path}（保留分支 {branch}）— {ref}")
 
     lines = list(removed)

@@ -215,12 +215,12 @@ Test: <简短命令或命令标签> — <结果>
    - **禁止擅自覆写开关或缓存旧状态**：除非用户本轮明确要求单次覆写（如“这次先别自动合入”），否则**默认直接运行无参 `idd pr` / `idd mr`，严禁擅自附加 `--no-auto-merge` 或 `--auto-merge`**；也不要凭对话早期的 `idd config` 快照决定是否自动合入（用户随时可能在开发途中通过 `idd board` 顶栏切换开关），始终交由 `idd pr` 在提 PR 当刻实时读取最新配置。
 3. **CI 校验与自愈**：
    - **当 `auto_merge` 关闭（默认）**：运行 `idd ci --watch` 等待远端 Checks / Pipeline 结束；失败时执行 `idd ci --logs` 拉取失败 Job/Run 日志并在原工作树定位修复、本地复测后推送。
-   - **当 `auto_merge` 开启**：`idd pr` 自动准入并在创建/更新后直接阻塞等待 CI 结算（失败时会保留 `TASK/`、打印失败日志并以退出码 `3` 中止，此时回到工作树定位修复并复测推送后重跑 `idd pr`）。
+   - **当 `auto_merge` 开启**：`idd pr` / `idd mr` 先在持锁前校验未完成任务、证据附件与 GitLab 合入策略，随后进入仓库级合入串行队列（`<git-common-dir>/idd-land.lock`，支持 `IDD_LAND_LOCK_TIMEOUT`），持锁执行单轮 CI 路径（rebase → 清理 `TASK/` → 单次推送并创建/更新 PR/MR → 等待单轮 CI 结算 → Squash 直线合入）。若 CI 失败、超时或存在冲突，会自动回滚清理提交并完整保留 `TASK/` 后以非 0 退出码中止；若 GitLab 在等待期间因外部合入变为 `need_rebase`（`BEHIND`），会立即取消必废流水线并在上限（`IDD_LAND_MAX_REBASE_ATTEMPTS`，默认 3）内自动重变基重试。
    - **同一 CI 失败问题严格遵守最多两轮有针对性修复的上限**；两轮后仍未变绿则将对应任务记为 `blocked` 并向用户报告，禁止死循环重试。
    - 若因其他 PR/MR 先合入导致落后或冲突，执行 `git fetch origin main && git rebase origin/main`（解冲突并复测）后 `git push --force-with-lease`。
 4. **验收状态与自动准入边界**：
    - 开关关闭时：PR / MR 创建且本地检查/CI 状态明晰后，向用户报告「PR/MR 待验收」等待确认（或按用户本轮明确授权执行 `idd land`）。
-   - 开关开启时：**不再停下来等待用户口头确认**；CI 全绿（`PASS`）或仓库未配置远端 CI（`NONE`）且本地测试已通过时，`idd pr` 会自动串行执行 `idd land`（清理 `TASK/`、Squash 直线合入、勾选 Issue 验收框并快进 `main`）。
+   - 开关开启时：**不再停下来等待用户口头确认**；CI 全绿（`PASS`）或仓库未配置远端 CI（`NONE`）且本地测试已通过时，`idd pr` 会在 `idd-land.lock` 队列内直接完成单轮 CI 校验、Squash 直线合入、勾选 Issue 验收框与快进 `main`。
    - **安全暂停红线**（开关开启时遇到以下任一情况一律暂停交由人工处理）：`--draft` PR/MR、CI 经 2 轮修复仍失败或等待超时（退出码 `3`）、Rebase 冲突（退出码 `2`）、`TASK/<issue>/` 含未完成任务（退出码 `2`）、`TASK/<issue>/evidence/` 含附件（退出码 `2`）。
 
 ---
@@ -229,18 +229,18 @@ Test: <简短命令或命令标签> — <结果>
 
 为了保证 `main` 分支永远是一条干净的直线，且主干不堆积已完成的 `TASK/` 档案，合入阶段统一遵循：
 
-1. **GitHub / 自建 GitLab 线性合入（推荐默认）**：用户验收确认、开启了 `auto_merge` 开关并满足安全边界，或本轮具备明确自动合入授权且 CI 全绿后，执行（开关开启时 `idd pr` 已自动串联调用）：
+1. **GitHub / 自建 GitLab 线性合入（推荐默认）**：用户验收确认、开启了 `auto_merge` 开关并满足安全边界，或本轮具备明确自动合入授权且 CI 全绿后，执行（开关开启时 `idd pr` 已自动串联完成）：
    ```bash
    idd land <issue#>
    ```
    `idd land` 会自动完成：
-   - 核对工作树与分支。GitLab 先确认项目启用了快进合并和强制 Squash。随后 `git fetch` 并自动 rebase 到最新 `origin/main`；
+   - 先做未完成 `TASK` 与 `evidence/` 快速拦截及 GitLab 策略核对，再获取仓库级合入锁（`<git-common-dir>/idd-land.lock`）串行排队，避免多会话互相打废 Fast-Forward 资格；随后 `git fetch` 并自动 rebase 到最新 `origin/main`；
    - 在删除 `TASK/<issue>/` 前，先生成结构化 Markdown 写入 PR/MR 描述，并生成零 Markdown 纯文本写入 Squash Commit 正文（均含 `Closes #<id>` 与所有 `TASK-XX` / `Test:`）；
    - 执行 `git rm -rf TASK/<issue>` 并提交清理（若 `evidence/` 含附件且未传 `--force-clean-evidence` 会安全暂停提示）；
-   - 以**单条 Squash 提交**直线合入 `main`（GitHub 走 Squash Merge；GitLab 走 Squash + Fast-Forward，自动关闭 Issue 并**默认保留远端与本地需求分支**）；
-   - GitLab 合入后根据 MR 结果和远端目标分支确认只新增一条提交。自动合入仍在等待时报告待确认状态；
+   - 以**单条 Squash 提交**直线合入 `main`（GitHub 走 Squash Merge；GitLab 走 Squash + Fast-Forward，自动关闭 Issue 并**默认保留远端与本地需求分支**；若等待 CI 期间遇到 `BEHIND` 自动取消废流水线并重变基重试）；
+   - GitLab 合入后根据 MR 结果和远端目标分支确认本次 MR 对应单父直线提交。自动合入仍在等待时报告待确认状态；
    - 合入真正完成后（非 `--auto` 挂起），默认自动勾选 Issue 正文「验收标准」节内的未勾选复选框并保底刷新进度块（可用 `--no-check-acceptance` 跳过）；
-   - **默认保留本地 Worktree**（只有显式传入 `--rm-worktree` 时才顺带移除工作树目录，分支依然保留），并尝试将干净的主工作树 `main` 快进至最新。
+   - **默认保留本地 Worktree**（只有显式传入 `--rm-worktree` 时才顺带移除工作树目录，分支依然保留），并持有 `idd-main-git.lock` 安全将干净的主工作树 `main` 快进至最新。
 2. **释放本地工作树空间（按需手动）**：平时保留工作树便于回顾上下文；需要清理磁盘时手动运行 `idd cleanup`——它只删除工作树目录（**绝不删除分支**），且仅当工作区干净**且**本地 `HEAD` 与已合入 PR/MR 的 `headRefOid` 完全一致时才清理，避免误删合入后的本地新增提交。
 3. **无远端 / 纯本地仓库回退**：按照[Issue 与 Git 协作流 · 纯本地回退](references/git-issue-workflow.md#纯本地无远端回退流程)在临时集成分支完成压缩、删除 `TASK/<issue>/`、变基并与主线 `git merge --ff-only`。
 4. 补录历史任务仍先读[补录流程](references/task-records.md#事后补录)，不得伪造事前记录。

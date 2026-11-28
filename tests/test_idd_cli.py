@@ -1654,6 +1654,8 @@ class TestIddCli(unittest.TestCase):
             self.assertFalse((h.repo / "TASK/42-export-csv").exists())
             final_state = h.load_state()
             self.assertEqual(final_state["prs"]["10"]["state"], "MERGED")
+            # Single-pass CI: cleanup happened before PR creation so cleanup_pending_polls was never triggered via pr edit.
+            self.assertEqual(final_state.get("cleanup_pending_polls"), 2)
             self.assertIn("- [x] 支持导出 CSV", final_state["issues"]["42"]["body"])
 
         # Case 2: Repo with no remote CI (NONE) allows auto-merge
@@ -1707,6 +1709,7 @@ class TestIddCli(unittest.TestCase):
             self.assertEqual(fail_res.returncode, 3)
             self.assertIn("AssertionError: boom", fail_res.stderr)
             self.assertTrue((wt / "TASK/42-export-csv").is_dir(), "TASK/ must remain intact when CI fails")
+            self.assertNotIn("清理已汇总的任务记录", subprocess.check_output(["git", "-C", str(wt), "log", "-1", "--pretty=%s"], text=True))
             self.assertEqual(h.load_state()["prs"]["10"]["state"], "OPEN")
 
             # Fix code, turn CI green, re-run `idd pr` -> updates PR and auto-lands
@@ -2280,6 +2283,136 @@ class TestIddCli(unittest.TestCase):
                 land_ok = h.run_idd("land", "42")
                 self.assertIn("Squash Merge 直线合入", land_ok.stdout)
                 self.assertEqual(h.load_state()["issues"]["42"]["state"], "CLOSED")
+
+    def test_repo_file_lock_reentrant_cross_process_wait_and_timeout(self) -> None:
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        import idd_cli
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "demo"
+            repo.mkdir()
+            subprocess.run(["git", "-C", str(repo), "init"], check=True, capture_output=True)
+            wt = root / "wt-1"
+            subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", "feat/1-a", str(wt)], check=True, capture_output=True)
+
+            # Worktree resolves to the same common git dir lock path as main repo, and supports reentrant acquisition.
+            with idd_cli._repo_file_lock(wt, "idd-test.lock", owner_info={"branch": "feat/1-a"}) as lp1:
+                with idd_cli._repo_file_lock(repo, "idd-test.lock", owner_info={"branch": "feat/1-a"}) as lp2:
+                    self.assertEqual(lp1, lp2)
+                    self.assertTrue(lp1.is_file())
+                    owner = json.loads(lp1.read_text(encoding="utf-8"))
+                    self.assertEqual(owner["branch"], "feat/1-a")
+
+                # While held by parent process, a second process trying with short timeout exits with code 3 and prints holder.
+                child_script = (
+                    "import os, sys\n"
+                    "from pathlib import Path\n"
+                    "sys.path.insert(0, sys.argv[1])\n"
+                    "import idd_cli\n"
+                    "try:\n"
+                    "    with idd_cli._repo_file_lock(Path(sys.argv[2]), 'idd-test.lock', wait_prefix='测试队列', timeout_env='IDD_TEST_LOCK_TIMEOUT'):\n"
+                    "        pass\n"
+                    "except idd_cli.IddError as exc:\n"
+                    "    print(f'ERR:{exc.exit_code}:{exc}', file=sys.stderr)\n"
+                    "    sys.exit(exc.exit_code)\n"
+                )
+                env = dict(os.environ)
+                env["IDD_TEST_LOCK_TIMEOUT"] = "0.15"
+                child = subprocess.run(
+                    [sys.executable, "-c", child_script, str(SCRIPTS_DIR), str(repo)],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(child.returncode, 3)
+                self.assertIn("排队等待中", child.stdout)
+                self.assertIn("feat/1-a", child.stdout)
+                self.assertIn("ERR:3:", child.stderr)
+
+            # After release, child acquires immediately.
+            env2 = dict(os.environ)
+            env2["IDD_TEST_LOCK_TIMEOUT"] = "1.0"
+            child_ok = subprocess.run(
+                [sys.executable, "-c", child_script, str(SCRIPTS_DIR), str(wt)],
+                env=env2,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(child_ok.returncode, 0, child_ok.stderr)
+
+    def test_concurrent_pr_auto_merge_serializes_via_land_lock(self) -> None:
+        fast_env = {
+            "IDD_CI_GRACE_SECONDS": "0",
+            "IDD_CI_POLL_INTERVAL": "0.02",
+            "IDD_LAND_SYNC_INTERVAL": "0.01",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            h = GitHubHarness(Path(tmp))
+            h.state["issues"]["43"] = {
+                "number": 43,
+                "title": "feat(auth): 支持令牌刷新",
+                "body": "## 验收标准\n\n- [ ] 支持令牌刷新\n",
+                "labels": ["feat"],
+                "state": "OPEN",
+                "url": "https://github.com/acme/demo/issues/43",
+            }
+            h.state["default_checks"] = [{"name": "ci / test", "status": "IN_PROGRESS", "conclusion": ""}]
+            h.state["pending_check_polls"] = 4
+            h.state["settled_checks"] = [{"name": "ci / test", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+            h.save_state()
+
+            h.run_idd("config", "auto-merge", "on", extra_env=fast_env)
+            wt1 = Path(json.loads(h.run_idd("start", "42", "--slug", "export-csv", "--json", extra_env=fast_env).stdout)["worktree"])
+            wt2 = Path(json.loads(h.run_idd("start", "43", "--slug", "token-refresh", "--json", extra_env=fast_env).stdout)["worktree"])
+            for wt, slug, fname, msg in (
+                (wt1, "42-export-csv", "export.py", "feat: 导出 CSV"),
+                (wt2, "43-token-refresh", "auth.py", "feat: 刷新令牌"),
+            ):
+                subprocess.run(["git", "-C", str(wt), "config", "user.name", "Tester"], check=True)
+                subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.com"], check=True)
+                self._write_task(wt, slug, 1, msg, "done")
+                (wt / fname).write_text("ok = True\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+                subprocess.run(["git", "-C", str(wt), "commit", "-m", msg], check=True, capture_output=True)
+
+            env = dict(os.environ)
+            env["PATH"] = f"{h.bin_dir}{os.pathsep}{env.get('PATH', '')}"
+            env["FAKE_GH_STATE"] = str(h.state_file)
+            env["FAKE_GH_ORIGIN"] = str(h.origin)
+            env["IDD_NO_AUTO_UPDATE"] = "1"
+            env["IDD_CONFIG_DIR"] = str(h.root / "idd-config")
+            env.pop("IDD_WORKTREE_ROOT", None)
+            env.update(fast_env)
+            p1 = subprocess.Popen(
+                [sys.executable, str(IDD_BIN), "pr"],
+                cwd=str(wt1),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            p2 = subprocess.Popen(
+                [sys.executable, str(IDD_BIN), "pr"],
+                cwd=str(wt2),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            out1, err1 = p1.communicate(timeout=30)
+            out2, err2 = p2.communicate(timeout=30)
+            self.assertEqual(p1.returncode, 0, err1 or out1)
+            self.assertEqual(p2.returncode, 0, err2 or out2)
+            self.assertIn("排队等待中", out1 + out2)
+            self.assertTrue((h.repo / "export.py").is_file())
+            self.assertTrue((h.repo / "auth.py").is_file())
+            self.assertFalse((h.repo / "TASK/42-export-csv").exists())
+            self.assertFalse((h.repo / "TASK/43-token-refresh").exists())
+            final_state = h.load_state()
+            self.assertEqual(final_state["issues"]["42"]["state"], "CLOSED")
+            self.assertEqual(final_state["issues"]["43"]["state"], "CLOSED")
 
 
 if __name__ == "__main__":

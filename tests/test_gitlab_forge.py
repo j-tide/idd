@@ -65,6 +65,12 @@ class MockGitLabState:
         self.pending_pipeline_polls: int = 0
         self.cleanup_pipeline_polls: int = 0
         self.current_pipeline_running: bool = False
+        self.mr_create_calls: int = 0
+        self.mr_put_calls: int = 0
+        self.canceled_pipeline_ids: list[int] = []
+        self.forced_detailed_merge_status: str | None = None
+        self.forced_has_conflicts: bool = False
+        self.detailed_status_after_pending_polls: str | None = None
 
     def origin_sha(self, branch: str) -> str:
         proc = subprocess.run(
@@ -74,15 +80,10 @@ class MockGitLabState:
         )
         return proc.stdout.strip() if proc.returncode == 0 else ""
 
-    def perform_ff_squash(self, mr: dict, message: str) -> str:
-        head = mr["source_branch"]
-        base = mr["target_branch"]
+    def advance_branch_tip(self, branch: str, message: str, *, tree_ref: str | None = None) -> str:
+        parent = self.origin_sha(branch)
         tree = subprocess.check_output(
-            ["git", "--git-dir", str(self.origin_dir), "rev-parse", f"refs/heads/{head}^{{tree}}"],
-            text=True,
-        ).strip()
-        parent = subprocess.check_output(
-            ["git", "--git-dir", str(self.origin_dir), "rev-parse", f"refs/heads/{base}"],
+            ["git", "--git-dir", str(self.origin_dir), "rev-parse", tree_ref or f"{parent}^{{tree}}"],
             text=True,
         ).strip()
         env = dict(os.environ)
@@ -90,13 +91,18 @@ class MockGitLabState:
         env["GIT_AUTHOR_EMAIL"] = "gitlab@corp.local"
         env["GIT_COMMITTER_NAME"] = "GitLab"
         env["GIT_COMMITTER_EMAIL"] = "gitlab@corp.local"
-        squash_sha = subprocess.check_output(
+        sha = subprocess.check_output(
             ["git", "--git-dir", str(self.origin_dir), "commit-tree", tree, "-p", parent, "-m", message],
             text=True,
             env=env,
         ).strip()
-        subprocess.check_call(["git", "--git-dir", str(self.origin_dir), "update-ref", f"refs/heads/{base}", squash_sha])
-        return squash_sha
+        subprocess.check_call(["git", "--git-dir", str(self.origin_dir), "update-ref", f"refs/heads/{branch}", sha])
+        return sha
+
+    def perform_ff_squash(self, mr: dict, message: str) -> str:
+        head = mr["source_branch"]
+        base = mr["target_branch"]
+        return self.advance_branch_tip(base, message, tree_ref=f"refs/heads/{head}^{{tree}}")
 
 
 def make_handler(state: MockGitLabState):
@@ -190,7 +196,8 @@ def make_handler(state: MockGitLabState):
                     if oid:
                         mr["sha"] = oid
                         mr.setdefault("diff_refs", {})["head_sha"] = oid
-                    mr["detailed_merge_status"] = "mergeable"
+                    mr["detailed_merge_status"] = state.forced_detailed_merge_status or "mergeable"
+                    mr["has_conflicts"] = state.forced_has_conflicts
                     if state.pending_pipeline_polls > 0:
                         state.pending_pipeline_polls -= 1
                         state.current_pipeline_running = True
@@ -198,6 +205,8 @@ def make_handler(state: MockGitLabState):
                     else:
                         state.current_pipeline_running = False
                         mr["head_pipeline"]["status"] = state.jobs[701]["status"]
+                        if state.detailed_status_after_pending_polls:
+                            mr["detailed_merge_status"] = state.detailed_status_after_pending_polls
                 self._send_json(200, mr)
                 return
 
@@ -246,6 +255,7 @@ def make_handler(state: MockGitLabState):
                 return
 
             if path == f"{proj_prefix}/merge_requests":
+                state.mr_create_calls += 1
                 iid = state.next_mr_iid
                 state.next_mr_iid += 1
                 src = body["source_branch"]
@@ -262,14 +272,25 @@ def make_handler(state: MockGitLabState):
                     "has_conflicts": False,
                     "detailed_merge_status": "mergeable",
                     "head_pipeline": {
-                        "id": 500,
+                        "id": 500 + state.mr_create_calls,
                         "status": state.jobs[701]["status"],
-                        "web_url": f"{state.base_url}/dept/sub/demo/-/pipelines/500",
+                        "web_url": f"{state.base_url}/dept/sub/demo/-/pipelines/{500 + state.mr_create_calls}",
                     },
                     "web_url": f"{state.base_url}/dept/sub/demo/-/merge_requests/{iid}",
                 }
                 state.mrs[iid] = mr
                 self._send_json(201, mr)
+                return
+
+            m_cancel = re.fullmatch(rf"{re.escape(proj_prefix)}/pipelines/(\d+)/cancel", path)
+            if m_cancel:
+                pid = int(m_cancel.group(1))
+                state.canceled_pipeline_ids.append(pid)
+                state.current_pipeline_running = False
+                for mr in state.mrs.values():
+                    if (mr.get("head_pipeline") or {}).get("id") == pid:
+                        mr["head_pipeline"]["status"] = "canceled"
+                self._send_json(200, {"id": pid, "status": "canceled"})
                 return
 
             self._send_json(404, {"message": f"Unhandled POST {path}"})
@@ -304,6 +325,7 @@ def make_handler(state: MockGitLabState):
             if m_mr:
                 iid = int(m_mr.group(1))
                 mr = state.mrs[iid]
+                state.mr_put_calls += 1
                 if "title" in body:
                     mr["title"] = body["title"]
                 if "description" in body:
@@ -999,17 +1021,22 @@ class TestGitLabForge(unittest.TestCase):
                 self.assertEqual(fail_mr.returncode, 3)
                 self.assertIn("AssertionError: csv header mismatch", fail_mr.stderr)
                 self.assertTrue((wt / "TASK/1-async-land").is_dir())
+                self.assertNotIn("清理已汇总的任务记录", subprocess.check_output(["git", "-C", str(wt), "log", "-1", "--pretty=%s"], text=True))
                 self.assertEqual(state.mrs[10]["state"], "opened")
 
-                # Fix pipeline: running -> success (both initial MR and cleanup commit), then auto-lands
+                # Fix pipeline: running -> success in a single pass (cleanup commit pushed before MR create), then auto-lands
                 state.jobs[701]["status"] = "success"
                 state.pending_pipeline_polls = 2
                 state.cleanup_pipeline_polls = 2
+                state.mr_create_calls = 0
+                state.mr_put_calls = 0
                 before = state.origin_sha("main")
                 mr_res = run_idd("mr", "1")
                 self.assertIn("已开启自动准入合入（来源：全局配置）", mr_res.stdout)
                 self.assertIn("已通过 Squash Merge 直线合入 MR !10", mr_res.stdout)
                 self.assertIn("已自动勾选 Issue #1 验收标准（1 项）", mr_res.stdout)
+                self.assertEqual(state.mr_create_calls, 0)
+                self.assertEqual(state.mr_put_calls, 1)
                 after = state.origin_sha("main")
                 self.assertEqual(
                     subprocess.check_output(["git", "-C", str(repo), "rev-list", "--parents", "-n", "1", "main"], text=True).split(),
@@ -1017,6 +1044,176 @@ class TestGitLabForge(unittest.TestCase):
                 )
                 self.assertEqual(state.mrs[10]["state"], "merged")
                 self.assertIn("- [x] 确认合入", state.issues[1]["description"])
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_wait_for_ci_settlement_aborts_on_behind_or_dirty_and_cancels_pipeline(self) -> None:
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        import idd_cli
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, wt, state, server, env, _ = self._setup_gitlab_mr_repo(tmp)
+            try:
+                old_env = {k: os.environ.get(k) for k in ("IDD_CONFIG_DIR", "IDD_CI_GRACE_SECONDS", "IDD_CI_POLL_INTERVAL", "IDD_CI_WAIT_TIMEOUT", "IDD_LAND_SYNC_INTERVAL")}
+                os.environ["IDD_CONFIG_DIR"] = env["IDD_CONFIG_DIR"]
+                os.environ["IDD_CI_GRACE_SECONDS"] = "0"
+                os.environ["IDD_CI_POLL_INTERVAL"] = "0.01"
+                os.environ["IDD_CI_WAIT_TIMEOUT"] = "10.0"
+                os.environ["IDD_LAND_SYNC_INTERVAL"] = "0.01"
+                try:
+                    gl_forge = forge.get_forge(wt)
+                    state.jobs[701]["status"] = "success"
+                    state.pending_pipeline_polls = 50
+                    state.forced_detailed_merge_status = "need_rebase"
+                    head_sha = subprocess.check_output(["git", "-C", str(wt), "rev-parse", "HEAD"], text=True).strip()
+                    fallback = gl_forge.get_change(number=10)
+                    assert fallback is not None
+
+                    settled, overall = idd_cli._wait_for_ci_settlement(
+                        gl_forge,
+                        10,
+                        head_sha,
+                        fallback,
+                        abort_on_behind=True,
+                    )
+                    self.assertEqual(settled["mergeStateStatus"], "BEHIND")
+                    self.assertEqual(overall, "PENDING")
+                    self.assertLess(state.mr_get_calls, 10)
+                    self.assertTrue(gl_forge.cancel_change_pipeline(settled))
+                    self.assertEqual(state.canceled_pipeline_ids, [501])
+
+                    state.forced_detailed_merge_status = "conflict"
+                    state.forced_has_conflicts = True
+                    settled_dirty, _ = idd_cli._wait_for_ci_settlement(
+                        gl_forge,
+                        10,
+                        head_sha,
+                        fallback,
+                        abort_on_behind=False,
+                    )
+                    self.assertEqual(settled_dirty["mergeStateStatus"], "DIRTY")
+                finally:
+                    for k, v in old_env.items():
+                        if v is None:
+                            os.environ.pop(k, None)
+                        else:
+                            os.environ[k] = v
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_gitlab_land_result_accepts_linear_commit_when_concurrent_merge_advances_tip(self) -> None:
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        import idd_cli
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, wt, state, server, env, _ = self._setup_gitlab_mr_repo(tmp)
+            try:
+                old_cfg = os.environ.get("IDD_CONFIG_DIR")
+                os.environ["IDD_CONFIG_DIR"] = env["IDD_CONFIG_DIR"]
+                try:
+                    gl_forge = forge.get_forge(wt)
+                    before = state.origin_sha("main")
+                    mr = state.mrs[10]
+                    squash_sha = state.perform_ff_squash(mr, "feat: concurrent first")
+                    mr["squash_commit_sha"] = squash_sha
+                    mr["state"] = "merged"
+
+                    # Simulate a second MR landing right after ours before _fetch_target_tip runs.
+                    state.advance_branch_tip("main", "feat: concurrent second", tree_ref=f"{squash_sha}^{{tree}}")
+
+                    verified = idd_cli._gitlab_land_result(gl_forge, 10, wt, "main", before, auto=False)
+                    self.assertEqual(verified, squash_sha)
+                finally:
+                    if old_cfg is None:
+                        os.environ.pop("IDD_CONFIG_DIR", None)
+                    else:
+                        os.environ["IDD_CONFIG_DIR"] = old_cfg
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_gitlab_mr_auto_rebase_when_behind_and_concurrent_mr_serialization(self) -> None:
+        # Case 1: BEHIND during CI poll cancels stale pipeline, auto-rebases, and lands cleanly.
+        with tempfile.TemporaryDirectory() as tmp:
+            _, repo, wt, state, server, env, run_idd = self._setup_gitlab_mr_repo(tmp)
+            try:
+                env["IDD_CI_GRACE_SECONDS"] = "0"
+                env["IDD_CI_POLL_INTERVAL"] = "0.02"
+                env["IDD_LAND_SYNC_INTERVAL"] = "0.01"
+
+                run_idd("config", "auto-merge", "on")
+                state.jobs[701]["status"] = "success"
+                state.pending_pipeline_polls = 10
+                state.forced_detailed_merge_status = "need_rebase"
+
+                # Advance origin/main externally so rebase is required.
+                state.advance_branch_tip("main", "feat: upstream change")
+
+                def _clear_behind() -> None:
+                    while not state.canceled_pipeline_ids:
+                        threading.Event().wait(0.02)
+                    state.forced_detailed_merge_status = None
+                    state.pending_pipeline_polls = 2
+
+                t = threading.Thread(target=_clear_behind, daemon=True)
+                t.start()
+                res = run_idd("mr", "1")
+                t.join(timeout=5)
+                self.assertIn("因远端主线前移需要 Rebase（BEHIND）", res.stdout)
+                self.assertIn("已通过 Squash Merge 直线合入 MR !10", res.stdout)
+                self.assertTrue(state.canceled_pipeline_ids)
+                self.assertEqual(state.mrs[10]["state"], "merged")
+                self.assertFalse((repo / "TASK/1-async-land").exists())
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        # Case 2: Two parallel worktrees calling `idd mr` on the same GitLab repo serialize via idd-land.lock.
+        with tempfile.TemporaryDirectory() as tmp:
+            _, repo, wt1, state, server, env, run_idd = self._setup_gitlab_mr_repo(tmp)
+            try:
+                env["IDD_CI_GRACE_SECONDS"] = "0"
+                env["IDD_CI_POLL_INTERVAL"] = "0.02"
+                env["IDD_LAND_SYNC_INTERVAL"] = "0.01"
+
+                state.issues[2] = {
+                    "iid": 2,
+                    "title": "feat(ui): 第二并行需求",
+                    "description": "## 验收标准\n\n- [ ] 完成第二需求\n",
+                    "labels": ["feat"],
+                    "state": "opened",
+                    "web_url": f"{state.base_url}/dept/sub/demo/-/issues/2",
+                }
+                wt2 = Path(json.loads(run_idd("start", "2", "--slug", "second-task", "--json").stdout)["worktree"])
+                subprocess.run(["git", "-C", str(wt2), "config", "user.name", "Tester"], check=True)
+                subprocess.run(["git", "-C", str(wt2), "config", "user.email", "test@example.com"], check=True)
+                tdir2 = wt2 / "TASK/2-second-task"
+                tdir2.mkdir(parents=True)
+                (tdir2 / "TASK-01-impl.md").write_text("# TASK-01：第二需求\n\n- Issue: #2\n- Status: done\n- Depends on: none\n- Test: pytest\n", encoding="utf-8")
+                (wt2 / "second.py").write_text("ok = True\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(wt2), "add", "."], check=True)
+                subprocess.run(["git", "-C", str(wt2), "commit", "-m", "feat: 第二需求"], check=True, capture_output=True)
+
+                run_idd("config", "auto-merge", "on")
+                state.jobs[701]["status"] = "success"
+                state.pending_pipeline_polls = 3
+
+                p1 = subprocess.Popen([sys.executable, str(IDD_BIN), "mr"], cwd=str(wt1), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                p2 = subprocess.Popen([sys.executable, str(IDD_BIN), "mr"], cwd=str(wt2), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                out1, err1 = p1.communicate(timeout=30)
+                out2, err2 = p2.communicate(timeout=30)
+                self.assertEqual(p1.returncode, 0, err1 or out1)
+                self.assertEqual(p2.returncode, 0, err2 or out2)
+                self.assertIn("排队等待中", out1 + out2)
+                self.assertEqual(state.canceled_pipeline_ids, [])
+                self.assertTrue((repo / "app.py").is_file())
+                self.assertTrue((repo / "second.py").is_file())
+                self.assertEqual(state.issues[1]["state"], "closed")
+                self.assertEqual(state.issues[2]["state"], "closed")
             finally:
                 server.shutdown()
                 server.server_close()

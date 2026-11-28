@@ -4,6 +4,11 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
 import json
 import os
 from pathlib import Path
@@ -14,7 +19,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any
+from typing import Any, Iterator
 import urllib.parse
 
 from forge import (
@@ -97,16 +102,36 @@ def _save_config_unlocked(data: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+@contextmanager
+def _file_lock(lock_path: Path) -> Iterator[None]:
+    """Acquire an advisory cross-process exclusive file lock when supported by the OS."""
+    if fcntl is None:
+        yield
+        return
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+
+
 def load_global_config() -> dict[str, Any]:
     """Load global IDD configuration (`~/.config/idd/config.json`) with safe defaults."""
     with _CONFIG_LOCK:
-        return _read_raw_config_unlocked()
+        with _file_lock(get_config_dir() / ".config.lock"):
+            return _read_raw_config_unlocked()
 
 
 def save_global_config(data: dict[str, Any]) -> dict[str, Any]:
     """Atomically persist global IDD configuration."""
     with _CONFIG_LOCK:
-        return _save_config_unlocked(data)
+        with _file_lock(get_config_dir() / ".config.lock"):
+            return _save_config_unlocked(data)
 
 
 def get_global_auto_merge() -> bool:
@@ -117,9 +142,10 @@ def get_global_auto_merge() -> bool:
 def set_global_auto_merge(enabled: bool) -> dict[str, Any]:
     """Update and persist the global `auto_merge` switch."""
     with _CONFIG_LOCK:
-        cfg = _read_raw_config_unlocked()
-        cfg["auto_merge"] = bool(enabled)
-        return _save_config_unlocked(cfg)
+        with _file_lock(get_config_dir() / ".config.lock"):
+            cfg = _read_raw_config_unlocked()
+            cfg["auto_merge"] = bool(enabled)
+            return _save_config_unlocked(cfg)
 
 
 def _run_git_ro(cwd: Path, args: list[str], *, timeout: float = 10.0) -> subprocess.CompletedProcess[str] | None:
@@ -402,42 +428,43 @@ def _copy_repo_init_fields(src: dict[str, Any], dst: dict[str, Any]) -> None:
 def load_registered_repos(*, prune_missing: bool = True) -> list[dict[str, Any]]:
     """Load registered repository entries sorted by recency, optionally pruning stale paths."""
     with _REPOS_LOCK:
-        raw_items = _read_raw_repos_unlocked()
-        seen: dict[str, dict[str, Any]] = {}
-        dirty = False
+        with _file_lock(get_config_dir() / ".repos.lock"):
+            raw_items = _read_raw_repos_unlocked()
+            seen: dict[str, dict[str, Any]] = {}
+            dirty = False
 
-        for item in raw_items:
-            raw_path = item["path"].strip()
-            try:
-                resolved = Path(raw_path).expanduser().resolve()
-            except OSError:
-                dirty = True
-                continue
-            key = str(resolved)
-            exists_git = resolved.is_dir() and (resolved / ".git").exists()
-            if prune_missing and not exists_git:
-                dirty = True
-                continue
-            ts = float(item.get("last_seen_at") or 0.0)
-            prev = seen.get(key)
-            if prev is not None:
-                dirty = True
-                if ts <= float(prev.get("last_seen_at") or 0.0):
+            for item in raw_items:
+                raw_path = item["path"].strip()
+                try:
+                    resolved = Path(raw_path).expanduser().resolve()
+                except OSError:
+                    dirty = True
                     continue
-            elif key != raw_path:
-                dirty = True
-            entry_out: dict[str, Any] = {
-                "path": key,
-                "name": str(item.get("name") or resolved.name),
-                "last_seen_at": ts,
-            }
-            _copy_repo_init_fields(item, entry_out)
-            seen[key] = entry_out
+                key = str(resolved)
+                exists_git = resolved.is_dir() and (resolved / ".git").exists()
+                if prune_missing and not exists_git:
+                    dirty = True
+                    continue
+                ts = float(item.get("last_seen_at") or 0.0)
+                prev = seen.get(key)
+                if prev is not None:
+                    dirty = True
+                    if ts <= float(prev.get("last_seen_at") or 0.0):
+                        continue
+                elif key != raw_path:
+                    dirty = True
+                entry_out: dict[str, Any] = {
+                    "path": key,
+                    "name": str(item.get("name") or resolved.name),
+                    "last_seen_at": ts,
+                }
+                _copy_repo_init_fields(item, entry_out)
+                seen[key] = entry_out
 
-        entries = sorted(seen.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
-        if dirty:
-            _save_repos_unlocked(entries)
-        return entries
+            entries = sorted(seen.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
+            if dirty:
+                _save_repos_unlocked(entries)
+            return entries
 
 
 def register_repo(main_worktree: Path, *, min_touch_interval: float = 0.0) -> dict[str, Any]:
@@ -448,41 +475,42 @@ def register_repo(main_worktree: Path, *, min_touch_interval: float = 0.0) -> di
     entry: dict[str, Any] = {"path": key, "name": resolved.name, "last_seen_at": now}
 
     with _REPOS_LOCK:
-        raw_items = _read_raw_repos_unlocked()
-        by_path: dict[str, dict[str, Any]] = {}
-        needs_cleanup = False
-        for item in raw_items:
-            try:
-                p = Path(item["path"]).expanduser().resolve()
-            except OSError:
-                needs_cleanup = True
-                continue
-            if p.is_dir() and (p / ".git").exists():
-                p_str = str(p)
-                if p_str != item["path"] or p_str in by_path:
+        with _file_lock(get_config_dir() / ".repos.lock"):
+            raw_items = _read_raw_repos_unlocked()
+            by_path: dict[str, dict[str, Any]] = {}
+            needs_cleanup = False
+            for item in raw_items:
+                try:
+                    p = Path(item["path"]).expanduser().resolve()
+                except OSError:
                     needs_cleanup = True
-                rec: dict[str, Any] = {
-                    "path": p_str,
-                    "name": str(item.get("name") or p.name),
-                    "last_seen_at": float(item.get("last_seen_at") or 0.0),
-                }
-                _copy_repo_init_fields(item, rec)
-                by_path[p_str] = rec
-            else:
-                needs_cleanup = True
-        prev_entry = by_path.get(key)
-        if (
-            prev_entry is not None
-            and not needs_cleanup
-            and min_touch_interval > 0.0
-            and (now - float(prev_entry.get("last_seen_at") or 0.0)) < min_touch_interval
-        ):
-            return dict(prev_entry)
-        if prev_entry:
-            _copy_repo_init_fields(prev_entry, entry)
-        by_path[key] = entry
-        entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
-        _save_repos_unlocked(entries)
+                    continue
+                if p.is_dir() and (p / ".git").exists():
+                    p_str = str(p)
+                    if p_str != item["path"] or p_str in by_path:
+                        needs_cleanup = True
+                    rec: dict[str, Any] = {
+                        "path": p_str,
+                        "name": str(item.get("name") or p.name),
+                        "last_seen_at": float(item.get("last_seen_at") or 0.0),
+                    }
+                    _copy_repo_init_fields(item, rec)
+                    by_path[p_str] = rec
+                else:
+                    needs_cleanup = True
+            prev_entry = by_path.get(key)
+            if (
+                prev_entry is not None
+                and not needs_cleanup
+                and min_touch_interval > 0.0
+                and (now - float(prev_entry.get("last_seen_at") or 0.0)) < min_touch_interval
+            ):
+                return dict(prev_entry)
+            if prev_entry:
+                _copy_repo_init_fields(prev_entry, entry)
+            by_path[key] = entry
+            entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
+            _save_repos_unlocked(entries)
     return entry
 
 
@@ -490,7 +518,9 @@ def get_repo_init_meta(main_worktree: Path) -> dict[str, Any]:
     """Return persisted repo merge-policy status `{'state', 'mismatches', 'error'}`."""
     key = str(main_worktree.expanduser().resolve())
     with _REPOS_LOCK:
-        for item in _read_raw_repos_unlocked():
+        with _file_lock(get_config_dir() / ".repos.lock"):
+            raw_items = _read_raw_repos_unlocked()
+        for item in raw_items:
             try:
                 p = str(Path(item["path"]).expanduser().resolve())
             except OSError:
@@ -525,42 +555,43 @@ def set_repo_init_meta(
     now = time.time()
     normalized = "pending" if state == "prompted" else state
     with _REPOS_LOCK:
-        raw_items = _read_raw_repos_unlocked()
-        by_path: dict[str, dict[str, Any]] = {}
-        for item in raw_items:
-            try:
-                p = Path(item["path"]).expanduser().resolve()
-            except OSError:
-                continue
-            if p.is_dir() and (p / ".git").exists():
-                rec: dict[str, Any] = {
-                    "path": str(p),
-                    "name": str(item.get("name") or p.name),
-                    "last_seen_at": float(item.get("last_seen_at") or 0.0),
-                }
-                _copy_repo_init_fields(item, rec)
-                by_path[str(p)] = rec
-        target = by_path.get(key) or {"path": key, "name": resolved.name, "last_seen_at": now}
-        if normalized:
-            target["repo_init_state"] = normalized
-        else:
-            target.pop("repo_init_state", None)
-        if normalized == "aligned" or not normalized:
-            target.pop("repo_init_mismatches", None)
-            target.pop("repo_init_error", None)
-        else:
-            cleaned_mm = [str(m) for m in (mismatches or []) if isinstance(m, str) and m]
-            if cleaned_mm:
-                target["repo_init_mismatches"] = cleaned_mm
+        with _file_lock(get_config_dir() / ".repos.lock"):
+            raw_items = _read_raw_repos_unlocked()
+            by_path: dict[str, dict[str, Any]] = {}
+            for item in raw_items:
+                try:
+                    p = Path(item["path"]).expanduser().resolve()
+                except OSError:
+                    continue
+                if p.is_dir() and (p / ".git").exists():
+                    rec: dict[str, Any] = {
+                        "path": str(p),
+                        "name": str(item.get("name") or p.name),
+                        "last_seen_at": float(item.get("last_seen_at") or 0.0),
+                    }
+                    _copy_repo_init_fields(item, rec)
+                    by_path[str(p)] = rec
+            target = by_path.get(key) or {"path": key, "name": resolved.name, "last_seen_at": now}
+            if normalized:
+                target["repo_init_state"] = normalized
             else:
+                target.pop("repo_init_state", None)
+            if normalized == "aligned" or not normalized:
                 target.pop("repo_init_mismatches", None)
-            if error:
-                target["repo_init_error"] = error
-            else:
                 target.pop("repo_init_error", None)
-        by_path[key] = target
-        entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
-        _save_repos_unlocked(entries)
+            else:
+                cleaned_mm = [str(m) for m in (mismatches or []) if isinstance(m, str) and m]
+                if cleaned_mm:
+                    target["repo_init_mismatches"] = cleaned_mm
+                else:
+                    target.pop("repo_init_mismatches", None)
+                if error:
+                    target["repo_init_error"] = error
+                else:
+                    target.pop("repo_init_error", None)
+            by_path[key] = target
+            entries = sorted(by_path.values(), key=lambda r: (-float(r.get("last_seen_at") or 0.0), r["name"]))
+            _save_repos_unlocked(entries)
 
 
 def get_repo_init_state(main_worktree: Path) -> str:
@@ -591,22 +622,23 @@ def unregister_repo(target: Path) -> bool:
         candidates.add(str(main_wt))
 
     with _REPOS_LOCK:
-        raw_items = _read_raw_repos_unlocked()
-        kept: list[dict[str, Any]] = []
-        removed = False
-        for item in raw_items:
-            try:
-                p_str = str(Path(item["path"]).expanduser().resolve())
-            except OSError:
-                p_str = item["path"].strip()
-            if p_str in candidates:
-                removed = True
-            else:
-                kept.append(item)
-        if removed:
-            kept.sort(key=lambda r: (-float(r.get("last_seen_at") or 0.0), str(r.get("name", ""))))
-            _save_repos_unlocked(kept)
-        return removed
+        with _file_lock(get_config_dir() / ".repos.lock"):
+            raw_items = _read_raw_repos_unlocked()
+            kept: list[dict[str, Any]] = []
+            removed = False
+            for item in raw_items:
+                try:
+                    p_str = str(Path(item["path"]).expanduser().resolve())
+                except OSError:
+                    p_str = item["path"].strip()
+                if p_str in candidates:
+                    removed = True
+                else:
+                    kept.append(item)
+            if removed:
+                kept.sort(key=lambda r: (-float(r.get("last_seen_at") or 0.0), str(r.get("name", ""))))
+                _save_repos_unlocked(kept)
+            return removed
 
 
 _GH_CLI_CACHE: dict[str, Any] = {"checked_at": 0.0, "logged_in": False, "username": ""}

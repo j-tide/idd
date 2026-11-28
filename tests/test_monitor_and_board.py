@@ -3806,6 +3806,51 @@ console.log(JSON.stringify(delays));
             delays = json.loads(node_run.stdout.strip())
             self.assertEqual(delays, {"syncing": 1200, "coding": 4000, "dirty": 4000, "active": 8000, "idle": 15000})
 
+    def test_concurrent_processes_register_and_update_repos_without_data_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config"
+            repos: list[Path] = []
+            for idx in range(6):
+                r = root / f"repo-{idx}"
+                r.mkdir()
+                subprocess.run(["git", "-C", str(r), "init"], check=True, capture_output=True)
+                repos.append(r)
+
+            worker_code = (
+                "import os, sys\n"
+                "from pathlib import Path\n"
+                "sys.path.insert(0, sys.argv[1])\n"
+                "import monitor\n"
+                "repo = Path(sys.argv[2])\n"
+                "monitor.register_repo(repo)\n"
+                "monitor.set_repo_init_meta(repo, 'aligned')\n"
+            )
+            env = dict(os.environ)
+            env["IDD_CONFIG_DIR"] = str(cfg)
+            procs = [
+                subprocess.Popen(
+                    [sys.executable, "-c", worker_code, str(SCRIPTS_DIR), str(r)],
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                for r in repos
+            ]
+            for proc in procs:
+                out, err = proc.communicate(timeout=15)
+                self.assertEqual(proc.returncode, 0, err or out)
+
+            with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
+                entries = monitor.load_registered_repos(prune_missing=True)
+            paths = {e["path"]: e for e in entries}
+            self.assertEqual(len(paths), len(repos))
+            for r in repos:
+                key = str(r.resolve())
+                self.assertIn(key, paths)
+                self.assertEqual(paths[key].get("repo_init_state"), "aligned")
+
 
 if __name__ == "__main__":
     unittest.main()

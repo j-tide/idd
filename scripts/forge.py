@@ -524,6 +524,10 @@ class GitHubForge:
         cmd.append("--watch")
         return subprocess.run(cmd, cwd=str(self.cwd), env=self._gh_env()).returncode
 
+    def cancel_change_pipeline(self, change: dict[str, Any]) -> bool:
+        del change
+        return False
+
     def merge_squash(
         self,
         number: int,
@@ -854,6 +858,10 @@ class GitLabForge:
         else:
             overall, checks, failed_ids = self._classify_pipeline(raw, fetch_jobs=fetch_jobs)
 
+        pipeline = raw.get("head_pipeline") or raw.get("pipeline")
+        pipeline_id = pipeline.get("id") if isinstance(pipeline, dict) else None
+        pipeline_status = str(pipeline.get("status") or "").lower() if isinstance(pipeline, dict) else ""
+
         return {
             "number": raw["iid"],
             "title": title,
@@ -866,6 +874,8 @@ class GitLabForge:
             "rawSha": raw_sha,
             "squashCommitOid": raw.get("squash_commit_sha"),
             "mergeCommitOid": raw.get("merge_commit_sha"),
+            "headPipelineId": pipeline_id,
+            "headPipelineStatus": pipeline_status,
             "detailedMergeStatus": detailed or legacy_merge_status,
             "isDraft": is_draft,
             "mergeStateStatus": merge_state,
@@ -1013,6 +1023,30 @@ class GitLabForge:
                 time.sleep(sleep_for)
             change = self.get_change(number=number, check=False)
         return 0
+
+    def cancel_change_pipeline(self, change: dict[str, Any]) -> bool:
+        pid = change.get("headPipelineId")
+        status = str(change.get("headPipelineStatus") or "").lower()
+        active_statuses = {
+            "",
+            "created",
+            "waiting_for_resource",
+            "preparing",
+            "pending",
+            "running",
+            "scheduled",
+        }
+        if not pid or status not in active_statuses:
+            return False
+        try:
+            resp = self._request(
+                "POST",
+                f"/projects/{self.encoded_project}/pipelines/{pid}/cancel",
+                check=False,
+            )
+            return isinstance(resp, dict)
+        except ForgeError:
+            return False
 
     def merge_squash(
         self,
