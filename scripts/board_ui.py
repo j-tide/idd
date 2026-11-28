@@ -33,6 +33,8 @@ from forge import (  # noqa: E402
     save_hosts_config,
     verify_host_token,
 )
+from git_worktrees import default_worktree_root, list_worktrees
+from naming import BRANCH_PREFIXES
 import monitor  # noqa: E402
 from version import get_version  # noqa: E402
 
@@ -7847,9 +7849,6 @@ def _repo_matches_host(repo_path: Path, host_key: str) -> bool:
     return spec.host.lower() == target or spec.hostname.lower() == target
 
 
-CLEANUP_ALLOWED_PREFIXES = ("feat/", "fix/", "refactor/", "perf/", "docs/", "test/", "ci/", "chore/")
-
-
 class _MergedChangesCache:
     """Short-TTL per-repo cache of merged PR/MR records for batch worktree cleanup."""
 
@@ -7910,7 +7909,7 @@ def _cleanup_single_worktree(
             "error": "禁止清理主工作树目录",
         }
 
-    worktrees = monitor.list_git_worktrees_ro(main_resolved)
+    worktrees = list_worktrees(main_resolved, timeout=10.0)
     wt_entry = next(
         (w for w in worktrees if w.get("path") and Path(w["path"]).resolve() == target_wt),
         None,
@@ -7940,9 +7939,9 @@ def _cleanup_single_worktree(
             "error": "工作树处于游离 HEAD 状态，已跳过清理",
         }
 
-    worktree_root = main_resolved.parent / f"{main_resolved.name}-worktrees"
+    worktree_root = default_worktree_root(main_resolved)
     under_managed_root = worktree_root == target_wt.parent
-    feature_branch = branch.startswith(CLEANUP_ALLOWED_PREFIXES)
+    feature_branch = branch.startswith(BRANCH_PREFIXES)
     if not (under_managed_root or feature_branch):
         return {
             "ok": False,

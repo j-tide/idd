@@ -8,7 +8,8 @@ from collections import Counter
 import json
 from pathlib import Path
 import re
-import subprocess
+
+from git_worktrees import list_worktrees
 
 
 STATUSES = ("planned", "in_progress", "blocked", "deferred", "cancelled", "done", "unknown")
@@ -164,40 +165,9 @@ def collect(task_root: Path, issue_filter: str | None, open_only: bool) -> dict:
     return {"issues": entries, "warnings": warnings}
 
 
-def list_git_worktrees(repo_root: Path) -> list[dict[str, str]]:
-    """Return list of {path, branch} dictionaries from `git worktree list --porcelain`."""
-    proc = subprocess.run(
-        ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"],
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        raise ValueError(proc.stderr.strip() or f"无法列出 Git 工作树：{repo_root}")
-    worktrees: list[dict[str, str]] = []
-    current: dict[str, str] = {}
-    for line in proc.stdout.splitlines():
-        if not line.strip():
-            if current.get("path"):
-                worktrees.append(current)
-            current = {}
-            continue
-        if line.startswith("worktree "):
-            current["path"] = line[len("worktree "):].strip()
-        elif line.startswith("branch "):
-            ref = line[len("branch "):].strip()
-            if ref.startswith("refs/heads/"):
-                ref = ref[len("refs/heads/"):]
-            current["branch"] = ref
-        elif line == "detached":
-            current.setdefault("branch", "(detached)")
-    if current.get("path"):
-        worktrees.append(current)
-    return worktrees
-
-
 def collect_all_worktrees(repo_root: Path, issue_filter: str | None, open_only: bool) -> dict:
     """Collect task status across all git worktrees belonging to the repository."""
-    worktrees = list_git_worktrees(repo_root)
+    worktrees = list_worktrees(repo_root)
     all_entries: list[dict] = []
     all_warnings: list[str] = []
     seen_keys: set[tuple[str, str]] = set()

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
-import stat
 import subprocess
 import tempfile
 import unittest
@@ -13,16 +13,6 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
-SCRIPT_FILES = (
-    "scripts/idd",
-    "scripts/idd_cli.py",
-    "scripts/forge.py",
-    "scripts/monitor.py",
-    "scripts/board_ui.py",
-    "scripts/preview_ui.py",
-    "scripts/task_status.py",
-    "scripts/version.py",
-)
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -47,12 +37,7 @@ def _create_bare_idd_origin(root: Path) -> tuple[Path, Path]:
     shutil.copy2(REPO_ROOT / ".gitignore", seed / ".gitignore")
     shutil.copy2(REPO_ROOT / "SKILL.md", seed / "SKILL.md")
     shutil.copy2(INSTALL_SH, seed / "install.sh")
-    (seed / "scripts").mkdir(parents=True, exist_ok=True)
-    for rel in SCRIPT_FILES:
-        dst = seed / rel
-        shutil.copy2(REPO_ROOT / rel, dst)
-        if rel in ("scripts/idd", "scripts/task_status.py"):
-            dst.chmod(dst.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    shutil.copytree(REPO_ROOT / "scripts", seed / "scripts", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 
     _git(seed, "add", ".")
     _git(seed, "commit", "-m", "feat: initial seed")
@@ -125,6 +110,12 @@ class TestInstallAndUninstall(unittest.TestCase):
             ver_env["IDD_NO_AUTO_UPDATE"] = "1"
             ver = subprocess.run([str(cli_link), "--version"], env=ver_env, capture_output=True, text=True, check=True)
             self.assertIn("idd ", ver.stdout)
+
+            status = subprocess.run(
+                [str(cli_link), "status", "--local-only", "--json"],
+                cwd=skill_dir, env=ver_env, capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(json.loads(status.stdout)["repo_path"], str(skill_dir))
 
             # Re-running when BIN_DIR is already on PATH omits PATH export warning
             env_with_bin = dict(env)

@@ -17,6 +17,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import idd_cli  # noqa: E402
+import naming  # noqa: E402
 from version import parse_skill_version  # noqa: E402
 
 
@@ -1145,11 +1146,11 @@ class TestIddCli(unittest.TestCase):
             self.assertTrue((h.repo / "export.py").is_file())
 
     def test_pr_and_land_avoid_duplicate_conventional_title_prefixes(self) -> None:
-        self.assertEqual(idd_cli._format_conventional_title("fix", "修复断连"), "fix: 修复断连")
-        self.assertEqual(idd_cli._format_conventional_title("fix", "fix: 修复断连"), "fix: 修复断连")
-        self.assertEqual(idd_cli._format_conventional_title("fix", "Feat(ui)!: 支持筛选"), "feat(ui)!: 支持筛选")
-        self.assertEqual(idd_cli._format_conventional_title("fix", "FIX：修复中文冒号"), "fix: 修复中文冒号")
-        self.assertEqual(idd_cli._format_conventional_title("feat", "API: 新增接口"), "feat: API: 新增接口")
+        self.assertEqual(naming.format_conventional_title("fix", "修复断连"), "fix: 修复断连")
+        self.assertEqual(naming.format_conventional_title("fix", "fix: 修复断连"), "fix: 修复断连")
+        self.assertEqual(naming.format_conventional_title("fix", "Feat(ui)!: 支持筛选"), "feat(ui)!: 支持筛选")
+        self.assertEqual(naming.format_conventional_title("fix", "FIX：修复中文冒号"), "fix: 修复中文冒号")
+        self.assertEqual(naming.format_conventional_title("feat", "API: 新增接口"), "feat: API: 新增接口")
 
         with tempfile.TemporaryDirectory() as tmp:
             h = GitHubHarness(Path(tmp))
@@ -1428,41 +1429,41 @@ class TestIddCli(unittest.TestCase):
     def test_issue_title_validation_short_scope_and_flags(self) -> None:
         # Valid normalized formats
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("feat: 支持导出 CSV"),
+            naming.validate_and_format_issue_title("feat: 支持导出 CSV"),
             "feat: 支持导出 CSV",
         )
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("fix(sync): 避免误匹配行内标记"),
+            naming.validate_and_format_issue_title("fix(sync): 避免误匹配行内标记"),
             "fix(sync): 避免误匹配行内标记",
         )
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("Feat(Repo-Init)!：中文冒号"),
+            naming.validate_and_format_issue_title("Feat(Repo-Init)!：中文冒号"),
             "feat(repo-init)!: 中文冒号",
         )
 
         # --type / --scope assembly & idempotency
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("补齐校验", issue_type="fix", scope="land"),
+            naming.validate_and_format_issue_title("补齐校验", issue_type="fix", scope="land"),
             "fix(land): 补齐校验",
         )
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("fix: 补齐校验", issue_type="fix", scope="land"),
+            naming.validate_and_format_issue_title("fix: 补齐校验", issue_type="fix", scope="land"),
             "fix(land): 补齐校验",
         )
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("fix(land): 补齐校验", issue_type="fix", scope="LAND"),
+            naming.validate_and_format_issue_title("fix(land): 补齐校验", issue_type="fix", scope="LAND"),
             "fix(land): 补齐校验",
         )
 
         # Escape hatch --raw
         self.assertEqual(
-            idd_cli.validate_and_format_issue_title("Tracking Q4 roadmap", raw=True),
+            naming.validate_and_format_issue_title("Tracking Q4 roadmap", raw=True),
             "Tracking Q4 roadmap",
         )
         with self.assertRaises(idd_cli.IddError):
-            idd_cli.validate_and_format_issue_title("Tracking Q4", issue_type="feat", raw=True)
+            naming.validate_and_format_issue_title("Tracking Q4", issue_type="feat", raw=True)
         with self.assertRaises(idd_cli.IddError):
-            idd_cli.validate_and_format_issue_title("Tracking Q4", scope="ui", raw=True)
+            naming.validate_and_format_issue_title("Tracking Q4", scope="ui", raw=True)
 
         # Invalid or missing prefixes, conflicts, empty/multiline
         for bad_title in (
@@ -1478,14 +1479,14 @@ class TestIddCli(unittest.TestCase):
             "fix(同步): 含中文",
         ):
             with self.assertRaises(idd_cli.IddError, msg=f"should reject {bad_title!r}"):
-                idd_cli.validate_and_format_issue_title(bad_title)
+                naming.validate_and_format_issue_title(bad_title)
 
         with self.assertRaises(idd_cli.IddError):
-            idd_cli.validate_and_format_issue_title("fix: 描述", issue_type="feat")
+            naming.validate_and_format_issue_title("fix: 描述", issue_type="feat")
         with self.assertRaises(idd_cli.IddError):
-            idd_cli.validate_and_format_issue_title("fix(sync): 描述", scope="land")
+            naming.validate_and_format_issue_title("fix(sync): 描述", scope="land")
         with self.assertRaises(idd_cli.IddError):
-            idd_cli.validate_and_format_issue_title("描述", scope="sync")
+            naming.validate_and_format_issue_title("描述", scope="sync")
 
     def test_issue_create_cli_validation_and_start_title_inference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

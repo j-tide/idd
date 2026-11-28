@@ -34,6 +34,7 @@ from forge import (
     inspect_remote_origin,
     load_hosts_config,
 )
+from git_worktrees import list_worktrees
 import task_status
 
 
@@ -161,34 +162,6 @@ def _run_git_ro(cwd: Path, args: list[str], *, timeout: float = 10.0) -> subproc
         return None
 
 
-def list_git_worktrees_ro(repo_root: Path) -> list[dict[str, str]]:
-    """List git worktrees using `--no-optional-locks`."""
-    proc = _run_git_ro(repo_root, ["worktree", "list", "--porcelain"])
-    if proc is None or proc.returncode != 0:
-        detail = proc.stderr.strip() if proc else ""
-        raise ValueError(detail or f"无法列出 Git 工作树：{repo_root}")
-    worktrees: list[dict[str, str]] = []
-    current: dict[str, str] = {}
-    for line in proc.stdout.splitlines():
-        if not line.strip():
-            if current.get("path"):
-                worktrees.append(current)
-            current = {}
-            continue
-        if line.startswith("worktree "):
-            current["path"] = line[len("worktree "):].strip()
-        elif line.startswith("branch "):
-            ref = line[len("branch "):].strip()
-            if ref.startswith("refs/heads/"):
-                ref = ref[len("refs/heads/"):]
-            current["branch"] = ref
-        elif line == "detached":
-            current.setdefault("branch", "(detached)")
-    if current.get("path"):
-        worktrees.append(current)
-    return worktrees
-
-
 def _stat_sig(path: Path) -> tuple[int, int, int] | None:
     """Return lightweight `(mtime_ns, size, ino)` signature for cache invalidation."""
     try:
@@ -300,7 +273,7 @@ def _resolve_main_worktree_and_list_ro(path: Path) -> tuple[Path | None, list[di
     if not target.is_dir():
         return None, []
     try:
-        worktrees = list_git_worktrees_ro(target)
+        worktrees = list_worktrees(target, timeout=10.0)
     except ValueError:
         return None, []
     if not worktrees:
@@ -1912,7 +1885,7 @@ def _collect_all_worktrees_ro(
     default_branch: str = "main",
     all_worktrees: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    worktrees = all_worktrees if all_worktrees is not None else list_git_worktrees_ro(main_worktree)
+    worktrees = all_worktrees if all_worktrees is not None else list_worktrees(main_worktree, timeout=10.0)
     main_resolved = main_worktree.resolve()
     main_task_root = main_resolved / "TASK"
     main_task_dirs: set[str] = set()
