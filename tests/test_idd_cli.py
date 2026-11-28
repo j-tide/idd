@@ -2281,6 +2281,64 @@ class TestIddCli(unittest.TestCase):
                 self.assertIn("Squash Merge 直线合入", land_ok.stdout)
                 self.assertEqual(h.load_state()["issues"]["42"]["state"], "CLOSED")
 
+    def test_repo_file_lock_reentrant_cross_process_wait_and_timeout(self) -> None:
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        import idd_cli
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "demo"
+            repo.mkdir()
+            subprocess.run(["git", "-C", str(repo), "init"], check=True, capture_output=True)
+            wt = root / "wt-1"
+            subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", "feat/1-a", str(wt)], check=True, capture_output=True)
+
+            # Worktree resolves to the same common git dir lock path as main repo, and supports reentrant acquisition.
+            with idd_cli._repo_file_lock(wt, "idd-test.lock", owner_info={"branch": "feat/1-a"}) as lp1:
+                with idd_cli._repo_file_lock(repo, "idd-test.lock", owner_info={"branch": "feat/1-a"}) as lp2:
+                    self.assertEqual(lp1, lp2)
+                    self.assertTrue(lp1.is_file())
+                    owner = json.loads(lp1.read_text(encoding="utf-8"))
+                    self.assertEqual(owner["branch"], "feat/1-a")
+
+                # While held by parent process, a second process trying with short timeout exits with code 3 and prints holder.
+                child_script = (
+                    "import os, sys\n"
+                    "from pathlib import Path\n"
+                    "sys.path.insert(0, sys.argv[1])\n"
+                    "import idd_cli\n"
+                    "try:\n"
+                    "    with idd_cli._repo_file_lock(Path(sys.argv[2]), 'idd-test.lock', wait_prefix='测试队列', timeout_env='IDD_TEST_LOCK_TIMEOUT'):\n"
+                    "        pass\n"
+                    "except idd_cli.IddError as exc:\n"
+                    "    print(f'ERR:{exc.exit_code}:{exc}', file=sys.stderr)\n"
+                    "    sys.exit(exc.exit_code)\n"
+                )
+                env = dict(os.environ)
+                env["IDD_TEST_LOCK_TIMEOUT"] = "0.15"
+                child = subprocess.run(
+                    [sys.executable, "-c", child_script, str(SCRIPTS_DIR), str(repo)],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(child.returncode, 3)
+                self.assertIn("排队等待中", child.stdout)
+                self.assertIn("feat/1-a", child.stdout)
+                self.assertIn("ERR:3:", child.stderr)
+
+            # After release, child acquires immediately.
+            env2 = dict(os.environ)
+            env2["IDD_TEST_LOCK_TIMEOUT"] = "1.0"
+            child_ok = subprocess.run(
+                [sys.executable, "-c", child_script, str(SCRIPTS_DIR), str(wt)],
+                env=env2,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(child_ok.returncode, 0, child_ok.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

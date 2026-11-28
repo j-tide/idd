@@ -6,6 +6,10 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
 import json
 import os
 from pathlib import Path
@@ -51,6 +55,8 @@ LAND_MERGE_RETRY_DELAY_SECONDS = 1.5
 CI_WAIT_GRACE_SECONDS = 5.0
 CI_WAIT_POLL_INTERVAL_SECONDS = 5.0
 CI_WAIT_TIMEOUT_SECONDS = 1800.0
+LAND_LOCK_POLL_INTERVAL_SECONDS = 0.05
+LAND_LOCK_DEFAULT_TIMEOUT_SECONDS = 0.0
 
 ALLOWED_TYPES = ("feat", "fix", "refactor", "perf", "docs", "test", "ci", "chore")
 MAX_ISSUE_SCOPE_LEN = 16
@@ -294,6 +300,132 @@ def _resolve_base_ref(repo: RepoInfo, base_branch: str | None = None) -> str:
     if repo.has_origin and _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
         return f"origin/{branch}"
     return branch
+
+
+_ACTIVE_REPO_LOCKS: set[Path] = set()
+
+
+def _resolve_git_common_dir(repo_dir: Path) -> Path:
+    """Resolve the shared `.git` common directory for lock placement across worktrees."""
+    proc = run_cmd(["git", "-C", str(repo_dir), "rev-parse", "--git-common-dir"], check=False)
+    raw = proc.stdout.strip() if proc.returncode == 0 else ""
+    if not raw:
+        return (repo_dir / ".git").resolve()
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = repo_dir / candidate
+    return candidate.resolve()
+
+
+def _read_lock_owner_info(lock_path: Path) -> dict[str, Any]:
+    try:
+        raw = lock_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return {}
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _format_lock_holder(owner: dict[str, Any]) -> str:
+    parts: list[str] = []
+    branch = str(owner.get("branch") or "").strip()
+    cmd = str(owner.get("command") or "").strip()
+    pid = owner.get("pid")
+    if branch:
+        parts.append(f"分支 `{branch}`")
+    if cmd:
+        parts.append(cmd)
+    if pid:
+        parts.append(f"PID {pid}")
+    return "，".join(parts) if parts else "另一会话"
+
+
+@contextmanager
+def _repo_file_lock(
+    main_worktree: Path,
+    lock_name: str,
+    *,
+    owner_info: dict[str, Any] | None = None,
+    wait_prefix: str = "",
+    timeout_env: str | None = None,
+) -> Iterator[Path]:
+    """Acquire a reentrant cross-process exclusive repository lock under git-common-dir."""
+    common_dir = _resolve_git_common_dir(main_worktree)
+    common_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = (common_dir / lock_name).resolve()
+    if lock_path in _ACTIVE_REPO_LOCKS or fcntl is None:
+        yield lock_path
+        return
+
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    handle = os.fdopen(fd, "r+", encoding="utf-8")
+    acquired = False
+    try:
+        waited = False
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except BlockingIOError:
+            waited = True
+            holder = _format_lock_holder(_read_lock_owner_info(lock_path))
+            if wait_prefix:
+                print(f"⏳ {wait_prefix}：当前正被 {holder} 占用，排队等待中...", flush=True)
+            timeout = (
+                _get_float_env(timeout_env, LAND_LOCK_DEFAULT_TIMEOUT_SECONDS, minimum=0.0)
+                if timeout_env
+                else 0.0
+            )
+            if timeout <= 0.0:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                acquired = True
+            else:
+                deadline = time.monotonic() + timeout
+                while True:
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        acquired = True
+                        break
+                    except BlockingIOError:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0.0:
+                            latest_holder = _format_lock_holder(_read_lock_owner_info(lock_path))
+                            raise IddError(
+                                f"等待 {wait_prefix or lock_name} 超时（{timeout:.1f}s），当前持锁者：{latest_holder}。",
+                                exit_code=3,
+                            )
+                        time.sleep(min(LAND_LOCK_POLL_INTERVAL_SECONDS, remaining))
+        if waited and wait_prefix:
+            print(f"🔓 已获取 {wait_prefix} 锁，继续执行...", flush=True)
+
+        payload = dict(owner_info or {})
+        payload["pid"] = os.getpid()
+        payload["started_at"] = round(time.time(), 3)
+        handle.seek(0)
+        handle.truncate()
+        handle.write(json.dumps(payload, ensure_ascii=False))
+        handle.flush()
+
+        _ACTIVE_REPO_LOCKS.add(lock_path)
+        yield lock_path
+    finally:
+        _ACTIVE_REPO_LOCKS.discard(lock_path)
+        if acquired:
+            try:
+                handle.seek(0)
+                handle.truncate()
+                handle.flush()
+            except OSError:
+                pass
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
 
 
 def find_worktree_for_target(main_worktree: Path, target: str) -> dict[str, str] | None:
@@ -2595,22 +2727,27 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     validate_branch_name(branch, issue_num)
 
-    if repo.has_origin:
-        run_cmd(["git", "-C", str(repo.main_worktree), "fetch", "origin", repo.default_branch], check=False)
+    with _repo_file_lock(
+        repo.main_worktree,
+        "idd-main-git.lock",
+        owner_info={"command": "start", "branch": branch},
+    ):
+        if repo.has_origin:
+            run_cmd(["git", "-C", str(repo.main_worktree), "fetch", "origin", repo.default_branch], check=False)
 
-    base_ref = _resolve_base_ref(repo, args.base)
-    repo.worktree_root.mkdir(parents=True, exist_ok=True)
-    wt_path = repo.worktree_root / issue_dir
+        base_ref = _resolve_base_ref(repo, args.base)
+        repo.worktree_root.mkdir(parents=True, exist_ok=True)
+        wt_path = repo.worktree_root / issue_dir
 
-    if wt_path.exists():
-        raise IddError(f"目标目录已存在但未注册为 Git 工作树：{wt_path}")
+        if wt_path.exists():
+            raise IddError(f"目标目录已存在但未注册为 Git 工作树：{wt_path}")
 
-    if _ref_exists(repo.main_worktree, f"refs/heads/{branch}"):
-        run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", str(wt_path), branch])
-    elif repo.has_origin and _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
-        run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "-b", branch, str(wt_path), f"origin/{branch}"])
-    else:
-        run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "--no-track", "-b", branch, str(wt_path), base_ref])
+        if _ref_exists(repo.main_worktree, f"refs/heads/{branch}"):
+            run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", str(wt_path), branch])
+        elif repo.has_origin and _ref_exists(repo.main_worktree, f"refs/remotes/origin/{branch}"):
+            run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "-b", branch, str(wt_path), f"origin/{branch}"])
+        else:
+            run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "add", "--no-track", "-b", branch, str(wt_path), base_ref])
 
     copied = sync_worktree_includes(repo.main_worktree, wt_path)
     _fix_misbound_upstream(wt_path, branch, repo.default_branch)
@@ -3473,18 +3610,23 @@ def _execute_land(
 
     # Step G: Retain branches & worktree by default; optionally remove worktree; fast-forward main
     in_removed_wt = False
-    if rm_worktree:
-        in_removed_wt = caller_cwd == wt_path or wt_path in caller_cwd.parents
-        run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
-
     main_sha = ""
-    if repo.has_origin:
-        run_cmd(["git", "-C", str(repo.main_worktree), "fetch", "origin", base_branch], check=False)
-        main_st = run_cmd(["git", "-C", str(repo.main_worktree), "status", "--porcelain"], check=False).stdout.strip()
-        main_br = run_cmd(["git", "-C", str(repo.main_worktree), "branch", "--show-current"], check=False).stdout.strip()
-        if not main_st and main_br == base_branch:
-            run_cmd(["git", "-C", str(repo.main_worktree), "merge", "--ff-only", f"origin/{base_branch}"], check=False)
-            main_sha = run_cmd(["git", "-C", str(repo.main_worktree), "rev-parse", "--short", "HEAD"], check=False).stdout.strip()
+    with _repo_file_lock(
+        repo.main_worktree,
+        "idd-main-git.lock",
+        owner_info={"command": "land-post", "branch": branch},
+    ):
+        if rm_worktree:
+            in_removed_wt = caller_cwd == wt_path or wt_path in caller_cwd.parents
+            run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
+
+        if repo.has_origin:
+            run_cmd(["git", "-C", str(repo.main_worktree), "fetch", "origin", base_branch], check=False)
+            main_st = run_cmd(["git", "-C", str(repo.main_worktree), "status", "--porcelain"], check=False).stdout.strip()
+            main_br = run_cmd(["git", "-C", str(repo.main_worktree), "branch", "--show-current"], check=False).stdout.strip()
+            if not main_st and main_br == base_branch:
+                run_cmd(["git", "-C", str(repo.main_worktree), "merge", "--ff-only", f"origin/{base_branch}"], check=False)
+                main_sha = run_cmd(["git", "-C", str(repo.main_worktree), "rev-parse", "--short", "HEAD"], check=False).stdout.strip()
 
     lines = [
         f"已通过 Squash Merge 直线合入 {forge.mr_label} {forge.mr_prefix}{change_num}（无 Merge 节点）：{change.get('url', '')}",
@@ -3569,7 +3711,12 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
         if args.dry_run:
             removed.append(f"[dry-run] 将仅移除工作树目录 {wt_path}（保留分支 {branch}）— {ref}")
         else:
-            run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
+            with _repo_file_lock(
+                repo.main_worktree,
+                "idd-main-git.lock",
+                owner_info={"command": "cleanup", "branch": branch},
+            ):
+                run_cmd(["git", "-C", str(repo.main_worktree), "worktree", "remove", str(wt_path)])
             removed.append(f"已移除工作树目录 {wt_path}（保留分支 {branch}）— {ref}")
 
     lines = list(removed)
