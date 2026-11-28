@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -55,7 +56,7 @@ def inspect_worktree(main: Path, path: Path, managed_root: Path) -> CleanWorktre
     if error:
         return CleanupResult("rejected", path, error, branch if path != main else "")
 
-    status = run_cmd(["git", "-C", str(path), "status", "--porcelain"], check=False)
+    status = run_cmd(["git", "--no-optional-locks", "-C", str(path), "status", "--porcelain"], check=False)
     if status.returncode:
         return CleanupResult("error", path, status.stderr.strip() or "读取工作区状态失败", branch)
     dirty = len(status.stdout.splitlines())
@@ -77,12 +78,15 @@ def remove_merged_worktree(
     ref_prefix: str,
     dry_run: bool = False,
 ) -> CleanupResult:
-    """Revalidate local facts under the repository lock after the remote lookup."""
+    """Recheck local facts after the remote lookup and lock operations that remove a checkout."""
     if not merged:
         return CleanupResult("skipped_unmerged", path, f"未查询到分支 {expected_branch} 的已合入 PR/MR，已跳过清理", expected_branch)
 
+    guard = nullcontext() if dry_run else repo_file_lock(
+        main, MAIN_GIT_LOCK, owner_info={"command": "cleanup", "branch": expected_branch},
+    )
     try:
-        with repo_file_lock(main, MAIN_GIT_LOCK, owner_info={"command": "cleanup", "branch": expected_branch}):
+        with guard:
             current = inspect_worktree(main, path, managed_root)
             if isinstance(current, CleanupResult):
                 return current

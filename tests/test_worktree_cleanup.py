@@ -50,6 +50,16 @@ class TestWorktreeCleanup(unittest.TestCase):
         self.assertEqual(self.remove().status, "rejected")
         self.assertEqual(dirty.read_text(encoding="utf-8"), "local work")
 
+    def test_dry_run_does_not_create_or_wait_for_a_write_lock(self):
+        lock_path = self.main / ".git" / MAIN_GIT_LOCK
+        self.assertEqual(self.remove(dry_run=True).status, "dry_run")
+        self.assertFalse(lock_path.exists())
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with repo_file_lock(self.main, MAIN_GIT_LOCK):
+                preview = pool.submit(self.remove, dry_run=True)
+                self.assertEqual(preview.result(timeout=3).status, "dry_run")
+        self.assertTrue(self.path.is_dir())
+
     def test_concurrent_cleanup_is_idempotent(self):
         ready = threading.Barrier(2)
 
