@@ -1120,7 +1120,7 @@ def cmd_repos(args: argparse.Namespace) -> int:
     now = time.time()
 
     if subcmd == "list":
-        entries = repo_registry.load_registered_repos(prune_missing=True, required=True)
+        entries = repo_registry.load_registered_repos(required=True)
         payload = {"repos_config_path": str(repo_registry.get_repos_path()), "repos": entries}
         if args.json:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -1175,13 +1175,11 @@ def cmd_repos(args: argparse.Namespace) -> int:
         return 0
 
     if subcmd == "prune":
-        before = repo_registry.load_registered_repos(prune_missing=False, required=True)
-        after = repo_registry.load_registered_repos(prune_missing=True, required=True)
-        removed_count = max(0, len(before) - len(after))
+        removed_count, remaining = repo_registry.prune_registered_repos()
         if args.json:
-            print(json.dumps({"removed_count": removed_count, "remaining": len(after)}, ensure_ascii=False, indent=2))
+            print(json.dumps({"removed_count": removed_count, "remaining": remaining}, ensure_ascii=False, indent=2))
         else:
-            print(f"已清理 {removed_count} 个失效仓库记录，当前保留 {len(after)} 个活跃仓库。")
+            print(f"已清理 {removed_count} 个失效仓库记录，当前保留 {remaining} 个活跃仓库。")
         return 0
 
     raise IddError(f"未知 repos 子命令：{subcmd}")

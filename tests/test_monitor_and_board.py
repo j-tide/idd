@@ -3902,7 +3902,7 @@ console.log(JSON.stringify(delays));
                 self.assertEqual(proc.returncode, 0, err or out)
 
             with mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": str(cfg)}, clear=False):
-                entries = repo_registry.load_registered_repos(prune_missing=True)
+                entries = repo_registry.load_registered_repos()
             paths = {e["path"]: e for e in entries}
             self.assertEqual(len(paths), len(repos))
             for r in repos:

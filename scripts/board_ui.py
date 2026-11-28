@@ -372,7 +372,7 @@ class BoardRequestHandler(LocalRequestHandler):
     def _target_repos(self) -> list[Path]:
         if not self.global_mode and self.root is not None:
             return [self.root]
-        return [Path(r["path"]) for r in repo_registry.load_registered_repos(prune_missing=True)]
+        return [Path(r["path"]) for r in repo_registry.load_registered_repos()]
 
     def _invalidate_snapshot_cache(self) -> None:
         if self.snapshot_cache is not None:
@@ -697,7 +697,7 @@ def run_board_server(
             if not global_mode and root is not None:
                 cache.warm_async([root], force_refresh=False)
             else:
-                repos = [Path(r["path"]) for r in repo_registry.load_registered_repos(prune_missing=True)]
+                repos = [Path(r["path"]) for r in repo_registry.load_registered_repos()]
                 cache.warm_async(repos, force_refresh=False)
         threading.Thread(target=_warm_on_boot, daemon=True).start()
     merged_cache = _MergedChangesCache(ttl_seconds=60.0)

@@ -70,15 +70,16 @@ def _recency_key(entry: dict[str, Any]) -> tuple[float, str]:
     return -float(entry.get("last_seen_at") or 0.0), str(entry.get("name", ""))
 
 
-def load_registered_repos(*, prune_missing: bool = True, required: bool = False) -> list[dict[str, Any]]:
-    """Load registered repository entries sorted by recency, optionally pruning stale paths."""
+def _scan_registry(*, require_read: bool, require_write: bool) -> tuple[list[dict[str, Any]], int]:
+    """Read and normalize a single locked snapshot, counting distinct missing repositories."""
     with _REPOS_LOCK:
         with config_file_lock(get_config_dir() / ".repos.lock"):
-            raw_items = _read_raw_repos_unlocked(required=required)
+            raw_items = _read_raw_repos_unlocked(required=require_read)
             if raw_items is None:
-                return []
+                return [], 0
             seen: dict[str, dict[str, Any]] = {}
             dirty = False
+            missing: set[str] = set()
 
             for item in raw_items:
                 raw_path = item["path"].strip()
@@ -89,7 +90,8 @@ def load_registered_repos(*, prune_missing: bool = True, required: bool = False)
                     continue
                 key = str(resolved)
                 exists_git = resolved.is_dir() and (resolved / ".git").exists()
-                if prune_missing and not exists_git:
+                if not exists_git:
+                    missing.add(key)
                     dirty = True
                     continue
                 ts = float(item.get("last_seen_at") or 0.0)
@@ -110,8 +112,20 @@ def load_registered_repos(*, prune_missing: bool = True, required: bool = False)
 
             entries = sorted(seen.values(), key=_recency_key)
             if dirty:
-                _save_repos_unlocked(entries, required=required)
-            return entries
+                _save_repos_unlocked(entries, required=require_write)
+            return entries, len(missing)
+
+
+def load_registered_repos(*, required: bool = False) -> list[dict[str, Any]]:
+    """Return live entries even when their opportunistic on-disk cleanup cannot be saved."""
+    entries, _ = _scan_registry(require_read=required, require_write=False)
+    return entries
+
+
+def prune_registered_repos() -> tuple[int, int]:
+    """Explicit pruning requires a successful write and returns removed and remaining counts."""
+    entries, removed = _scan_registry(require_read=True, require_write=True)
+    return removed, len(entries)
 
 
 def _active_entries(raw_items: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], bool]:

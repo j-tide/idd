@@ -1,6 +1,8 @@
 """Configuration transactions shared by CLI commands and the local board."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -114,3 +116,25 @@ class TestLocalState(unittest.TestCase):
                 repo_registry.unregister_repo(repo)
             for path in (settings, registry):
                 self.assertEqual(path.read_bytes(), b'{"broken":')
+
+    def test_list_remains_readable_when_pruning_cannot_write(self):
+        from idd_cli import main
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"IDD_CONFIG_DIR": tmp, "IDD_NO_AUTO_UPDATE": "1"}):
+            live = Path(tmp).resolve() / "live"
+            subprocess.run(["git", "init", str(live)], check=True, capture_output=True)
+            stale = live.with_name("missing")
+            registry = repo_registry.get_repos_path()
+            original = json.dumps({"repos": [{"path": str(live)}, {"path": str(stale)}, {"path": str(stale)}]})
+            registry.write_text(original)
+            with mock.patch.object(repo_registry, "atomic_write_json", side_effect=OSError("disk full")):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["repos", "list", "--json"]), 0)
+                self.assertEqual([r["path"] for r in json.loads(output.getvalue())["repos"]], [str(live)])
+                error = io.StringIO()
+                with redirect_stderr(error):
+                    self.assertEqual(main(["repos", "prune", "--json"]), 1)
+                self.assertIn("disk full", error.getvalue())
+                self.assertEqual(registry.read_text(), original)
+            self.assertEqual(repo_registry.prune_registered_repos(), (1, 1))
+            self.assertEqual(repo_registry.prune_registered_repos(), (0, 1))

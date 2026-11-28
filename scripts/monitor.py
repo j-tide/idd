@@ -321,7 +321,7 @@ def collect_auth_hosts_status(*, root: Path | None = None, global_mode: bool = T
             m = resolve_main_worktree(root)
             if m is not None:
                 register_repo(m)
-        repo_paths = [Path(rec["path"]) for rec in load_registered_repos(prune_missing=True)]
+        repo_paths = [Path(rec["path"]) for rec in load_registered_repos()]
 
     hosts_map: dict[str, dict[str, Any]] = {}
 
@@ -2343,7 +2343,7 @@ def collect_global_snapshot(
             prelisted_worktrees[str(cur_main)] = cur_wts
             register_repo(cur_main, min_touch_interval=60.0 if allow_stale_async else 0.0)
 
-    registered = load_registered_repos(prune_missing=True)
+    registered = load_registered_repos()
     cache = forge_cache if forge_cache is not None else ForgeSnapshotCache(ttl_seconds=0.0)
 
     def scan_rec(rec: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None, str | None]:
